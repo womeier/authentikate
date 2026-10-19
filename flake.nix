@@ -20,7 +20,36 @@
       # One Rocq 9.1 toolchain.  Everything lives in rocqPackages_9_1: the
       # rocq core, the Coq-named compatibility packages (coqc, which
       # CertiRocq's plugin needs), CertiRocq itself and the stdlib.
-      rocqPackages = pkgs.rocqPackages_9_1;
+      # WasmCert (nixpkgs' coq-wasm) is pinned to 2.2.1: nixpkgs pairs Rocq
+      # 9.1 with WasmCert 2.2.0 because released CertiRocq 0.9.1+9.1 requires
+      # exactly that, but the womeier fork below needs 2.2.1.  The over-scoped
+      # CertiRocq takes its released version explicitly, since nixpkgs'
+      # default only picks one for WasmCert 2.2.0; that key just fixes the
+      # fetched tarball (discarded below) and the derivation name.
+      rocqPackages = pkgs.rocqPackages_9_1.overrideScope (_self: super:
+        let
+          wasmcert = super.wasmcert.override { version = "2.2.1"; };
+        in
+        {
+          inherit wasmcert;
+          CertiRocq = super.CertiRocq.override {
+            inherit wasmcert;
+            version = "0.9.1+9.1";
+          };
+        });
+
+      # CertiRocq itself: nixpkgs' Rocq 9.1 package, overwritten to build from
+      # the womeier fork (github.com/womeier/CertiRocq) at one pinned commit
+      # instead of a released tarball.
+      CertiRocq = rocqPackages.CertiRocq.overrideAttrs (_old: {
+        version = "unstable-6d34b50b";
+        src = pkgs.fetchFromGitHub {
+          owner = "womeier";
+          repo = "CertiRocq";
+          rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
+          hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
+        };
+      });
 
       # Rocq sources and the build driver.  Keeps build products and editor
       # leftovers out of the derivation.
@@ -45,7 +74,7 @@
 
         nativeBuildInputs = [
           rocqPackages.coq
-          rocqPackages.CertiRocq
+          CertiRocq
         ];
 
         COQBIN = "${rocqPackages.coq}/bin/";
@@ -78,8 +107,9 @@
         # The heavy prebuilt dependency, exposed so CI can fetch it
         # substitute-only before building anything:
         #   nix build --max-jobs 0 .#CertiRocq
-        # CompCert comes with it (propagated), so that one fetch covers both.
-        CertiRocq = rocqPackages.CertiRocq;
+        # (It substitutes from womeier.cachix.org when the store path
+        # matches; otherwise it rebuilds from the fork.)
+        inherit CertiRocq;
       };
 
       # The proofs are checked by building, so building is the test suite.
@@ -90,7 +120,7 @@
         packages = [
           rocqPackages.rocq-core
           rocqPackages.coq
-          rocqPackages.CertiRocq
+          CertiRocq
           rocqPackages.stdlib
           rocqPackages.coq-lsp
           pkgs.gnumake
