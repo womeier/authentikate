@@ -1,4 +1,17 @@
 -Q theories Authentikate
+-Q test Authentikate.Tests
 
 theories/Bytes.v
+theories/Base64.v
+theories/Base64Proofs.v
+theories/Json.v
+theories/JsonProofs.v
+theories/Crypto.v
+theories/Claims.v
+theories/Store.v
+theories/Backoff.v
+theories/Jwt.v
+theories/Api.v
+theories/Proofs.v
+test/Bytes.v
 theories/extraction.v

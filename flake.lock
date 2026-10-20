@@ -16,9 +16,26 @@
         "type": "github"
       }
     },
+    "rocq-base64": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792484358,
+        "narHash": "sha256-r/BbDxXDH9FDgCv2j7y6j+C09CaJDhCfjOT6zBsy8Ec=",
+        "owner": "womeier",
+        "repo": "rocq-base64",
+        "rev": "bb4206f4ea10d2fe9f54a097ecbe46f3a671130f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "womeier",
+        "repo": "rocq-base64",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "rocq-base64": "rocq-base64"
       }
     }
   },

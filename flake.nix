@@ -2,9 +2,13 @@
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.rocq-base64 = {
+    url = "github:womeier/rocq-base64";
+    flake = false;
+  };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, rocq-base64 }:
     let
       # Linux x86_64 only, on purpose: the one platform this is developed on.
       # The Wasm the build produces is platform-independent anyway.
@@ -17,39 +21,72 @@
         config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "compcert" ];
       };
 
-      # One Rocq 9.1 toolchain.  Everything lives in rocqPackages_9_1: the
-      # rocq core, the Coq-named compatibility packages (coqc, which
-      # CertiRocq's plugin needs), CertiRocq itself and the stdlib.
-      # WasmCert (nixpkgs' coq-wasm) is pinned to 2.2.1: nixpkgs pairs Rocq
-      # 9.1 with WasmCert 2.2.0 because released CertiRocq 0.9.1+9.1 requires
-      # exactly that, but the womeier fork below needs 2.2.1.  The over-scoped
-      # CertiRocq takes its released version explicitly, since nixpkgs'
-      # default only picks one for WasmCert 2.2.0; that key just fixes the
-      # fetched tarball (discarded below) and the derivation name.
+      # One Rocq 9.1 toolchain.
+      # Two dependencies are different:
+      #   * WasmCert (nixpkgs' coq-wasm) 2.2.1 instead of 2.2.0.
+      #   * MetaRocq from its "9.1" development branch instead of the 1.5.1-9.1
+      #     release.  CertiRocq has needed that branch since
+      #     https://github.com/CertiRocq/certirocq/pull/158, and its own
+      #     .nix/config.nix pins `metarocq.override.version = "9.1"`
+      #     accordingly; the fork's config.nix says the same.
       rocqPackages = pkgs.rocqPackages_9_1.overrideScope (_self: super:
         let
           wasmcert = super.wasmcert.override { version = "2.2.1"; };
+          metarocq = super.metarocq.override {
+            version = {
+              version = "unstable-c8cd4605";
+              location = {
+                rev = "c8cd46054518193103c3bb33aa6e15c7f489e72c";
+                hash = "sha256-Lcr6B4gYSS57zVinn+e2tk1Kfy9XzJs+sd3CTuSTvX0=";
+              };
+            };
+          };
         in
         {
-          inherit wasmcert;
-          CertiRocq = super.CertiRocq.override {
-            inherit wasmcert;
-            version = "0.9.1+9.1";
-          };
+          inherit wasmcert metarocq;
         });
 
-      # CertiRocq itself: nixpkgs' Rocq 9.1 package, overwritten to build from
-      # the womeier fork (github.com/womeier/CertiRocq) at one pinned commit
-      # instead of a released tarball.
-      CertiRocq = rocqPackages.CertiRocq.overrideAttrs (_old: {
-        version = "unstable-6d34b50b";
-        src = pkgs.fetchFromGitHub {
-          owner = "womeier";
-          repo = "CertiRocq";
-          rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
-          hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
-        };
-      });
+      base64 =
+        (rocqPackages.callPackage "${rocq-base64}/.nix/rocq-overlays/base64/default.nix" { })
+        .overrideAttrs (old: {
+          version = "unstable-${builtins.substring 0 8 rocq-base64.rev}";
+          src = rocq-base64;
+        });
+
+      # CertiRocq's own sources at one pinned commit of the womeier fork
+      # (github.com/womeier/CertiRocq), used both as the package's src and as
+      # the place its Nix build recipe is pulled from below.
+      certirocqSrc = pkgs.fetchFromGitHub {
+        owner = "womeier";
+        repo = "CertiRocq";
+        rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
+        hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
+      };
+
+      # CertiRocq itself: built from upstream's own overlay
+      # (.nix/coq-overlays/CertiRocq/default.nix) rather than nixpkgs'
+      # rocqPackages_9_1.CertiRocq. nixpkgs' recipe is a snapshot of an older
+      # directory layout (top-level plugin/ and cplugin/, built with `make
+      # plugins`); this fork has since moved those under plugins/ and split
+      # the build into `make plugin` / `make cplugin`
+      # (CertiRocq/certirocq@fb1cf3e), which breaks nixpkgs' buildPhase with
+      # "make: *** plugin: No such file or directory". Building from
+      # upstream's own overlay keeps the recipe in sync with the fork instead
+      # of hand-patching a stale one.
+      CertiRocq =
+        (rocqPackages.callPackage "${certirocqSrc}/.nix/coq-overlays/CertiRocq/default.nix" {
+          inherit pkgs;
+        }).overrideAttrs
+          (old: {
+            version = "unstable-6d34b50b";
+            src = certirocqSrc;
+            # Both of these are cosmetic fixups of what the generic
+            # mkCoqDerivation machinery leaves behind when it can't resolve
+            # `version` against a known release (there is none here — see
+            # certirocqSrc above): a "-broken" name suffix and meta.broken.
+            name = "coq9.1-CertiRocq-unstable-6d34b50b";
+            meta = (old.meta or { }) // { broken = false; };
+          });
 
       # Rocq sources and the build driver.  Keeps build products and editor
       # leftovers out of the derivation.
@@ -75,6 +112,7 @@
         nativeBuildInputs = [
           rocqPackages.coq
           CertiRocq
+          base64
         ];
 
         COQBIN = "${rocqPackages.coq}/bin/";
@@ -110,6 +148,7 @@
         # (It substitutes from womeier.cachix.org when the store path
         # matches; otherwise it rebuilds from the fork.)
         inherit CertiRocq;
+        inherit base64;
       };
 
       # The proofs are checked by building, so building is the test suite.
@@ -121,6 +160,7 @@
           rocqPackages.rocq-core
           rocqPackages.coq
           CertiRocq
+          base64
           rocqPackages.stdlib
           rocqPackages.coq-lsp
           pkgs.gnumake

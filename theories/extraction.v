@@ -23,6 +23,7 @@ Record api : Set := MkApi {
 
 Definition authentikate_api : api := {| api_echo := echo |}.
 
-Eval vm_compute in (api_echo authentikate_api [x68; x69]).
+Eval vm_compute in
+  (api_echo authentikate_api (BS.String x68 (BS.String x69 BS.EmptyString))).
 
 CertiRocq Compile Wasm authentikate_api.
