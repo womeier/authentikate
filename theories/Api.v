@@ -8,8 +8,8 @@
 (*  Crypto and storage arrive as records of operations ([crypto_ops],          *)
 (*  [store_ops]) rather than as axioms, so every theorem in Proofs.v is        *)
 (*  universally quantified over them and the global context stays closed.      *)
-(*  What that buys is worth being precise about: the theorems say "whatever    *)
-(*  the store returned, it decoded and verified", which is true of the         *)
+(*  What that buys is worth being precise about: the theorems say whatever     *)
+(*  the store returned, it decoded and verified, which is true of the           *)
 (*  running system.  They do not say the store returned the record that was    *)
 (*  written for that email -- nothing provable can, since another writer may   *)
 (*  have been there first.                                                    *)
@@ -21,19 +21,22 @@ From Authentikate Require Import Bytes Base64 Json Crypto Claims Store Jwt.
 Import ListNotations.
 Local Open Scope N_scope.
 
-Inductive route := RtLogin | RtValidate | RtUnknown.
+Inductive route := RtLogin | RtValidate | RtUnknown | RtSignup.
 
 Inductive request :=
   | Login : bytes -> Secret.t -> request
   | Validate : bytes -> request
-  | Malformed : request.
+  | Malformed : request
+  | Signup : bytes -> Secret.t -> request.
 
 Inductive response :=
   | Token : bytes -> response
   | Validity : bool -> option claims -> response
   | Unauthorized : response
   | BadRequest : response
-  | Internal : response.
+  | Internal : response
+  | Created : response
+  | Conflict : response.
 
 (* Everything the host installs at instantiation. *)
 Record config := MkConfig {
@@ -55,18 +58,22 @@ Record config := MkConfig {
      reveals which generation an account belongs to, and accounts stored under
      a since-retired recommendation are distinguishable from absent ones.  The
      fix is a migration that re-hashes on login rather than a cleverer dummy,
-     and re-hashing on login needs a write path, which does not exist yet. *)
+     and re-hashing on login is not implemented by the signup write path. *)
   cfg_dummy_params : argon2_params
 }.
 
 Definition parse_request (r : route) (body : bytes) : request :=
   match r with
-  | RtLogin =>
+  | RtLogin | RtSignup =>
       match Json.parse body with
       | Some j =>
           match Json.get_str (lit ("email"%string)) j,
                 Json.get_str (lit ("password"%string)) j with
-          | Some e, Some p => Login e (Secret.of_bytes p)
+          | Some e, Some p =>
+              match r with
+              | RtSignup => Signup e (Secret.of_bytes p)
+              | _ => Login e (Secret.of_bytes p)
+              end
           | _, _ => Malformed
           end
       | None => Malformed
@@ -116,6 +123,27 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (cfg : config) (now : N)
                   (r : route) (body : bytes) : response :=
   match parse_request r body with
   | Malformed => BadRequest
+  | Signup email password =>
+      (* Any existing key conflicts, even if its record cannot be decoded.
+         Standard WASI keyvalue set is not create-only: this prevents
+         sequential overwrites, not concurrent signups. *)
+      match kv_get kv email with
+      | Some (Some _) => Conflict
+      | None => Internal
+      | Some None =>
+          match argon2_enroll ops password with
+          | None => Internal
+          | Some public_json =>
+              match Store.enrollment_record email public_json with
+              | None => Internal
+              | Some v =>
+                  match kv_set kv email v with
+                  | Some true => Created
+                  | _ => Internal
+                  end
+              end
+          end
+      end
   | Login email password =>
       match Store.stored kv email with
       (* The store refusing is the one case that skips the hash, and it is
@@ -148,6 +176,8 @@ Definition status (r : response) : N :=
   | Unauthorized => 401
   | BadRequest => 400
   | Internal => 500
+  | Created => 201
+  | Conflict => 409
   end.
 
 (* Claims are echoed only when the token is good; [Validity false] carries
@@ -165,4 +195,7 @@ Definition render (r : response) : bytes :=
       Json.print (JObj [(lit ("error"%string), JStr (lit ("bad request"%string)))])
   | Internal =>
       Json.print (JObj [(lit ("error"%string), JStr (lit ("internal error"%string)))])
+  | Created => Json.print (JObj [])
+  | Conflict =>
+      Json.print (JObj [(lit ("error"%string), JStr (lit ("conflict"%string)))])
   end.

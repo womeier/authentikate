@@ -1,0 +1,8 @@
+// WASI Random v0.2.0, Apache-2.0 WITH LLVM-exception.
+// https://github.com/WebAssembly/wasi-random/blob/v0.2.0/wit/random.wit
+package wasi:random@0.2.0;
+
+interface random {
+    get-random-bytes: func(len: u64) -> list<u8>;
+    get-random-u64: func() -> u64;
+}

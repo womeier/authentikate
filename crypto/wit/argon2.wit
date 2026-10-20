@@ -1,0 +1,91 @@
+package authentikate:crypto@0.1.0;
+
+/// Argon2 password hashing
+///
+/// Raw derivation and verification remain deterministic. Enrollment uses
+/// the host's secure random source and emits a public JSON storage record.
+interface argon2 {
+    /// Which Argon2 to use.  `argon2id` unless there is a reason: it is the
+    /// hybrid, and the one every current recommendation names for passwords.
+    enum algorithm {
+        /// Data-dependent addressing.  Fastest to attack with side channels.
+        argon2d,
+        /// Data-independent addressing.  Side-channel resistant, weaker
+        /// against time-memory tradeoffs.
+        argon2i,
+        /// Both: data-independent for the first half pass, data-dependent
+        /// after.
+        argon2id,
+    }
+
+    /// The cost knobs.  Raising `memory-kib` is what actually costs an
+    /// attacker money; raise it before `iterations`.
+    record params {
+        /// Memory cost, in KiB.  At least 8 * `parallelism`.
+        memory-kib: u32,
+        /// Number of passes over that memory.  At least 1.
+        iterations: u32,
+        /// Degree of parallelism (lanes).  At least 1.
+        parallelism: u32,
+        /// Length of the derived tag, in bytes.  At least 4.
+        tag-length: u32,
+    }
+
+    /// Invalid inputs or an invalid response from the host random source.
+    variant error {
+        /// Invalid cost knobs, or enrollment entropy was unavailable or not
+        /// exactly the requested length.
+        invalid-params(string),
+        /// The salt is too short (8 bytes minimum) or too long.
+        invalid-salt(string),
+        /// The password is longer than Argon2 accepts.
+        invalid-password(string),
+        /// `expected` is not `tag-length` bytes long.
+        invalid-tag(string),
+    }
+
+    /// Enroll with Argon2id, recommended parameters, and a fresh 16-byte salt
+    /// from wasi:random/random. Returns UTF-8 JSON with salt and tag encoded
+    /// as unpadded base64url, algorithm 2, and numeric memory_kib, iterations,
+    /// parallelism and tag_length fields. Contains no email or password.
+    enroll: func(password: list<u8>) -> result<list<u8>, error>;
+
+    /// Derive a tag of `params.tag-length` bytes from `password` and `salt`.
+    ///
+    /// The salt must be unique per password and at least 8 bytes; 16 random
+    /// bytes is the usual choice.  It is not a secret and is stored
+    /// alongside the tag.
+    derive: func(
+        password: list<u8>,
+        salt: list<u8>,
+        algorithm: algorithm,
+        params: params,
+    ) -> result<list<u8>, error>;
+
+    /// Derive a tag the same way and compare it against `expected` in
+    /// constant time.  `false` means the password is wrong -- it is an
+    /// answer, not an error.
+    ///
+    /// The comparison is the reason this is a function rather than a call to
+    /// `derive` followed by a comparison in the caller: a caller comparing
+    /// byte strings in the obvious way leaks the tag one byte at a time.
+    verify: func(
+        password: list<u8>,
+        salt: list<u8>,
+        algorithm: algorithm,
+        params: params,
+        expected: list<u8>,
+    ) -> result<bool, error>;
+
+    /// Argon2id with the parameters OWASP currently recommends: 19 MiB of
+    /// memory, two passes, one lane, a 32-byte tag.  Exported so the
+    /// recommendation lives next to the primitive it parameterises and moves
+    /// when the recommendation does; a caller is free to pass its own.
+    recommended-params: func() -> params;
+}
+
+/// A component that exports Argon2 and imports secure randomness for enrollment.
+world password-hashing {
+    import wasi:random/random@0.2.0;
+    export argon2;
+}

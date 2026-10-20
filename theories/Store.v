@@ -23,9 +23,8 @@
 (*                                                                            *)
 (*  The salt is public and stored beside the tag; the tag becomes a            *)
 (*  [Secret.t] on the way in.  Note what follows from that seal being          *)
-(*  one-way: this module can read a record and *cannot write one*.  Minting a  *)
-(*  record needs [derive], and belongs to a registration endpoint that does    *)
-(*  not exist yet.                                                            *)
+(*  one-way: this module cannot serialize a [Secret.t].  Enrollment instead    *)
+(*  receives explicitly public JSON from the Argon2 component.                 *)
 (******************************************************************************)
 
 From Stdlib Require Import List NArith Strings.Byte Strings.String.
@@ -44,7 +43,11 @@ Record user := MkUser {
 Record store_ops := MkStore {
   (* key -> the stored value.  [None] is the store refusing; [Some None] is
      the key being absent. *)
-  kv_get : bytes -> option (option bytes)
+  kv_get : bytes -> option (option bytes);
+  (* key, value -> persistence acknowledged.  The caller must inspect this
+     result so extraction cannot erase a unit-valued write.  This pure record
+     does not model temporal consistency or make get-then-set atomic. *)
+  kv_set : bytes -> bytes -> option bool
 }.
 
 (* ---- the stored record -------------------------------------------------- *)
@@ -88,6 +91,20 @@ Definition decode (v : bytes) : option user :=
   match Json.parse v with
   | Some j => of_json j
   | None => None
+  end.
+
+(* Enrollment supplies salt, tag and all five cost fields, but does not know
+   the email.  Add it here and decode the final JSON before allowing a write;
+   a component-supplied email is rejected as a duplicate by Json.parse. *)
+Definition enrollment_record (email public_json : bytes) : option bytes :=
+  match Json.parse public_json with
+  | Some (JObj fields) =>
+      let v := Json.print (JObj ((lit ("email"%string), JStr email) :: fields)) in
+      match decode v with
+      | Some _ => Some v
+      | None => None
+      end
+  | _ => None
   end.
 
 (* ---- a lookup, and what can come of one --------------------------------- *)

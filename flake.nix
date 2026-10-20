@@ -96,6 +96,9 @@
           path: type:
           type == "directory"
           || lib.hasSuffix ".v" path
+          || lib.hasSuffix ".mjs" path
+          || lib.hasSuffix ".wat" path
+          || lib.hasSuffix ".wit" path
           || lib.elem (baseNameOf path) [
             "Makefile"
             "_RocqProject"
@@ -103,7 +106,7 @@
       };
 
       # The service as a single Wasm module, compiled by CertiRocq from
-      # theories/extraction.v.
+      # theories/extractions.v, wrapped with canonical component interfaces.
       authentikate-wasm = pkgs.stdenv.mkDerivation {
         pname = "authentikate-wasm";
         version = "0.1.0";
@@ -113,6 +116,9 @@
           rocqPackages.coq
           CertiRocq
           base64
+          pkgs.nodejs
+          pkgs.wasm-tools
+          pkgs.binaryen
         ];
 
         COQBIN = "${rocqPackages.coq}/bin/";
@@ -124,10 +130,18 @@
           runHook postBuild
         '';
 
+        doCheck = true;
+        checkPhase = ''
+          runHook preCheck
+          node test/ffi-adapters.mjs
+          node test/component.mjs
+          runHook postCheck
+        '';
+
         installPhase = ''
           runHook preInstall
           mkdir -p $out
-          cp *.wasm $out/
+          cp build/authentikate.component.wasm build/authentikate.core.wasm $out/
           runHook postInstall
         '';
 
@@ -182,6 +196,7 @@
           # To look at what came out, and to inspect the module's imports.
           pkgs.wabt # wasm2wat
           pkgs.wasm-tools
+          pkgs.binaryen
         ];
 
         COQBIN = "${rocqPackages.coq}/bin/";

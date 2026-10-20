@@ -42,3 +42,4 @@ node_modules/
 
 # Rust build output for the crypto components.
 target/
+build/

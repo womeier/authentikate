@@ -1,0 +1,34 @@
+package authentikate:service@0.1.0;
+
+interface api {
+    record argon2-params {
+        algorithm: u32,
+        memory-kib: u32,
+        iterations: u32,
+        parallelism: u32,
+        tag-length: u32,
+    }
+    record config {
+        key: u32,
+        pubkey: list<u8>,
+        iss: list<u8>,
+        ttl: u64,
+        dummy-salt: list<u8>,
+        dummy-tag: list<u8>,
+        dummy-params: argon2-params,
+    }
+    record response {
+        status: u32,
+        body: list<u8>,
+    }
+    login: func(config: config, now: u64, body: list<u8>) -> response;
+    validate: func(config: config, now: u64, body: list<u8>) -> response;
+    signup: func(config: config, now: u64, body: list<u8>) -> response;
+}
+
+world service {
+    import wasi:keyvalue/store@0.2.0-draft;
+    import authentikate:crypto/argon2@0.1.0;
+    import authentikate:crypto/ed25519@0.1.0;
+    export api;
+}

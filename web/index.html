@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#172c29" />
+    <title>Authentikate / Identity Workbench</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="/"
+        >a<span>uthentikate</span><span class="mark">/</span></a
+      ><span class="edition">FIELDNOTES &nbsp; / &nbsp; 001</span>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <div>
+          <p class="eyebrow">IDENTITY WORKBENCH / LOCAL DEMO</p>
+          <h1 id="title">Trust, one<br />request at a time.</h1>
+          <p class="lede">
+            Create an identity. Issue a token. Check its signature.<br
+              class="desktop"
+            />
+            A live experiment across a WebAssembly component boundary.
+          </p>
+        </div>
+        <aside class="spec" aria-label="Runtime details">
+          <div class="spec-title">
+            <span class="light"></span> COMPONENT ONLINE
+          </div>
+          <dl>
+            <div>
+              <dt>Service</dt>
+              <dd>Rocq / Wasm</dd>
+            </div>
+            <div>
+              <dt>Password</dt>
+              <dd>Argon2id</dd>
+            </div>
+            <div>
+              <dt>Signature</dt>
+              <dd>Ed25519</dd>
+            </div>
+            <div>
+              <dt>Token lifetime</dt>
+              <dd>600 seconds</dd>
+            </div>
+          </dl>
+          <p>Native crypto. Real component.<br />No simulated responses.</p>
+        </aside>
+      </section>
+      <div class="section-heading">
+        <h2>The request bench</h2>
+        <span>RUN IN ORDER &nbsp; 01 / 02 / 03</span>
+      </div>
+      <section class="bench" aria-label="Authentication workflow">
+        <article class="card">
+          <div class="card-top">
+            <span class="step">01</span
+            ><span class="endpoint">POST /api/signup</span>
+          </div>
+          <h3>Create an identity</h3>
+          <p class="description">
+            A fresh salt. A password hash.<br /> Your first entry in the
+            notebook.
+          </p>
+          <form id="signup-form">
+            <label for="signup-email">Email address</label
+            ><input
+              id="signup-email"
+              name="email"
+              type="email"
+              placeholder="you@example.test"
+              autocomplete="username"
+              required
+              maxlength="254"
+            /><label for="signup-password">Password</label
+            ><input
+              id="signup-password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              placeholder="Choose a demo password"
+              required
+            /><button type="submit">
+              Create account <span aria-hidden="true">&#8599;</span>
+            </button>
+          </form>
+          <p class="card-note">Use a test identity, not real credentials.</p>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <span class="step">02</span
+            ><span class="endpoint">POST /api/login</span>
+          </div>
+          <h3>Issue a token</h3>
+          <p class="description">
+            Prove you know the password.<br /> Receive a signed, short-lived
+            token.
+          </p>
+          <form id="login-form">
+            <label for="login-email">Email address</label
+            ><input
+              id="login-email"
+              name="email"
+              type="email"
+              placeholder="you@example.test"
+              autocomplete="username"
+              required
+              maxlength="254"
+            /><label for="login-password">Password</label
+            ><input
+              id="login-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Your demo password"
+              required
+            /><button type="submit">
+              Log in <span aria-hidden="true">&#8599;</span>
+            </button>
+          </form>
+          <p class="card-note">A successful login fills the token field.</p>
+        </article>
+        <article class="card validate-card">
+          <div class="card-top">
+            <span class="step">03</span
+            ><span class="endpoint">POST /api/validate</span>
+          </div>
+          <h3>Inspect the proof</h3>
+          <p class="description">
+            Verify the signature and claims.<br /> Try changing a character.
+            Check again.
+          </p>
+          <form id="validate-form">
+            <label for="token">Signed token</label
+            ><textarea
+              id="token"
+              name="token"
+              placeholder="Log in to populate this field, or paste a token here."
+              rows="6"
+              spellcheck="false"
+              autocapitalize="off"
+              required
+            ></textarea
+            ><button type="submit">
+              Validate token <span aria-hidden="true">&#8599;</span>
+            </button>
+          </form>
+          <p class="card-note" id="token-note">
+            Tokens stay in this page, not browser storage.
+          </p>
+        </article>
+      </section>
+      <section class="console" aria-labelledby="response-title">
+        <div class="console-top">
+          <h2 id="response-title">Response journal</h2>
+          <span id="response-status" role="status" aria-live="polite"
+            >IDLE / READY</span
+          >
+        </div>
+        <div class="console-body">
+          <div class="journal-meta">
+            <span id="response-route">AWAITING REQUEST</span
+            ><span id="response-time">-- ms</span>
+          </div>
+          <pre id="response-body" tabindex="0">
+Your next response will appear here.
+Start with 01 / Create an identity.</pre>
+        </div>
+      </section>
+      <aside class="notice">
+        <strong>A workbench, not a vault.</strong>
+        <p>
+          Accounts live in an in-memory Map. Restarting the server clears all
+          accounts and replaces the signing key, invalidating old tokens. This
+          local demo is not a production authentication deployment.
+        </p>
+      </aside>
+    </main>
+    <footer>
+      <span>AUTHENTIKATE / EXPERIMENTAL SYSTEMS</span
+      ><span>Ephemeral by design.</span>
+    </footer>
+  </body>
+</html>

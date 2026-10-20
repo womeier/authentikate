@@ -1,20 +1,17 @@
 (******************************************************************************)
 (*  The trust boundary                                                        *)
 (*                                                                            *)
-(*  The three cryptographic operations the service needs, as a record of       *)
+(*  The cryptographic operations the service needs, as a record of             *)
 (*  functions rather than as axioms.  Three reasons:                           *)
 (*                                                                            *)
-(*  - It compiles today.  CertiRocq 0.9.1 refuses a module containing axioms   *)
-(*    outright, and its Wasm backend does not yet implement [CertiRocq         *)
-(*    Register], so everything above this file would be unbuildable until the  *)
-(*    FFI patch lands.                                                        *)
+(*  - The pure service can compile and be tested without foreign primitives.   *)
 (*  - It turns trust into hypotheses.  A theorem that needs the signature      *)
 (*    scheme to work says so in its statement, which is a stronger and more    *)
 (*    honest thing than an [Axiom] nobody rereads.                            *)
 (*  - [option] in every result forces the caller to handle a component that    *)
 (*    answered [error] rather than to assume it cannot.                       *)
 (*                                                                            *)
-(*  The record is instantiated once, in [extraction.v], with the registered    *)
+(*  The record is instantiated once, in [extractions.v], with the registered   *)
 (*  primitives that the two adapters in [crypto/] realise.                     *)
 (******************************************************************************)
 
@@ -81,6 +78,10 @@ Record crypto_ops := MkOps {
   (* password, salt, cost parameters, expected tag.  The comparison happens
      inside the component, in constant time; the tag never comes back here. *)
   argon2_verify : Secret.t -> bytes -> argon2_params -> Secret.t -> option bool;
+  (* A fresh random salt is generated inside the Argon2 component.  The result
+     is PUBLIC JSON with base64url salt/tag and numeric algorithm/cost fields;
+     Store.enrollment_record adds the email.  No secret eliminator is exposed. *)
+  argon2_enroll : Secret.t -> option bytes;
   (* key handle, message *)
   ed25519_sign : Key.t -> bytes -> option bytes;
   (* public key, message, signature.  All three are public. *)

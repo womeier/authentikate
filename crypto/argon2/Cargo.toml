@@ -1,0 +1,31 @@
+[package]
+name = "authentikate-argon2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Argon2 password hashing, as a WebAssembly component"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# RustCrypto's Argon2.  Pure Rust, no_std with alloc, so it compiles to
+# wasm32-unknown-unknown without a libc or a WASI shim.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+base64 = "0.22"
+zeroize = { version = "1", features = ["alloc"] }
+# Constant-time tag comparison.
+subtle = { version = "2", default-features = false }
+wit-bindgen = "0.46"
+
+[dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+# Argon2's whole job is to be slow in memory and fast in cycles; do not trade
+# speed for size here.
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

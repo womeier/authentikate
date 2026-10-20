@@ -106,7 +106,7 @@ Theorem no_token_without_verify :
 Proof.
   intros ops kv cfg now r body t.
   unfold handle.
-  destruct (parse_request r body) as [email password | token |] eqn:Hp.
+  destruct (parse_request r body) as [email password | token | | email password] eqn:Hp.
   - destruct (Store.stored kv email) as [u | |] eqn:Hs; intros H.
     + apply login_check_token in H as [u' [Hu Ha]].
       injection Hu as <-. exists email, password, u. repeat split; assumption.
@@ -116,6 +116,11 @@ Proof.
       [ destruct (andb (Claims.fresh now c) (bytes_eqb (c_iss c) (cfg_iss cfg))) | ];
       intros H; discriminate.
   - intros H; discriminate.
+  - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
+    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (Store.enrollment_record email v) as [record |];
+      try (intros H; discriminate).
+    destruct (kv_set kv email record) as [[|] |]; intros H; discriminate.
 Qed.
 
 (* And the email a token names is the key its record was stored under, which
@@ -129,6 +134,38 @@ Proof.
   intros ops kv cfg now r body t H.
   apply no_token_without_verify in H as [email [password [u [_ [Hs _]]]]].
   exists email, u. split; [ exact Hs | eapply Store.stored_names_email, Hs ].
+Qed.
+
+(* Signup acknowledges creation only when enrollment produced a decodable
+   record and the store acknowledged that exact write.  This is not a claim
+   about later reads, atomic uniqueness, or the honesty of either component. *)
+Theorem created_requires_persistence :
+  forall ops kv cfg now body,
+    handle ops kv cfg now RtSignup body = Created ->
+    exists email password public_json record,
+      parse_request RtSignup body = Signup email password /\
+      kv_get kv email = Some None /\
+      Store.stored kv email = Absent /\
+      argon2_enroll ops password = Some public_json /\
+      Store.enrollment_record email public_json = Some record /\
+      kv_set kv email record = Some true.
+Proof.
+  intros ops kv cfg now body.
+  unfold handle, parse_request.
+  destruct (Json.parse body) as [j' |] eqn:Hp; [| discriminate].
+  destruct (Json.get_str (lit ("email"%string)) j') as [e |] eqn:He;
+    [| discriminate].
+  destruct (Json.get_str (lit ("password"%string)) j') as [p |] eqn:Hpw;
+    [| discriminate].
+  destruct (kv_get kv e) as [[existing |] |] eqn:Hs; try discriminate.
+  destruct (argon2_enroll ops (Secret.of_bytes p)) as [v |] eqn:Ha;
+    [| discriminate].
+  destruct (Store.enrollment_record e v) as [record |] eqn:Hr;
+    [| discriminate].
+  destruct (kv_set kv e record) as [[|] |] eqn:Hset; try discriminate.
+  intros _. exists e, (Secret.of_bytes p), v, record.
+  repeat split; try assumption; try reflexivity.
+  unfold Store.stored. now rewrite Hs.
 Qed.
 
 (* ---- a user who is not there is refused, by the same answer -------------- *)
@@ -246,7 +283,7 @@ Theorem valid_implies_fresh_and_ours :
 Proof.
   intros ops kv cfg now body c.
   unfold handle.
-  destruct (parse_request RtValidate body) as [email password | token |] eqn:Hp.
+  destruct (parse_request RtValidate body) as [email password | token | | email password] eqn:Hp.
   - destruct (Store.stored kv email) as [u | |] eqn:Hs; intros H;
       try discriminate.
     + exfalso. eapply login_check_not_validity, H.
@@ -257,6 +294,11 @@ Proof.
       now apply andb_prop in Hg.
     + intros H; discriminate.
   - intros H; discriminate.
+  - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
+    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (Store.enrollment_record email v) as [record |];
+      try (intros H; discriminate).
+    destruct (kv_set kv email record) as [[|] |]; intros H; discriminate.
 Qed.
 
 (* ---- claims survive the JSON round trip --------------------------------- *)
@@ -271,7 +313,7 @@ Proof. intros [sub iss iat exp]. reflexivity. Qed.
 Lemma encode_no_dot : forall bs, ~ bytes_In dot (Base64.encode bs).
 Proof.
   intros bs Hin.
-  unfold bytes_In, Base64.encode, Strings.encode in Hin.
+  unfold bytes_In, Base64.encode, ByteString.encode in Hin.
   change (In dot (BS.print (BS.parse
     (Base64.Base64.encode Alphabet.url (BS.print bs))))) in Hin.
   rewrite MetaRocqString.print_parse in Hin.

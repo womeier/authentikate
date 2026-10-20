@@ -1,0 +1,34 @@
+[package]
+name = "authentikate-ed25519"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Ed25519 signatures, as a WebAssembly component"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# ed25519-dalek, the same pure-Rust choice as `../argon2` makes for Argon2:
+# no libc, no WASI shim, and -- with `rand_core` left off -- no random source,
+# so it compiles to wasm32-unknown-unknown importing nothing.  `zeroize` wipes
+# key material on drop; `fast` keeps the precomputed tables, which is the
+# right trade for a signer on the request path.
+#
+# Eventually this should be libcrux: see the note at the top of `src/lib.rs`.
+ed25519-dalek = { version = "2", default-features = false, features = [
+    "alloc",
+    "fast",
+    "zeroize",
+] }
+wit-bindgen = "0.46"
+zeroize = "1"
+
+[profile.release]
+# Unlike Argon2, nothing here wants to be slow; this is the ordinary
+# optimise-hard profile.
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
