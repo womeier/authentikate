@@ -35,7 +35,6 @@ function message(overrides = {}) {
     to: ['user@example.com', 'other@example.com'],
     subject: 'Welcome "friend"',
     text: 'Hello\nworld \\ "quoted"',
-    html: '<p>Hello &amp; welcome</p>',
     idempotencyKey: 'welcome-123',
     ...overrides,
   };
@@ -203,19 +202,16 @@ for (const large of [false, true]) {
 }
 
 for (const backend of backends) {
-  test(`${backend} omits absent optional fields and accepts HTML-only messages`, () => {
+  test(`${backend} omits an absent idempotency key`, () => {
     const { sender, state } = host(backend);
-    sender.send(message({ html: undefined, idempotencyKey: undefined }));
+    sender.send(message({ idempotencyKey: undefined }));
     const record = JSON.parse(Buffer.concat(state.chunks));
     const payload = backend === 'stdout' ? record.email : record;
-    assert(!Object.hasOwn(payload, 'html'));
     assert(!Object.hasOwn(record, 'idempotency_key'));
     assert(!Object.hasOwn(payload, 'idempotencyKey'));
     if (backend === 'lettermint') {
       assert(!state.requests[0].request.headers.entries.some(([name]) => name === 'idempotency-key'));
     }
-    const htmlOnly = host(backend);
-    assert.equal(htmlOnly.sender.send(message({ text: '' })), undefined);
   });
 }
 
@@ -270,8 +266,8 @@ const invalid = [
   ['too many recipients', { to: Array(51).fill('user@example.com') }],
   ['invalid recipient', { to: ['user@example.com\n'] }],
   ['blank subject', { subject: ' ' }],
-  ['empty body', { text: ' ', html: undefined }],
-  ['blank bodies', { text: '\n', html: ' ' }],
+  ['empty body', { text: '' }],
+  ['blank body', { text: ' \n\t' }],
   ['invalid idempotency key', { idempotencyKey: 'bad\nkey' }],
   ['empty idempotency key', { idempotencyKey: '' }],
   ['long idempotency key', { idempotencyKey: 'k'.repeat(256) }],

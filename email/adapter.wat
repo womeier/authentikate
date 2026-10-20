@@ -11,7 +11,6 @@
       (param i32 i32)       ;; to: list<string>
       (param i32 i32)       ;; subject: string
       (param i32 i32)       ;; text: string
-      (param i32 i32 i32)   ;; html: option<string>
       (param i32 i32 i32)   ;; idempotency-key: option<string>
       (param i32)))         ;; result<_, error>: 16-byte return area
   (global $buf_len (mut i32) (i32.const 0))
@@ -46,7 +45,6 @@
       (local.get $fp) (local.get $fn)
       (local.get $recipients) (i32.const 1)
       (local.get $sp) (local.get $sn) (local.get $bp) (local.get $bn)
-      (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (local.get $ret))
     (if (i32.load8_u (local.get $ret)) (then (return (i32.const 1))))
     (call $some (i32.const 3)))

@@ -298,11 +298,11 @@ try {
       'authentikate:email/sender@0.1.0': {
         send(...args) {
           calls++;
-          assert.equal(args.length, 15, 'canonical send has 15 i32 parameters');
-          const [fp, fn, tp, tn, sp, sn, bp, bn, html, hp, hn, idem, ip, il, ret] = args;
+          assert.equal(args.length, 12, 'canonical send has 12 i32 parameters');
+          const [fp, fn, tp, tn, sp, sn, bp, bn, idem, ip, il, ret] = args;
           assert.equal(tn, 1, 'one recipient, represented as list<string>');
           assert.equal(tp % 4, 0);
-          assert.deepEqual([html, hp, hn, idem, ip, il], [0, 0, 0, 0, 0, 0]);
+          assert.deepEqual([idem, ip, il], [0, 0, 0]);
           const check = () => assert.deepEqual([
             h.flat(fp, fn), h.flat(h.get(tp), h.get(tp + 4)), h.flat(sp, sn), h.flat(bp, bn),
           ], fields);

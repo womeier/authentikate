@@ -255,20 +255,20 @@ const imports = {
   },
   'authentikate:email/sender@0.1.0': {
     send(...args) {
-      assert.equal(args.length, 15, 'send uses the canonical flat message ABI');
-      const [fp, fn, tp, tn, sp, sn, bp, bn, html, hp, hn, idem, ip, il, ret] = args;
+      assert.equal(args.length, 12, 'send uses the canonical flat message ABI');
+      const [fp, fn, tp, tn, sp, sn, bp, bn, idem, ip, il, ret] = args;
       assert.equal(tp % 4, 0, 'list<string> descriptors must be aligned');
-      assert.deepEqual([html, hp, hn, idem, ip, il], [0, 0, 0, 0, 0, 0]);
+      assert.deepEqual([idem, ip, il], [0, 0, 0]);
       const message = {
         from: bytes(fp, fn).toString(),
         to: Array.from({ length: tn }, (_, i) => bytes(get(tp + 8 * i), get(tp + 8 * i + 4)).toString()),
         subject: bytes(sp, sn).toString(), text: bytes(bp, bn).toString(),
-        html: null, idempotencyKey: null,
+        idempotencyKey: null,
       };
       assert.deepEqual(message, {
         from: 'Authentikate <hello@example.test>', to: ['user@example.test'],
         subject: 'Welcome to Authentikate', text: 'Your Authentikate account has been created.',
-        html: null, idempotencyKey: null,
+        idempotencyKey: null,
       });
       assert.equal(events.at(-1), 'write', 'send must follow a successful account write');
       assert.equal(JSON.parse(store.get(message.to[0])).email, message.to[0], 'account must exist before send');

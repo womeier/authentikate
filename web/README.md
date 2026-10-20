@@ -15,7 +15,7 @@ Open http://127.0.0.1:3000. Startup transpiles both components with jco into `bu
 
 Create an account using a test email and password, enter the same password in Log in, then validate the automatically populated token. Change a token character and validate again to see rejection. The response journal shows only response data, never the submitted password. Tokens are not persisted in browser storage.
 
-Successful signup writes one JSON welcome email to process stdout after the account write is acknowledged. `SIGNUP_EMAIL_FROM` overrides `Authentikate <hello@example.test>`; the subject is `Welcome to Authentikate` and the text is `Your Authentikate account has been created.` The sole recipient is the account email; HTML and idempotency key are absent. There is no native email SDK, network delivery, or email retry. A reported email write failure returns 500 but leaves the account stored: repeating signup returns 409 and login still works. Node stdout writes can be buffered; success means the host accepted the write, not durable delivery.
+Successful signup writes one JSON welcome email to process stdout after the account write is acknowledged. `SIGNUP_EMAIL_FROM` overrides `Authentikate <hello@example.test>`; the subject is `Welcome to Authentikate` and the text is `Your Authentikate account has been created.` The sole recipient is the account email; messages are plain text and the idempotency key is absent. There is no native email SDK, network delivery, or email retry. A reported email write failure returns 500 but leaves the account stored: repeating signup returns 409 and login still works. Node stdout writes can be buffered; success means the host accepted the write, not durable delivery.
 
 ```sh
 npm run test:web

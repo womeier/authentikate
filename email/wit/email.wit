@@ -6,7 +6,6 @@ interface sender {
         to: list<string>,
         subject: string,
         text: string,
-        html: option<string>,
         /// Reuse the same key and message when retrying an uncertain send.
         idempotency-key: option<string>,
     }

@@ -17,8 +17,9 @@ The default Nix service build does not bundle these providers.
 
 ## Sending
 
-Call `sender.send` with `from`, a `to` recipient list, `subject`, `text`, optional
-`html`, and an optional `idempotency-key`. At least one body must be nonempty.
+Call `sender.send` with `from`, a `to` recipient list, `subject`, `text`, and an
+optional `idempotency-key`. Only plain-text email is supported; `text` must be
+nonempty and not just whitespace.
 Messages are capped at 1 MiB of unencoded field content and 50 recipients.
 Address syntax and sender-domain verification are ultimately checked by Lettermint.
 

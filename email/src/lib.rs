@@ -26,8 +26,8 @@ fn payload(email: &Message) -> Result<Value, Error> {
                 .into(),
         ));
     }
-    if email.text.trim().is_empty() && email.html.as_ref().is_none_or(|s| s.trim().is_empty()) {
-        return Err(Error::InvalidMessage("text or html is required".into()));
+    if email.text.trim().is_empty() {
+        return Err(Error::InvalidMessage("text is required".into()));
     }
     if email.idempotency_key.as_ref().is_some_and(|s| {
         s.is_empty() || s.len() > 255 || !s.bytes().all(|b| (33..=126).contains(&b))
@@ -40,21 +40,16 @@ fn payload(email: &Message) -> Result<Value, Error> {
         + email.to.iter().map(String::len).sum::<usize>()
         + email.subject.len()
         + email.text.len()
-        + email.html.as_ref().map_or(0, String::len)
         > 1024 * 1024
     {
         return Err(Error::InvalidMessage("message exceeds 1 MiB".into()));
     }
-    let mut value = json!({
+    Ok(json!({
         "from": email.from,
         "to": email.to,
         "subject": email.subject,
         "text": email.text,
-    });
-    if let Some(html) = &email.html {
-        value["html"] = json!(html);
-    }
-    Ok(value)
+    }))
 }
 
 // WASI blocking-write-and-flush accepts at most 4096 bytes per call.
@@ -168,23 +163,19 @@ mod tests {
             to: vec!["user@example.com".into()],
             subject: "Welcome \"friend\"".into(),
             text: "Hello\nworld".into(),
-            html: None,
             idempotency_key: Some("welcome-123".into()),
         }
     }
 
     #[test]
     fn serializes_api_payload() {
-        let mut email = message();
+        let email = message();
         let value = payload(&email).unwrap();
         let value: Value = serde_json::from_str(&value.to_string()).unwrap();
         assert_eq!(value["to"], json!(["user@example.com"]));
         assert_eq!(value["subject"], email.subject);
         assert_eq!(value["text"], email.text);
-        assert!(value.get("html").is_none());
         assert!(value.get("idempotency_key").is_none());
-        email.html = Some("<p>Hello</p>".into());
-        assert_eq!(payload(&email).unwrap()["html"], "<p>Hello</p>");
     }
 
     #[test]
@@ -201,8 +192,9 @@ mod tests {
         email = message();
         email.text.clear();
         assert!(payload(&email).is_err());
-        email.html = Some("<p>Hello</p>".into());
-        assert!(payload(&email).is_ok());
+        email.text = " \n\t".into();
+        assert!(payload(&email).is_err());
+        email = message();
         email.idempotency_key = Some("invalid\nkey".into());
         assert!(payload(&email).is_err());
         email = message();
