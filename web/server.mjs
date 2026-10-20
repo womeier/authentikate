@@ -48,6 +48,7 @@ export async function createDemoServer({ writeEmail = bytes => process.stdout.wr
     'authentikate:crypto/ed25519@0.1.0=demo:ed25519',
     'wasi:keyvalue/store@0.2.0-draft=demo:store',
     'authentikate:email/sender@0.1.0=demo:email',
+    'wasi:clocks/wall-clock@0.2.0=demo:clock',
   ]);
   const email = await loadComponent('email-stdout', 'email');
   class OutputStream {
@@ -64,6 +65,13 @@ export async function createDemoServer({ writeEmail = bytes => process.stdout.wr
   };
   const requestImports = () => ({
     ...imports, 'demo:email': email(emailImports)['authentikate:email/sender@0.1.0'],
+    'demo:clock': {
+      now() {
+        const milliseconds = Date.now();
+        return { seconds: BigInt(Math.floor(milliseconds / 1000)), nanoseconds: milliseconds % 1000 * 1000000 };
+      },
+      resolution: () => ({ seconds: 0n, nanoseconds: 1000000 }),
+    },
   });
   const { config, imports } = createProviders();
   // Fail before listening if the component or host bindings cannot be instantiated.
@@ -127,7 +135,7 @@ export async function createDemoServer({ writeEmail = bytes => process.stdout.wr
       }
       const body = await readBody(request);
       const { api } = service(requestImports());
-      const result = api[endpoint](config, BigInt(Math.floor(Date.now() / 1000)), body);
+      const result = api[endpoint](config, body);
       response.writeHead(result.status, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(Buffer.from(result.body));
     } catch (error) {

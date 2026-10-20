@@ -16,6 +16,7 @@
   (import "store" "ffi_kv_get" (func $get (param i32 i32)))
   (import "store" "ffi_kv_set" (func $set (param i32 i32 i32)))
   (import "email" "ffi_email_send" (func $email-send (param i32 i32 i32 i32 i32)))
+  (import "wasi:clocks/wall-clock@0.2.0" "now" (func $now (param i32)))
   (global $initialized (mut i32) (i32.const 0))
   (global $api (mut i32) (i32.const 0))
   (global $buf_len (mut i32) (i32.const 0))
@@ -101,11 +102,17 @@
       (i32.load offset=4 (local.get $closure)))
     (call $check)
     (global.get $result))
-  ;; Config is 80 bytes aligned to 8; now @80, body @88 in the indirect arguments.
+  ;; Config is 80 bytes aligned to 8; body @80 in the indirect arguments.
   (func $dispatch (param $endpoint i32) (param $args i32) (result i32)
     (local $cfg i32) (local $params i32) (local $i i32)
     (local $pair i32) (local $body i32) (local $ret i32)
+    (local $clock i32) (local $seconds i64)
     (call $initialize)
+    ;; Canonical datetime is 16 bytes aligned to 8. Snapshot once per request.
+    (local.set $clock (call $alloc (i32.const 16) (i32.const 8)))
+    (call $check)
+    (call $now (local.get $clock))
+    (local.set $seconds (i64.load (local.get $clock)))
     (local.set $cfg (call $alloc (i32.const 36) (i32.const 4)))
     (local.set $params (call $alloc (i32.const 24) (i32.const 4)))
     (call $check)
@@ -128,8 +135,8 @@
     (local.set $pair (call $apply
       (call $apply
         (call $apply (i32.load (i32.add (global.get $api) (local.get $endpoint))) (local.get $cfg))
-        (call $N (i64.load offset=80 (local.get $args))))
-      (call $bytes-at (i32.add (local.get $args) (i32.const 88)))))
+        (call $N (local.get $seconds)))
+      (call $bytes-at (i32.add (local.get $args) (i32.const 80)))))
     (local.set $body (call $lower (i32.load offset=8 (local.get $pair))))
     (local.set $ret (call $alloc (i32.const 12) (i32.const 4)))
     (call $check)

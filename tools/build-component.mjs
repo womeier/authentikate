@@ -99,6 +99,7 @@ const unexpected = WebAssembly.Module.imports(module).filter(i => ![
   'wasi:keyvalue/store@0.2.0-draft', 'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0',
   'authentikate:email/sender@0.1.0',
+  'wasi:clocks/wall-clock@0.2.0',
 ].includes(i.module));
 if (unexpected.length) throw new Error(`Unresolved imports: ${JSON.stringify(unexpected)}`);
 

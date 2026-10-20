@@ -27,8 +27,12 @@ The service is extracted from `theories/extraction.v`.
 ## Component Interfaces
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,
-and `validate`. Each accepts configuration, the current Unix time, and a JSON
+and `validate`. Each accepts configuration and a JSON
 request body, and returns an HTTP status and JSON body. See `wit/service.wit`.
+
+Time comes from `wasi:clocks/wall-clock@0.2.0`. The component reads the clock
+once per request and passes Unix seconds into the pure Rocq core, which retains
+explicit time arguments for deterministic tests and expiration reasoning.
 
 Storage uses the standard `wasi:keyvalue/store@0.2.0-draft` interface. Signup
 checks for an existing account, enrolls the password, and persists the record
