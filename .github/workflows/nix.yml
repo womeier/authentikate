@@ -29,6 +29,13 @@ jobs:
           extraPullNames: coq,coq-community,math-comp
           skipPush: ${{ github.event_name == 'pull_request' }}
 
+      - name: Build development environment including MetaRocq and CertiRocq
+        run: nix develop --profile dev-profile -c true
+
+      - name: Cache development environment
+        if: github.event_name != 'pull_request'
+        run: cachix push womeier dev-profile
+
       # The derivation checks Rocq proofs, primitive adapters and extracted runtime.
       - name: Build and test service component
         run: nix build --print-build-logs
