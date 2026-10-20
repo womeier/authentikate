@@ -22,8 +22,7 @@ nix develop --command make
 nix develop --command make test
 ```
 
-`theories/extraction.v` remains a separate echo smoke test; the service is
-extracted from `theories/extractions.v`.
+The service is extracted from `theories/extraction.v`.
 
 ## Component Interfaces
 
@@ -33,8 +32,9 @@ request body, and returns an HTTP status and JSON body. See `wit/service.wit`.
 
 Storage uses the standard `wasi:keyvalue/store@0.2.0-draft` interface. Signup
 checks for an existing account, enrolls the password, and persists the record
-through `bucket.set`. Success requires an acknowledged write (`201`); known
-accounts return `409`. Get-then-set is not atomic: production account uniqueness
+through `bucket.set`, then sends a welcome email. Success (`201`) requires both
+an acknowledged write and email acceptance; known accounts return `409` without
+sending email. Get-then-set is not atomic: production account uniqueness
 requires a transactional store or external serialization.
 
 Cryptography uses custom component interfaces in `crypto/wit/`: Argon2 enrollment
@@ -51,18 +51,37 @@ implementation. Argon2 enrollment uses `wasi:random/random@0.2.0` for fresh salt
 The standard WIT declarations used by the build are pinned in `wit/deps/` and
 `crypto/wit/deps/`.
 
-## Web Demo
+## Email Components
 
-Build the component first, then run the local test frontend:
+Two interchangeable providers export `authentikate:email/sender@0.1.0` from
+`email/wit/email.wit`: a stdout backend for tests and a Lettermint backend for
+production. Build them with the same Rust target as the crypto providers:
 
 ```sh
+nix develop --command make email-components
+nix develop --command make test-email
+```
+
+See `email/README.md` for configuration, host capabilities, and delivery semantics.
+Signup imports this interface and sends a plain-text welcome message after the
+account write succeeds. Configure its sender with the API's `email-from` field.
+Email failure returns `500` but leaves the account stored; retrying signup returns
+`409`, without resending. There is no email verification or durable retry queue.
+
+## Web Demo
+
+Build the service and stdout email component first, then run the local test frontend:
+
+```sh
+make email-stdout-component
 npm ci
 npm run dev
 ```
 
 Open http://127.0.0.1:3000 to sign up, log in, and validate a token.
 `npm run test:web` exercises the actual component over HTTP with native Argon2
-and Ed25519 providers. The demo implements WASI keyvalue with an in-memory map;
+and Ed25519 providers and the real stdout email component. The demo implements
+WASI keyvalue with an in-memory map;
 accounts and signing keys disappear on restart. It is loopback-only by default
 and is not a production server. See `web/README.md` for details.
 

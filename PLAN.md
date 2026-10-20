@@ -18,7 +18,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 
 | Area | Current status |
 | --- | --- |
-| Rocq service | Signup, login and validate compile through `theories/extractions.v`, included in `_RocqProject` |
+| Rocq service | Signup, login and validate compile through `theories/extraction.v`, included in `_RocqProject` |
 | Default Nix build | Checks proofs and adapter/runtime tests; installs core and component Wasm artifacts |
 | Bytes/base64 | MetaRocq bytestrings; strict unpadded rocq-base64 `ByteString` wrapper, pinned at `9350246` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
@@ -173,7 +173,7 @@ boundary; this is not a proof that the whole service is constant-time.
   reads.  And `option` in the results forces the Rocq side to handle a
   component that answered `error`.
 
-  The record is instantiated once, in `extractions.v`, with the registered
+  The record is instantiated once, in `extraction.v`, with the registered
   primitives.  Nothing above `Crypto.v` changes when that happens.
 - `Secret` and `Key` — opaque types, sealed module signatures, living in
   `Crypto.v` beside the operations that consume them.  `Secret.t` has no
@@ -201,9 +201,8 @@ boundary; this is not a proof that the whole service is constant-time.
   `on_failure`, and a `failures` count over a trace of timestamped attempts.
   Proved, and **not wired into `handle`**; see [Rate limiting](#rate-limiting).
 - `Proofs.v` — what is actually established (see below).
-- `extraction.v` — a separate echo smoke test. `extractions.v` is the real
-  service: seven registered primitives and signup/login/validate, compiled by
-  the default build. Both are in `_RocqProject`.
+- `extraction.v` — the service extraction: eight registered primitives and
+  signup/login/validate, compiled by the default build through `_RocqProject`.
 
 Use `N`, not `nat`, for timestamps and lengths.  CertiCoq represents `nat` in
 unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
@@ -253,7 +252,7 @@ One trap worth recording: foreign byte results can exceed generated heap
 headroom. A bytestring costs 12 bytes per nonempty cell, so adapters grow
 memory themselves rather than trusting it; the runtime restores alignment.
 
-`theories/extractions.v` is compiled in `_RocqProject`. Two design details
+`theories/extraction.v` is compiled in `_RocqProject`. Two design details
 remain worth recording:
 
 - The `Register` vernacular itself is fine today — it is the plugin's own
@@ -392,7 +391,7 @@ extracts identically.  But `get` would then be a *function* in the logic: two
 reads of one key would provably agree, licensing common-subexpression
 elimination across reads the real store is free to answer differently, and
 every theorem downstream would name the axiom.  The record keeps `Proofs.v`
-closed under the global context and confines the fiction to `extractions.v`,
+closed under the global context and confines the fiction to `extraction.v`,
 which proves nothing. The pure operation records still do not model mutable
 state over time: they prove no read-after-write or concurrency guarantee.
 What the structural theorems say is "whatever the store

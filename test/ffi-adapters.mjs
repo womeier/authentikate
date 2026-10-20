@@ -1,13 +1,14 @@
-// Run: nix develop --command node test/ffi-adapters.mjs
+// Run after the component build: nix develop --command node test/ffi-adapters.mjs [build-dir]
 // Exercise the actual exports without rewriting WAT or exporting internals.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const out = resolve(process.argv[2] ?? join(root, 'build'));
 const temp = mkdtempSync(join(tmpdir(), 'ffi-adapters-'));
 
 function heap() {
@@ -68,8 +69,8 @@ function heap() {
 }
 
 function instantiate(path, h, imports) {
-  const binary = join(temp, path.replaceAll('/', '-') + '.wasm');
-  execFileSync('wasm-tools', ['parse', join(root, path), '-o', binary]);
+  const binary = path.endsWith('.wasm') ? path : join(temp, path.replaceAll('/', '-') + '.wasm');
+  if (!path.endsWith('.wasm')) execFileSync('wasm-tools', ['parse', join(root, path), '-o', binary]);
   execFileSync('wasm-tools', ['validate', binary]);
   const module = new WebAssembly.Module(readFileSync(binary));
   assert.deepEqual(WebAssembly.Module.imports(module).filter(i => i.module === 'rocq').map(i => i.name).sort(),
@@ -279,7 +280,78 @@ try {
     assert.deepEqual([opens, gets, sets], before, 'invalid UTF-8 must not reach host');
   }
   console.log('store: nested options, exact set JSON/binary/empty bytes, acknowledgment/refusal, shared bucket retry/cache, UTF-8 rejection');
-  console.log('All FFI adapter tests passed; all three modules parsed and validated with wasm-tools.');
+
+  {
+    const h = heap();
+    let calls = 0, error = -1;
+    let fields = ['Authentikate <hello@example.test>', 'user@example.test',
+      'Welcome to Authentikate', 'Your Authentikate account has been created.'].map(s => [...Buffer.from(s)]);
+    // Use the built adapter so its shared-helper placeholders are resolved by
+    // the production build rather than duplicating template expansion here.
+    const path = join(out, 'email.wasm');
+    const module = new WebAssembly.Module(readFileSync(path));
+    assert.deepEqual(WebAssembly.Module.imports(module).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
+      'rocq#memory:memory', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global', 'rocq#result:global',
+      'authentikate:email/sender@0.1.0#send:function',
+    ].sort());
+    const e = instantiate(path, h, {
+      'authentikate:email/sender@0.1.0': {
+        send(...args) {
+          calls++;
+          assert.equal(args.length, 15, 'canonical send has 15 i32 parameters');
+          const [fp, fn, tp, tn, sp, sn, bp, bn, html, hp, hn, idem, ip, il, ret] = args;
+          assert.equal(tn, 1, 'one recipient, represented as list<string>');
+          assert.equal(tp % 4, 0);
+          assert.deepEqual([html, hp, hn, idem, ip, il], [0, 0, 0, 0, 0, 0]);
+          const check = () => assert.deepEqual([
+            h.flat(fp, fn), h.flat(h.get(tp), h.get(tp + 4)), h.flat(sp, sn), h.flat(bp, bn),
+          ], fields);
+          check();
+          assert.equal(ret % 4, 0);
+          assert.ok(h.rocq.mem_ptr.value >= ret + 16, 'result<_, error> must reserve all 16 bytes before host call');
+          // String error variants occupy 12 bytes nested inside the result.
+          h.put(ret, Number(error >= 0));
+          h.put(ret + 4, error < 0 ? 0 : error);
+          h.put(ret + 8, error === 3 ? 503 : 0);
+          h.put(ret + 12, 0);
+          if (error >= 0 && error < 3) {
+            const reason = Buffer.from('provider refused');
+            const p = h.alloc(reason.length);
+            new Uint8Array(h.rocq.memory.buffer).set(reason, p);
+            h.put(ret + 8, p); h.put(ret + 12, reason.length);
+          }
+          check(); // Full result writes must not overlap flattened arguments.
+        },
+      },
+    });
+    let args = fields.map(h.bytes);
+    assert.equal(h.some(h.call(e.ffi_email_send, ...args)), 3, 'acceptance returns Some true');
+    for (error of [0, 1, 2, 3]) {
+      assert.equal(h.call(e.ffi_email_send, ...args), 1, 'every host error returns None');
+    }
+    assert.equal(calls, 5);
+    const before = calls;
+    for (const invalid of [[255], [0xc0, 0xaf], [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80], [0xe2, 0x82], [0x80]]) {
+      for (let field = 0; field < 4; field++) {
+        const bad = [...args];
+        bad[field] = h.bytes(invalid);
+        assert.equal(h.call(e.ffi_email_send, ...bad), 1, `invalid UTF-8 in field ${field} returns None`);
+        assert.equal(calls, before, 'invalid UTF-8 in any field must not reach the host');
+      }
+    }
+    error = -1;
+    fields = ['Fr\u00e9d <hello@example.test>', 'us\u00e9r@example.test', 'Welcome \ud83d\udc4b', 'A\u0000\u20ac\ud83d\ude80'].map(s => [...Buffer.from(s)]);
+    args = fields.map(h.bytes);
+    h.rocq.mem_ptr.value = h.rocq.memory.buffer.byteLength - 4;
+    const beforeGrowth = h.rocq.memory.buffer.byteLength;
+    assert.equal(h.some(h.call(e.ffi_email_send, ...args)), 3);
+    assert.ok(h.rocq.memory.buffer.byteLength > beforeGrowth, 'lowering must grow shared memory safely');
+    fields = [[], [], [], []];
+    assert.equal(h.some(h.call(e.ffi_email_send, ...fields.map(h.bytes))), 3, 'empty UTF-8 fields are left to host validation');
+    assert.equal(calls, before + 2);
+    console.log('email: void/global ABI, exact flat message, Some true/None, full 16-byte error area, UTF-8 rejection in every field, Unicode/empty bytes, memory growth');
+  }
+  console.log('All FFI adapter tests passed; all four modules validated with wasm-tools.');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

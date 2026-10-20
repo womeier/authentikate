@@ -11,7 +11,7 @@
 (*  - [option] in every result forces the caller to handle a component that    *)
 (*    answered [error] rather than to assume it cannot.                       *)
 (*                                                                            *)
-(*  The record is instantiated once, in [extractions.v], with the registered   *)
+(*  The record is instantiated once, in [extraction.v], with the registered    *)
 (*  primitives that the two adapters in [crypto/] realise.                     *)
 (******************************************************************************)
 

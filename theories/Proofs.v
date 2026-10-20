@@ -97,14 +97,14 @@ Qed.
    statement available, because no theorem can rule out a store answering
    with something nobody wrote. *)
 Theorem no_token_without_verify :
-  forall ops kv cfg now r body t,
-    handle ops kv cfg now r body = Token t ->
+  forall ops kv mail cfg now r body t,
+    handle ops kv mail cfg now r body = Token t ->
     exists email password u,
       parse_request r body = Login email password /\
       Store.stored kv email = Found u /\
       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true.
 Proof.
-  intros ops kv cfg now r body t.
+  intros ops kv mail cfg now r body t.
   unfold handle.
   destruct (parse_request r body) as [email password | token | | email password] eqn:Hp.
   - destruct (Store.stored kv email) as [u | |] eqn:Hs; intros H.
@@ -120,37 +120,45 @@ Proof.
     destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
-    destruct (kv_set kv email record) as [[|] |]; intros H; discriminate.
+    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (send_email mail (cfg_email_from cfg) email
+      (lit ("Welcome to Authentikate"%string))
+      (lit ("Your Authentikate account has been created."%string))) as [[|] |];
+      intros H; discriminate.
 Qed.
 
 (* And the email a token names is the key its record was stored under, which
    is [Store.stored]'s own check carried through [handle]. *)
 Corollary token_names_stored_email :
-  forall ops kv cfg now r body t,
-    handle ops kv cfg now r body = Token t ->
+  forall ops kv mail cfg now r body t,
+    handle ops kv mail cfg now r body = Token t ->
     exists email u,
       Store.stored kv email = Found u /\ bytes_eqb email (u_email u) = true.
 Proof.
-  intros ops kv cfg now r body t H.
+  intros ops kv mail cfg now r body t H.
   apply no_token_without_verify in H as [email [password [u [_ [Hs _]]]]].
   exists email, u. split; [ exact Hs | eapply Store.stored_names_email, Hs ].
 Qed.
 
 (* Signup acknowledges creation only when enrollment produced a decodable
-   record and the store acknowledged that exact write.  This is not a claim
-   about later reads, atomic uniqueness, or the honesty of either component. *)
+   record, the store acknowledged that exact write, and email was accepted.
+   This is not a claim about later reads, atomic uniqueness, email delivery,
+   or the honesty of the components. *)
 Theorem created_requires_persistence :
-  forall ops kv cfg now body,
-    handle ops kv cfg now RtSignup body = Created ->
+  forall ops kv mail cfg now body,
+    handle ops kv mail cfg now RtSignup body = Created ->
     exists email password public_json record,
       parse_request RtSignup body = Signup email password /\
       kv_get kv email = Some None /\
       Store.stored kv email = Absent /\
       argon2_enroll ops password = Some public_json /\
       Store.enrollment_record email public_json = Some record /\
-      kv_set kv email record = Some true.
+      kv_set kv email record = Some true /\
+      send_email mail (cfg_email_from cfg) email
+        (lit ("Welcome to Authentikate"%string))
+        (lit ("Your Authentikate account has been created."%string)) = Some true.
 Proof.
-  intros ops kv cfg now body.
+  intros ops kv mail cfg now body.
   unfold handle, parse_request.
   destruct (Json.parse body) as [j' |] eqn:Hp; [| discriminate].
   destruct (Json.get_str (lit ("email"%string)) j') as [e |] eqn:He;
@@ -163,6 +171,10 @@ Proof.
   destruct (Store.enrollment_record e v) as [record |] eqn:Hr;
     [| discriminate].
   destruct (kv_set kv e record) as [[|] |] eqn:Hset; try discriminate.
+  destruct (send_email mail (cfg_email_from cfg) e
+    (lit ("Welcome to Authentikate"%string))
+    (lit ("Your Authentikate account has been created."%string))) as [[|] |]
+    eqn:Hmail; try discriminate.
   intros _. exists e, (Secret.of_bytes p), v, record.
   repeat split; try assumption; try reflexivity.
   unfold Store.stored. now rewrite Hs.
@@ -171,12 +183,12 @@ Qed.
 (* ---- a user who is not there is refused, by the same answer -------------- *)
 
 Theorem absent_is_unauthorized :
-  forall ops kv cfg now email password body,
+  forall ops kv mail cfg now email password body,
     parse_request RtLogin body = Login email password ->
     Store.stored kv email = Absent ->
-    handle ops kv cfg now RtLogin body = Unauthorized.
+    handle ops kv mail cfg now RtLogin body = Unauthorized.
 Proof.
-  intros ops kv cfg now email password body Hp Hs.
+  intros ops kv mail cfg now email password body Hp Hs.
   unfold handle. rewrite Hp, Hs. apply login_check_none.
 Qed.
 
@@ -185,12 +197,12 @@ Qed.
    only worth stating if each one is named. *)
 
 Corollary missing_key_is_unauthorized :
-  forall ops kv cfg now email password body,
+  forall ops kv mail cfg now email password body,
     parse_request RtLogin body = Login email password ->
     kv_get kv email = Some None ->
-    handle ops kv cfg now RtLogin body = Unauthorized.
+    handle ops kv mail cfg now RtLogin body = Unauthorized.
 Proof.
-  intros ops kv cfg now email password body Hp Hk.
+  intros ops kv mail cfg now email password body Hp Hk.
   eapply absent_is_unauthorized; [ exact Hp |].
   unfold Store.stored. now rewrite Hk.
 Qed.
@@ -198,13 +210,13 @@ Qed.
 (* A record that does not decode: a truncated value, a wider-than-u32 cost
    parameter, base64 that is not base64. *)
 Corollary corrupt_record_is_unauthorized :
-  forall ops kv cfg now email password body v,
+  forall ops kv mail cfg now email password body v,
     parse_request RtLogin body = Login email password ->
     kv_get kv email = Some (Some v) ->
     Store.decode v = None ->
-    handle ops kv cfg now RtLogin body = Unauthorized.
+    handle ops kv mail cfg now RtLogin body = Unauthorized.
 Proof.
-  intros ops kv cfg now email password body v Hp Hk Hd.
+  intros ops kv mail cfg now email password body v Hp Hk Hd.
   eapply absent_is_unauthorized;
     [ exact Hp | eapply Store.stored_absent_on_corrupt; eassumption ].
 Qed.
@@ -212,14 +224,14 @@ Qed.
 (* And a record that decodes but belongs to somebody else, which is the shape
    a store mixing up keys would produce. *)
 Corollary foreign_record_is_unauthorized :
-  forall ops kv cfg now email password body v u,
+  forall ops kv mail cfg now email password body v u,
     parse_request RtLogin body = Login email password ->
     kv_get kv email = Some (Some v) ->
     Store.decode v = Some u ->
     bytes_eqb email (u_email u) = false ->
-    handle ops kv cfg now RtLogin body = Unauthorized.
+    handle ops kv mail cfg now RtLogin body = Unauthorized.
 Proof.
-  intros ops kv cfg now email password body v u Hp Hk Hd He.
+  intros ops kv mail cfg now email password body v u Hp Hk Hd He.
   eapply absent_is_unauthorized;
     [ exact Hp | eapply Store.stored_absent_on_mismatch; eassumption ].
 Qed.
@@ -232,12 +244,12 @@ Qed.
    on the login path means the store refused and nothing else, so a 500 can
    never be a credential signal. *)
 Theorem unavailable_is_internal :
-  forall ops kv cfg now email password body,
+  forall ops kv mail cfg now email password body,
     parse_request RtLogin body = Login email password ->
     kv_get kv email = None ->
-    handle ops kv cfg now RtLogin body = Internal.
+    handle ops kv mail cfg now RtLogin body = Internal.
 Proof.
-  intros ops kv cfg now email password body Hp Hk.
+  intros ops kv mail cfg now email password body Hp Hk.
   unfold handle. rewrite Hp.
   unfold Store.stored. rewrite Hk. reflexivity.
 Qed.
@@ -277,11 +289,11 @@ Qed.
 (* ---- a valid answer means fresh, and ours ------------------------------- *)
 
 Theorem valid_implies_fresh_and_ours :
-  forall ops kv cfg now body c,
-    handle ops kv cfg now RtValidate body = Validity true (Some c) ->
+  forall ops kv mail cfg now body c,
+    handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
     Claims.fresh now c = true /\ bytes_eqb (c_iss c) (cfg_iss cfg) = true.
 Proof.
-  intros ops kv cfg now body c.
+  intros ops kv mail cfg now body c.
   unfold handle.
   destruct (parse_request RtValidate body) as [email password | token | | email password] eqn:Hp.
   - destruct (Store.stored kv email) as [u | |] eqn:Hs; intros H;
@@ -298,7 +310,11 @@ Proof.
     destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
-    destruct (kv_set kv email record) as [[|] |]; intros H; discriminate.
+    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (send_email mail (cfg_email_from cfg) email
+      (lit ("Welcome to Authentikate"%string))
+      (lit ("Your Authentikate account has been created."%string))) as [[|] |];
+      intros H; discriminate.
 Qed.
 
 (* ---- claims survive the JSON round trip --------------------------------- *)
@@ -358,13 +374,13 @@ Record crypto_spec (ops : crypto_ops) (k : Key.t) (pk : bytes) : Prop :=
      - [crypto_spec], assumed
      - [now + d < now + cfg_ttl cfg], which is [lia]. *)
 Theorem login_then_validate :
-  forall ops kv cfg now d email password body token,
+  forall ops kv mail cfg now d email password body token,
     crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
     parse_request RtLogin body = Login email password ->
-    handle ops kv cfg now RtLogin body = Token token ->
+    handle ops kv mail cfg now RtLogin body = Token token ->
     (d < cfg_ttl cfg)%N ->
     exists c,
-      handle ops kv cfg (now + d) RtValidate
+      handle ops kv mail cfg (now + d) RtValidate
         (Json.print (JObj [(lit ("token"%string), JStr token)]))
         = Validity true (Some c)
       /\ c_sub c = email.

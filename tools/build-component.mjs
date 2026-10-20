@@ -36,7 +36,7 @@ function form(source, start) {
   throw new Error('Unbalanced WAT form');
 }
 
-run('wasm-tools', ['print', 'Authentikate.extractions.authentikate_api.wasm', '-o', join(out, 'rocq.original.wat')]);
+run('wasm-tools', ['print', 'Authentikate.extraction.authentikate_api.wasm', '-o', join(out, 'rocq.original.wat')]);
 let rocq = text(join(out, 'rocq.original.wat'));
 const keep = new Set(['main_function', 'memory', 'result', 'mem_ptr', 'out_of_mem']);
 rocq = rocq.replace(/  \(export "([^"]+)"[^\n]+\n/g, (line, name) => keep.has(name) ? line : '');
@@ -44,6 +44,7 @@ rocq = rocq.replace(/\n\)\s*$/, '\n  (export "table" (table 0))\n)');
 const ffiNames = new Set([
   'ffi_argon2_verify', 'ffi_argon2_enroll', 'ffi_secret_of_bytes',
   'ffi_ed25519_sign', 'ffi_ed25519_verify', 'ffi_kv_get', 'ffi_kv_set',
+  'ffi_email_send',
 ]);
 // The service boundary restores heap alignment after the byte-oriented adapters.
 rocq = rocq.replace(/\(import "env" "([^"]+)"/g,
@@ -69,13 +70,21 @@ const helpers = ['$alloc', '$list_len', '$read_N', '$lower', '$lift_bytes'].map(
   return form(argon, start);
 }).join('\n');
 parse('service', text(join(root, 'runtime/service.wat')).replace(';; @HEAP_HELPERS@', helpers));
-for (const [name, path] of [['argon2', 'crypto/argon2'], ['ed25519', 'crypto/ed25519'], ['store', 'store']]) {
+for (const [name, path] of [['argon2', 'crypto/argon2'], ['ed25519', 'crypto/ed25519'], ['store', 'store'], ['email', 'email']]) {
   // Only the wrapper allocator and public service functions survive the merge.
   let adapter = text(join(root, path, 'adapter.wat'));
+  if (name === 'email') {
+    const store = text(join(root, 'store/adapter.wat'));
+    const emailHelpers = [
+      ...['$alloc', '$list_len', '$lower'].map(name => form(argon, argon.indexOf(`(func ${name} `))),
+      ...['$some', '$utf8_ok'].map(name => form(store, store.indexOf(`(func ${name} `))),
+    ].join('\n');
+    adapter = adapter.replace(';; @EMAIL_HELPERS@', emailHelpers);
+  }
   adapter = adapter.replace(/\(export "([^"]+)"\)/g, (match, name) => name.startsWith('ffi_') ? match : '');
   parse(name, adapter);
 }
-run('wasm-merge', ['rocq', 'argon2', 'ed25519', 'store', 'service'].flatMap(name => [join(out, `${name}.wasm`), name])
+run('wasm-merge', ['rocq', 'argon2', 'ed25519', 'store', 'email', 'service'].flatMap(name => [join(out, `${name}.wasm`), name])
   .concat(['--enable-multimemory', '--enable-tail-call', '--rename-export-conflicts', '-o', join(out, 'merged.wasm')]));
 run('wasm-tools', ['print', join(out, 'merged.wasm'), '-o', join(out, 'merged.wat')]);
 let merged = text(join(out, 'merged.wat'));
@@ -89,6 +98,7 @@ const module = new WebAssembly.Module(readFileSync(join(out, 'authentikate.core.
 const unexpected = WebAssembly.Module.imports(module).filter(i => ![
   'wasi:keyvalue/store@0.2.0-draft', 'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0',
+  'authentikate:email/sender@0.1.0',
 ].includes(i.module));
 if (unexpected.length) throw new Error(`Unresolved imports: ${JSON.stringify(unexpected)}`);
 
@@ -97,6 +107,7 @@ const wit = mkdtempSync(join(out, 'wit-'));
 try {
   cpSync(join(root, 'wit'), wit, { recursive: true });
   cpSync(join(root, 'crypto/wit'), join(wit, 'deps/crypto'), { recursive: true });
+  cpSync(join(root, 'email/wit'), join(wit, 'deps/email'), { recursive: true });
   if (existsSync(join(root, 'crypto/wit/deps'))) {
     cpSync(join(root, 'crypto/wit/deps'), join(wit, 'deps'), { recursive: true });
   }

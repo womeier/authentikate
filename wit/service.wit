@@ -16,6 +16,7 @@ interface api {
         dummy-salt: list<u8>,
         dummy-tag: list<u8>,
         dummy-params: argon2-params,
+        email-from: list<u8>,
     }
     record response {
         status: u32,
@@ -30,5 +31,6 @@ world service {
     import wasi:keyvalue/store@0.2.0-draft;
     import authentikate:crypto/argon2@0.1.0;
     import authentikate:crypto/ed25519@0.1.0;
+    import authentikate:email/sender@0.1.0;
     export api;
 }

@@ -46,13 +46,21 @@ jobs:
       - name: Install demo dependencies
         run: nix develop --command npm ci --no-audit --no-fund
 
-      - name: Test component over HTTP
-        run: nix develop --command npm run test:web
-
       - name: Test Rust crypto providers
         run: |
           nix develop --command cargo test --locked --manifest-path crypto/argon2/Cargo.toml
           nix develop --command cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Test stdout email component
+        # Use rustup's compiler and installed Wasm target, with Nix's component tools.
+        run: nix develop --command bash -c 'PATH="$HOME/.cargo/bin:$PATH" make test-email-stdout'
+
+      - name: Test component over HTTP
+        run: nix develop --command npm run test:web
 
       - uses: actions/upload-artifact@v4
         with:
@@ -60,4 +68,5 @@ jobs:
           path: |
             result/*.wasm
             build/authentikate.component.wit
+            build/email-stdout.component.wasm
           if-no-files-found: error

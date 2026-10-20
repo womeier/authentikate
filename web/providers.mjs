@@ -35,6 +35,7 @@ export function createProviders() {
     key: 1, pubkey, iss: Buffer.from('demo'), ttl: 600n, dummySalt,
     dummyTag: derive(randomBytes(32), dummySalt, 'argon2id', recommended),
     dummyParams: { algorithm: 2, ...recommended },
+    emailFrom: Buffer.from(process.env.SIGNUP_EMAIL_FROM ?? 'Authentikate <hello@example.test>'),
   };
 
   class Bucket {

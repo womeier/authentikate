@@ -5,8 +5,8 @@
 (*  reading to a response.  The clock is an argument rather than an import,     *)
 (*  which keeps it pure and makes the [exp] reasoning trivial.                  *)
 (*                                                                            *)
-(*  Crypto and storage arrive as records of operations ([crypto_ops],          *)
-(*  [store_ops]) rather than as axioms, so every theorem in Proofs.v is        *)
+(*  Crypto, storage and email arrive as records of operations ([crypto_ops],   *)
+(*  [store_ops], [email_ops]) rather than as axioms, so theorems in Proofs.v    *)
 (*  universally quantified over them and the global context stays closed.      *)
 (*  What that buys is worth being precise about: the theorems say whatever     *)
 (*  the store returned, it decoded and verified, which is true of the           *)
@@ -59,7 +59,13 @@ Record config := MkConfig {
      a since-retired recommendation are distinguishable from absent ones.  The
      fix is a migration that re-hashes on login rather than a cleverer dummy,
      and re-hashing on login is not implemented by the signup write path. *)
-  cfg_dummy_params : argon2_params
+  cfg_dummy_params : argon2_params;
+  cfg_email_from : bytes
+}.
+
+Record email_ops := MkEmail {
+  (* Sender, recipient, subject, text; acceptance is not a delivery guarantee. *)
+  send_email : bytes -> bytes -> bytes -> bytes -> option bool
 }.
 
 Definition parse_request (r : route) (body : bytes) : request :=
@@ -119,7 +125,8 @@ Definition login_check (ops : crypto_ops) (cfg : config) (found : option user)
   | _, _ => Unauthorized
   end.
 
-Definition handle (ops : crypto_ops) (kv : store_ops) (cfg : config) (now : N)
+Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
+                  (cfg : config) (now : N)
                   (r : route) (body : bytes) : response :=
   match parse_request r body with
   | Malformed => BadRequest
@@ -138,7 +145,15 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (cfg : config) (now : N)
               | None => Internal
               | Some v =>
                   match kv_set kv email v with
-                  | Some true => Created
+                  | Some true =>
+                      (* A send refusal is a 500 after persistence, not a
+                         rollback: a retry finding this key conflicts. *)
+                      match send_email mail (cfg_email_from cfg) email
+                        (lit ("Welcome to Authentikate"%string))
+                        (lit ("Your Authentikate account has been created."%string)) with
+                      | Some true => Created
+                      | _ => Internal
+                      end
                   | _ => Internal
                   end
               end

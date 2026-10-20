@@ -22,6 +22,8 @@ assert.equal(argon.verify(password, Buffer.from(record.salt, 'base64url'), 'argo
 assert.equal(argon.verify(Buffer.from('wrong'), Buffer.from(record.salt, 'base64url'), 'argon2id', recommended,
   Buffer.from(record.tag, 'base64url')), false);
 assert.equal(config.pubkey.length, 32);
+assert(Buffer.isBuffer(config.emailFrom));
+assert.equal(config.emailFrom.toString(), process.env.SIGNUP_EMAIL_FROM ?? 'Authentikate <hello@example.test>');
 const ed = imports['demo:ed25519'];
 const signature = ed.sign(1, password);
 assert.equal(ed.verify(config.pubkey, password, signature), true);
@@ -32,6 +34,28 @@ const server = await createDemoServer();
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const base = `http://127.0.0.1:${server.address().port}`;
+const stdoutWrite = process.stdout.write;
+const emailChunks = [];
+let emailWrites = 0;
+let failEmail = false;
+// Intercept the default stdout path, not the sender: JSON is produced by real Wasm.
+process.stdout.write = function (bytes) {
+  emailWrites++;
+  if (failEmail) throw new Error('Simulated stdout failure');
+  emailChunks.push(Buffer.from(bytes));
+  return true;
+};
+function emails() {
+  const output = Buffer.concat(emailChunks).toString('utf8');
+  assert(output.endsWith('\n'));
+  return output.slice(0, -1).split('\n').map(line => JSON.parse(line));
+}
+function welcome(to) {
+  return { backend: 'stdout', email: {
+    from: config.emailFrom.toString(), to: [to],
+    subject: 'Welcome to Authentikate', text: 'Your Authentikate account has been created.',
+  } };
+}
 async function post(path, body, expected) {
   const response = await fetch(`${base}${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -93,9 +117,11 @@ try {
     request.write('x'.repeat(8192));
     request.end('x'.repeat(8193));
   });
-  console.log('web: static assets, routes, content type, host, origin and body limits passed');
+  assert.equal(emailWrites, 0);
   const credentials = { email: 'workbench@example.test', password: 'a-local-demo-password' };
   assert.deepEqual(await post('/api/signup', credentials, 201), {});
+  assert.deepEqual(emails(), [welcome(credentials.email)]);
+  assert(!Buffer.concat(emailChunks).includes(Buffer.from(credentials.password)));
   await post('/api/signup', credentials, 409);
   const login = await post('/api/login', credentials, 200);
   assert.equal(typeof login.token, 'string');
@@ -120,14 +146,30 @@ try {
     await post(`/api/${endpoint}`, '{', 400);
     await post(`/api/${endpoint}`, {}, 400);
   }
+  assert.deepEqual(emails(), [welcome(credentials.email)], 'duplicates, invalid input, login and validate send no email');
   const duplicates = await Promise.all([0, 1].map(() => fetch(`${base}/api/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...credentials, email: 'concurrent@example.test' }),
   })));
   assert.deepEqual(duplicates.map(response => response.status).sort(), [201, 409]);
   await Promise.all(duplicates.map(response => response.arrayBuffer()));
-  console.log('web: actual component signup/login/validate, returned claims, tampered tokens, malformed input and concurrent duplicates passed');
+  assert.deepEqual(emails(), [welcome(credentials.email), welcome('concurrent@example.test')]);
+  const writesBeforeFailure = emailWrites;
+  const failedCredentials = { ...credentials, email: 'stored-after-email-failure@example.test' };
+  failEmail = true;
+  await post('/api/signup', failedCredentials, 500);
+  assert.equal(emailWrites, writesBeforeFailure + 1, 'failure must reach the real stdout stream');
+  failEmail = false;
+  await post('/api/signup', failedCredentials, 409);
+  const storedLogin = await post('/api/login', failedCredentials, 200);
+  assert.equal(typeof storedLogin.token, 'string');
+  assert.equal((await post('/api/validate', { token: storedLogin.token }, 200)).valid, true);
+  assert.equal(emailWrites, writesBeforeFailure + 1, 'stored account must not retry email');
+  assert.deepEqual(emails(), [welcome(credentials.email), welcome('concurrent@example.test')]);
+  assert(!Buffer.concat(emailChunks).includes(Buffer.from(credentials.password)));
 } finally {
+  process.stdout.write = stdoutWrite;
   server.closeAllConnections();
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
+console.log('web: HTTP boundaries, actual component authentication, stdout welcome emails and persistent account after email failure passed');

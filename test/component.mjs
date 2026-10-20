@@ -68,6 +68,7 @@ const out = resolve(process.argv[2] ?? 'build');
           assert.deepEqual(bytes(get(cfg + 24)), [254]);
           const costs = get(cfg + 28);
           assert.deepEqual([4, 8, 12, 16, 20].map(i => N(get(costs + i))), [2n, 19456n, 2n, 1n, 32n]);
+          assert.deepEqual(bytes(get(cfg + 32)), [70, 0, 128, 255]);
           assert.equal(N(now), 0xffffffffffffffffn);
           assert.deepEqual(bytes(body), [0, 255]);
           // Return a pair whose N status is 1 and whose body reuses the input.
@@ -85,23 +86,36 @@ const out = resolve(process.argv[2] ?? 'build');
       rocq.mem_ptr.value = 65532 + boundaryResidue;
       rocq.result.value = 1;
     };
-    wrapper = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(`${out}/service.wasm`)), {
+    const service = new WebAssembly.Module(readFileSync(`${out}/service.wasm`));
+    assert.deepEqual(WebAssembly.Module.imports(service).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
+      'rocq#memory:memory', 'rocq#table:table', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global',
+      'rocq#result:global', 'rocq#main_function:function',
+      'argon2#ffi_argon2_verify:function', 'argon2#ffi_argon2_enroll:function', 'argon2#ffi_secret_of_bytes:function',
+      'ed25519#ffi_ed25519_sign:function', 'ed25519#ffi_ed25519_verify:function',
+      'store#ffi_kv_get:function', 'store#ffi_kv_set:function', 'email#ffi_email_send:function',
+    ].sort());
+    wrapper = new WebAssembly.Instance(service, {
       rocq,
       argon2: { ffi_argon2_verify: adapter, ffi_argon2_enroll: adapter, ffi_secret_of_bytes: adapter },
       ed25519: { ffi_ed25519_sign: adapter, ffi_ed25519_verify: adapter },
       store: { ffi_kv_get: adapter, ffi_kv_set: adapter },
+      email: { ffi_email_send: adapter },
     }).exports;
     for (const endpoint of ['login', 'validate', 'signup']) {
-      const args = wrapper.cabi_realloc(0, 0, 8, 88);
+      const args = wrapper.cabi_realloc(0, 0, 8, 96);
+      assert.equal(args % 8, 0);
+      new Uint8Array(rocq.memory.buffer, args, 96).fill(0);
       const put = (p, v) => new DataView(rocq.memory.buffer).setUint32(p, v, true);
       put(args, 0xffffffff);
-      for (const [offset, bytes] of [[4, [0, 128, 255]], [12, [65]], [32, [1, 2]], [40, [254]], [80, [0, 255]]]) {
+      for (const [offset, bytes] of [[4, [0, 128, 255]], [12, [65]], [32, [1, 2]], [40, [254]],
+        [68, [70, 0, 128, 255]], [88, [0, 255]]]) {
         const p = wrapper.cabi_realloc(0, 0, 1, bytes.length);
         new Uint8Array(rocq.memory.buffer).set(bytes, p);
         put(args + offset, p); put(args + offset + 4, bytes.length);
       }
       new DataView(rocq.memory.buffer).setBigUint64(args + 24, 0x100000001n, true);
-      new DataView(rocq.memory.buffer).setBigUint64(args + 72, 0xffffffffffffffffn, true);
+      put(args + 76, 0xdeadbeef); // Config tail padding must not become the timestamp.
+      new DataView(rocq.memory.buffer).setBigUint64(args + 80, 0xffffffffffffffffn, true);
       [2, 19456, 2, 1, 32].forEach((v, i) => put(args + 48 + 4 * i, v));
       const ret = wrapper[`authentikate:service/api@0.1.0#${endpoint}`](args);
       const mem = new DataView(rocq.memory.buffer);
@@ -111,7 +125,8 @@ const out = resolve(process.argv[2] ?? 'build');
     assert.equal(calls, 3);
     for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_enroll', 2],
       ['ffi_secret_of_bytes', 2], ['ffi_ed25519_sign', 3], ['ffi_ed25519_verify', 4],
-      ['ffi_kv_get', 2], ['ffi_kv_set', 3]]) {
+      ['ffi_kv_get', 2], ['ffi_kv_set', 3], ['ffi_email_send', 5]]) {
+      assert.equal(wrapper[name].length, arity);
       boundaryArgs = Array.from({ length: arity }, (_, i) => i + 10);
       for (boundaryResidue of [1, 2, 3]) {
         assert.equal(wrapper[name](...boundaryArgs), undefined);
@@ -120,7 +135,7 @@ const out = resolve(process.argv[2] ?? 'build');
       }
     }
     console.log('wrapper: all config fields, full u64 values, bytes, curried closures, response lowering, initialize-once/reuse');
-    console.log('FFI boundaries: all seven preserve arguments/results and align all three nonzero heap residues');
+    console.log('FFI boundaries: all eight preserve arguments/results and align all three nonzero heap residues');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
@@ -130,17 +145,28 @@ if (!existsSync(`${out}/authentikate.component.wasm`)) {
 execFileSync('wasm-tools', ['validate', `${out}/authentikate.component.wasm`], { stdio: 'inherit' });
 const wit = execFileSync('wasm-tools', ['component', 'wit', `${out}/authentikate.component.wasm`], { encoding: 'utf8' });
 for (const name of ['wasi:keyvalue/store@0.2.0-draft', 'authentikate:crypto/argon2@0.1.0',
-  'authentikate:crypto/ed25519@0.1.0']) assert.ok(wit.includes(`import ${name}`), name);
+  'authentikate:crypto/ed25519@0.1.0', 'authentikate:email/sender@0.1.0']) assert.ok(wit.includes(`import ${name}`), name);
+assert.deepEqual([...wit.matchAll(/^\s*import ([^;]+);/gm)].map(m => m[1]).sort(), [
+  'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
+  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft',
+].sort());
 assert.ok(wit.includes('export authentikate:service/api@0.1.0'));
 for (const endpoint of ['login', 'validate', 'signup']) assert.ok(wit.includes(`${endpoint}: func(`));
 assert.ok(!wit.includes('main-function'));
-console.log('component: validates; only custom service API exported; keyvalue and real crypto interfaces imported');
+console.log('component: validates; only custom service API exported; exact keyvalue, crypto, and email imports');
 
 const core = new WebAssembly.Module(readFileSync(`${out}/authentikate.core.wasm`));
 assert.deepEqual([...new Set(WebAssembly.Module.imports(core).map(i => i.module))].sort(), [
   'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
-  'wasi:keyvalue/store@0.2.0-draft',
+  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft',
 ]);
+assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
+  'authentikate:crypto/argon2@0.1.0#enroll:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
+  'authentikate:crypto/ed25519@0.1.0#sign:function', 'authentikate:crypto/ed25519@0.1.0#verify:function',
+  'authentikate:email/sender@0.1.0#send:function', 'wasi:keyvalue/store@0.2.0-draft#open:function',
+  'wasi:keyvalue/store@0.2.0-draft#[method]bucket.get:function',
+  'wasi:keyvalue/store@0.2.0-draft#[method]bucket.set:function',
+].sort());
 assert.deepEqual(WebAssembly.Module.exports(core).map(e => e.name).sort(), [
   'authentikate:service/api@0.1.0#login', 'authentikate:service/api@0.1.0#signup',
   'authentikate:service/api@0.1.0#validate', 'cabi_realloc', 'memory',
@@ -148,7 +174,9 @@ assert.deepEqual(WebAssembly.Module.exports(core).map(e => e.name).sort(), [
 let e, mode = 'missing', verifyError = false, verifyMatched = false;
 let enrollError = false, writeError = false, allowEnrollment = false;
 let signError = false, signatureError = false;
+let sendError = false;
 let opens = 0, gets = 0, hashes = 0, enrolls = 0, writes = 0;
+const emails = [], events = [];
 const store = new Map();
 const view = () => new DataView(e.memory.buffer);
 const put = (p, n) => view().setUint32(p, n, true);
@@ -181,6 +209,7 @@ const imports = {
       writes++; assert.equal(handle, 7);
       if (writeError) { failure(ret); return; }
       store.set(bytes(p, n).toString(), bytes(vp, vn));
+      events.push('write');
       put(ret, 0);
     },
   },
@@ -224,23 +253,52 @@ const imports = {
       put(ret, 0); put(ret + 4, 1);
     },
   },
+  'authentikate:email/sender@0.1.0': {
+    send(...args) {
+      assert.equal(args.length, 15, 'send uses the canonical flat message ABI');
+      const [fp, fn, tp, tn, sp, sn, bp, bn, html, hp, hn, idem, ip, il, ret] = args;
+      assert.equal(tp % 4, 0, 'list<string> descriptors must be aligned');
+      assert.deepEqual([html, hp, hn, idem, ip, il], [0, 0, 0, 0, 0, 0]);
+      const message = {
+        from: bytes(fp, fn).toString(),
+        to: Array.from({ length: tn }, (_, i) => bytes(get(tp + 8 * i), get(tp + 8 * i + 4)).toString()),
+        subject: bytes(sp, sn).toString(), text: bytes(bp, bn).toString(),
+        html: null, idempotencyKey: null,
+      };
+      assert.deepEqual(message, {
+        from: 'Authentikate <hello@example.test>', to: ['user@example.test'],
+        subject: 'Welcome to Authentikate', text: 'Your Authentikate account has been created.',
+        html: null, idempotencyKey: null,
+      });
+      assert.equal(events.at(-1), 'write', 'send must follow a successful account write');
+      assert.equal(JSON.parse(store.get(message.to[0])).email, message.to[0], 'account must exist before send');
+      events.push('send');
+      emails.push(message);
+      if (sendError) failure(ret, 2);
+      else put(ret, 0);
+    },
+  },
 };
 for (const i of WebAssembly.Module.imports(core)) {
   imports[i.module][i.name] ??= () => assert.fail(`Unexpected host call ${i.module}#${i.name}`);
 }
 e = new WebAssembly.Instance(core, imports).exports;
 function request(endpoint, body, now = 0xffffffffffffffffn) {
-  const args = e.cabi_realloc(0, 0, 8, 88);
-  new Uint8Array(e.memory.buffer, args, 88).fill(0);
+  const args = e.cabi_realloc(0, 0, 8, 96);
+  assert.equal(args % 8, 0);
+  new Uint8Array(e.memory.buffer, args, 96).fill(0);
   put(args, 0xffffffff);
   for (const [offset, data] of [[4, Buffer.alloc(32)], [12, Buffer.from('issuer')],
-    [32, Buffer.from('salt-salt')], [40, Buffer.alloc(32)], [80, Buffer.from(body)]]) {
+    [32, Buffer.from('salt-salt')], [40, Buffer.alloc(32)],
+    [68, Buffer.from('Authentikate <hello@example.test>')], [88, Buffer.from(body)]]) {
     const [p, n] = flat(data); put(args + offset, p); put(args + offset + 4, n);
   }
   view().setBigUint64(args + 24, 0x100000001n, true);
-  view().setBigUint64(args + 72, now, true);
+  view().setBigUint64(args + 80, now, true);
   [2, 19456, 2, 1, 32].forEach((v, i) => put(args + 48 + 4 * i, v));
+  const beforeEmails = emails.length;
   const ret = e[`authentikate:service/api@0.1.0#${endpoint}`](args);
+  if (endpoint !== 'signup') assert.equal(emails.length, beforeEmails, `${endpoint} must never send email`);
   return { status: get(ret), body: JSON.parse(bytes(get(ret + 4), get(ret + 8)).toString()) };
 }
 for (const endpoint of ['login', 'validate', 'signup']) {
@@ -263,9 +321,13 @@ assert.equal(writes, 0);
 enrollError = false; writeError = true;
 assert.equal(request('signup', credentials).status, 500);
 assert.equal(writes, 1);
+assert.equal(emails.length, 0, 'invalid requests, outages, enrollment and write failures must not send email');
 writeError = false;
 assert.deepEqual(request('signup', credentials), { status: 201, body: {} });
+assert.equal(emails.length, 1);
+assert.deepEqual(events, ['write', 'send']);
 assert.equal(request('signup', credentials).status, 409);
+assert.equal(emails.length, 1, 'duplicate signup must not send email');
 assert.equal(writes, 2);
 assert.equal(JSON.parse(store.get('user@example.test')).email, 'user@example.test');
 verifyError = false; verifyMatched = true;
@@ -286,4 +348,17 @@ mode = 'outage';
 assert.equal(request('validate', '{"token":"invalid"}').status, 200);
 assert.equal(gets, before, 'validate must not consult the store');
 assert.equal(opens, 1, 'sequential requests must retain the instance-local bucket handle');
-console.log('core: real extracted closures, sequential requests, malformed input, dummy hashing, enrollment, persistence/refusals, validation isolation');
+assert.equal(emails.length, 1, 'login and validate must not send email');
+mode = 'missing';
+store.delete('user@example.test');
+events.length = 0;
+sendError = true;
+assert.deepEqual(request('signup', credentials), { status: 500, body: { error: 'internal error' } });
+assert.deepEqual(events, ['write', 'send']);
+assert.equal(emails.length, 2);
+assert.equal(JSON.parse(store.get('user@example.test')).email, 'user@example.test', 'send failure must not roll back the account');
+const beforeRetry = [enrolls, writes, emails.length];
+sendError = false;
+assert.equal(request('signup', credentials).status, 409);
+assert.deepEqual([enrolls, writes, emails.length], beforeRetry, 'retry after send failure must not enroll, write, or send again');
+console.log('core: real extracted closures, sequential requests, malformed input, dummy hashing, enrollment, persistence/refusals, validation isolation, post-write welcome email and send failure persistence');

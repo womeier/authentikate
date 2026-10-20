@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createProviders } from './providers.mjs';
 
 const root = new URL('../', import.meta.url);
-const output = new URL('build/web-component/', root);
 const limit = 16 * 1024;
 
 function readBody(request) {
@@ -25,26 +24,50 @@ function readBody(request) {
   });
 }
 
-export async function createDemoServer() {
-  // Compile the real component once; instantiate it afresh to release its bump heap per request.
+async function loadComponent(artifact, name, mappings = []) {
+  const output = new URL(`build/web-component/${name}/`, root);
   execFileSync(process.execPath, [
     fileURLToPath(new URL('node_modules/.bin/jco', root)),
-    'transpile', fileURLToPath(new URL('build/authentikate.component.wasm', root)),
-    '-o', fileURLToPath(output), '--name', 'service', '--instantiation', 'sync',
-    '--no-wasi-shim', '--quiet', '--map',
-    'authentikate:crypto/argon2@0.1.0=demo:argon2',
-    'authentikate:crypto/ed25519@0.1.0=demo:ed25519',
-    'wasi:keyvalue/store@0.2.0-draft=demo:store',
+    'transpile', fileURLToPath(new URL(`build/${artifact}.component.wasm`, root)),
+    '-o', fileURLToPath(output), '--name', name, '--instantiation', 'sync',
+    '--no-wasi-shim', '--quiet', ...mappings.flatMap(mapping => ['--map', mapping]),
   ], { cwd: fileURLToPath(root), stdio: ['ignore', 'ignore', 'inherit'] });
-  const { instantiate } = await import(new URL('service.js', output));
+  const { instantiate } = await import(new URL(`${name}.js`, output));
   const modules = new Map();
   const getModule = path => {
     if (!modules.has(path)) modules.set(path, new WebAssembly.Module(readFileSync(new URL(path, output))));
     return modules.get(path);
   };
+  return imports => instantiate(getModule, imports);
+}
+
+export async function createDemoServer({ writeEmail = bytes => process.stdout.write(bytes) } = {}) {
+  // Compile once; fresh instances release both components' heaps after each request.
+  const service = await loadComponent('authentikate', 'service', [
+    'authentikate:crypto/argon2@0.1.0=demo:argon2',
+    'authentikate:crypto/ed25519@0.1.0=demo:ed25519',
+    'wasi:keyvalue/store@0.2.0-draft=demo:store',
+    'authentikate:email/sender@0.1.0=demo:email',
+  ]);
+  const email = await loadComponent('email-stdout', 'email');
+  class OutputStream {
+    blockingWriteAndFlush(bytes) {
+      // Copy lifted bytes before the component can reuse its memory.
+      try { writeEmail(Buffer.from(bytes)); }
+      catch { throw { tag: 'closed' }; }
+    }
+  }
+  const emailImports = {
+    'wasi:io/error': { Error: class {} },
+    'wasi:io/streams': { OutputStream },
+    'wasi:cli/stdout': { getStdout: () => new OutputStream() },
+  };
+  const requestImports = () => ({
+    ...imports, 'demo:email': email(emailImports)['authentikate:email/sender@0.1.0'],
+  });
   const { config, imports } = createProviders();
   // Fail before listening if the component or host bindings cannot be instantiated.
-  instantiate(getModule, imports);
+  service(requestImports());
   const assets = new Map([
     ['/', ['index.html', 'text/html; charset=utf-8']],
     ['/style.css', ['style.css', 'text/css; charset=utf-8']],
@@ -103,7 +126,7 @@ export async function createDemoServer() {
         return;
       }
       const body = await readBody(request);
-      const { api } = instantiate(getModule, imports);
+      const { api } = service(requestImports());
       const result = api[endpoint](config, BigInt(Math.floor(Date.now() / 1000)), body);
       response.writeHead(result.status, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(Buffer.from(result.body));
@@ -131,7 +154,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       console.log('Ephemeral demo only. Accounts and signing key are cleared on restart.');
     });
   } catch {
-    console.error('Demo startup failed. Use Node >=24.7, npm install, and build/authentikate.component.wasm.');
+    console.error('Demo startup failed. Use Node >=24.7, npm install, and build/{authentikate,email-stdout}.component.wasm.');
     process.exitCode = 1;
   }
 }

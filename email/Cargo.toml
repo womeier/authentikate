@@ -1,0 +1,26 @@
+[package]
+name = "authentikate-email"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Interchangeable stdout and Lettermint WebAssembly email components"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["stdout"]
+stdout = []
+lettermint = []
+
+[dependencies]
+serde_json = "1"
+wasi = "=0.14.2"
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

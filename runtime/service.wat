@@ -15,6 +15,7 @@
   (import "ed25519" "ffi_ed25519_verify" (func $verify (param i32 i32 i32 i32)))
   (import "store" "ffi_kv_get" (func $get (param i32 i32)))
   (import "store" "ffi_kv_set" (func $set (param i32 i32 i32)))
+  (import "email" "ffi_email_send" (func $email-send (param i32 i32 i32 i32 i32)))
   (global $initialized (mut i32) (i32.const 0))
   (global $api (mut i32) (i32.const 0))
   (global $buf_len (mut i32) (i32.const 0))
@@ -46,6 +47,9 @@
     (call $align-heap))
   (func (export "ffi_kv_set") (param $a i32) (param $b i32) (param $c i32)
     (call $set (local.get $a) (local.get $b) (local.get $c))
+    (call $align-heap))
+  (func (export "ffi_email_send") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $e i32)
+    (call $email-send (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $e))
     (call $align-heap))
 
   (func $check
@@ -97,12 +101,12 @@
       (i32.load offset=4 (local.get $closure)))
     (call $check)
     (global.get $result))
-  ;; Config is 72 bytes aligned to 8; now @72, body @80 in the indirect arguments.
+  ;; Config is 80 bytes aligned to 8; now @80, body @88 in the indirect arguments.
   (func $dispatch (param $endpoint i32) (param $args i32) (result i32)
     (local $cfg i32) (local $params i32) (local $i i32)
     (local $pair i32) (local $body i32) (local $ret i32)
     (call $initialize)
-    (local.set $cfg (call $alloc (i32.const 32) (i32.const 4)))
+    (local.set $cfg (call $alloc (i32.const 36) (i32.const 4)))
     (local.set $params (call $alloc (i32.const 24) (i32.const 4)))
     (call $check)
     (i32.store (local.get $cfg) (i32.const 0))
@@ -120,11 +124,12 @@
     (i32.store offset=20 (local.get $cfg) (call $bytes-at (i32.add (local.get $args) (i32.const 32))))
     (i32.store offset=24 (local.get $cfg) (call $bytes-at (i32.add (local.get $args) (i32.const 40))))
     (i32.store offset=28 (local.get $cfg) (local.get $params))
+    (i32.store offset=32 (local.get $cfg) (call $bytes-at (i32.add (local.get $args) (i32.const 68))))
     (local.set $pair (call $apply
       (call $apply
         (call $apply (i32.load (i32.add (global.get $api) (local.get $endpoint))) (local.get $cfg))
-        (call $N (i64.load offset=72 (local.get $args))))
-      (call $bytes-at (i32.add (local.get $args) (i32.const 80)))))
+        (call $N (i64.load offset=80 (local.get $args))))
+      (call $bytes-at (i32.add (local.get $args) (i32.const 88)))))
     (local.set $body (call $lower (i32.load offset=8 (local.get $pair))))
     (local.set $ret (call $alloc (i32.const 12) (i32.const 4)))
     (call $check)

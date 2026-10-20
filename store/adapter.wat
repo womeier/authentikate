@@ -11,7 +11,7 @@
 ;;
 ;;   wasm-tools parse adapter.wat -o store-adapter.wasm
 ;;
-;; then merged alongside the crypto adapters; see theories/extractions.v.
+;; then merged alongside the crypto adapters; see theories/extraction.v.
 ;; Note that all three adapters export `cabi_realloc`, so the merge needs
 ;; --rename-export-conflicts and the component wrapping needs exactly one of
 ;; them to keep the name.

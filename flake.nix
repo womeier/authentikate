@@ -106,7 +106,7 @@
       };
 
       # The service as a single Wasm module, compiled by CertiRocq from
-      # theories/extractions.v, wrapped with canonical component interfaces.
+      # theories/extraction.v, wrapped with canonical component interfaces.
       authentikate-wasm = pkgs.stdenv.mkDerivation {
         pname = "authentikate-wasm";
         version = "0.1.0";
