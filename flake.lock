@@ -40,11 +40,11 @@
     "rocq-base64": {
       "flake": false,
       "locked": {
-        "lastModified": 1792486796,
-        "narHash": "sha256-A9+oaCjqxb6N/DynSQgj8euzN95wEcAj3UUK42vymUY=",
+        "lastModified": 1792587528,
+        "narHash": "sha256-oO9NHU8Nb0clXGBDFrO0DNM6ivUpG6VBSeYs76Sd6Rs=",
         "owner": "womeier",
         "repo": "rocq-base64",
-        "rev": "9350246cea58719df84ba30325c396b0376fcd57",
+        "rev": "b0f629e5b1170d8015b30c44323b6bc220dd9613",
         "type": "github"
       },
       "original": {

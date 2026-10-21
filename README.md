@@ -4,6 +4,29 @@ An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq.
 
 Deferred work is tracked in [TODO.md](TODO.md).
 
+## Architecture Figures
+
+[`report/architecture.tex`](report/architecture.tex) shows only the backend components,
+languages, types, verification status, and clickable implementation, theorem,
+and adapter links. [`report/login-flow.tex`](report/login-flow.tex) is a separate TikZ
+sequence diagram of frontend/backend login communication, including successful
+token issuance and failure responses. Build the report with its dedicated
+development shell, which provides Tectonic without the Rocq/Rust dependencies:
+
+```sh
+mkdir -p build
+nix develop .#report --command tectonic --outdir build report/main.tex
+```
+
+The PDF is `build/main.pdf`. For an interactive report shell, use
+`nix develop .#report`. The backend
+figure distinguishes active demo providers, optional Rust providers, proved
+source properties, tested boundaries, and external assumptions; it contains no
+browser UI or frontend host diagram.
+
+For a sandboxed build, run `nix build .#report`; the PDF is `result/main.pdf`.
+Nix fetches a hash-pinned cache of the required TeX resources and compiles offline.
+
 ## Building
 
 Prebuilt artifacts are available via womeier's cachix.
@@ -13,8 +36,9 @@ nix build
 ```
 
 The flake includes [rocq-base64](https://github.com/womeier/rocq-base64), built
-with the same Rocq and MetaRocq toolchain as CertiRocq. The service uses its
-MetaRocq bytestring instance with strict, unpadded base64url encoding.
+with the same Rocq toolchain as CertiRocq, without a MetaRocq dependency.
+The service uses a local copy of upstream's MetaRocq bytestring instance in
+`theories/MetaRocqString.v` with strict, unpadded base64url encoding.
 The default build checks the Rocq proofs and extracts the real signup, login,
 and validation service. It produces `authentikate.component.wasm` and
 `authentikate.core.wasm` in the Nix output, or under `build/` with:
@@ -35,6 +59,32 @@ request body, and returns an HTTP status and JSON body. See `wit/service.wit`.
 Time comes from `wasi:clocks/wall-clock@0.2.0`. The component reads the clock
 once per request and passes Unix seconds into the pure Rocq core, which retains
 explicit time arguments for deterministic tests and expiration reasoning.
+
+### Clock Trust Assumption
+
+The host is trusted to supply an accurate current UTC-referenced POSIX timestamp.
+WASI's "wall clock" is the appropriate interface for this: its
+[`now` contract](wit/deps/clocks/wall-clock.wit) specifies seconds since
+`1970-01-01T00:00:00Z`, not local civil time or elapsed time. This matches JWT's
+[`NumericDate`](https://www.rfc-editor.org/rfc/rfc7519.html#section-2), which
+ignores leap seconds. A monotonic clock cannot replace it for absolute expiry
+because it has no UTC epoch.
+
+JWT `exp` is an absolute timestamp, computed at login as `now + ttl`.
+Validation requires `now < exp`, so the token expires at `exp` itself. The
+freshness proof is relative to the supplied `now`; it does not prove that the
+host clock reflects real-world time. WASI permits wall-clock adjustments, and
+the service does not detect rollback or apply a clock-skew allowance. A slow or
+rolled-back clock can accept a token past its real-world expiry; a fast clock
+can reject one prematurely. Deployments must maintain a trustworthy,
+synchronized host clock.
+
+A verified calendar library such as
+[FV Time (CPP 2024)](https://doi.org/10.1145/3636501.3636958) could verify future
+calendar-to-timestamp conversions using POSIX semantics. It would not establish
+the accuracy of the live clock or remove this host trust assumption.
+
+### Other Providers
 
 Storage uses the standard `wasi:keyvalue/store@0.2.0-draft` interface. Signup
 checks for an existing account, enrolls the password, and persists the record

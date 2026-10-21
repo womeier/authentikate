@@ -12,7 +12,12 @@
   };
 
   outputs =
-    { self, nixpkgs, fenix, rocq-base64 }:
+    {
+      self,
+      nixpkgs,
+      fenix,
+      rocq-base64,
+    }:
     let
       # Linux x86_64 only, on purpose: the one platform this is developed on.
       # The Wasm the build produces is platform-independent anyway.
@@ -25,17 +30,30 @@
         config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "compcert" ];
       };
 
-      rustToolchain = with fenix.packages.${system}; combine [
-        (stable.withComponents [ "cargo" "rustc" "rust-std" "rustfmt" "clippy" "rust-analyzer" "rust-src" ])
-        targets.wasm32-unknown-unknown.stable.rust-std
-      ];
+      rustToolchain =
+        with fenix.packages.${system};
+        combine [
+          (stable.withComponents [
+            "cargo"
+            "rustc"
+            "rust-std"
+            "rustfmt"
+            "clippy"
+            "rust-analyzer"
+            "rust-src"
+          ])
+          targets.wasm32-unknown-unknown.stable.rust-std
+        ];
 
       jco = pkgs.buildNpmPackage {
         pname = "authentikate-component-test-tools";
         version = "1.39.0";
         src = lib.fileset.toSource {
           root = ./tests;
-          fileset = lib.fileset.unions [ ./tests/package.json ./tests/package-lock.json ];
+          fileset = lib.fileset.unions [
+            ./tests/package.json
+            ./tests/package-lock.json
+          ];
         };
         npmDepsHash = "sha256-YqhhpvR5/S8jYytyeC9cib+50nog9H6JytAUxkyIKeQ=";
         dontNpmBuild = true;
@@ -59,7 +77,8 @@
       #     https://github.com/CertiRocq/certirocq/pull/158, and its own
       #     .nix/config.nix pins `metarocq.override.version = "9.1"`
       #     accordingly; the fork's config.nix says the same.
-      rocqPackages = pkgs.rocqPackages_9_1.overrideScope (_self: super:
+      rocqPackages = pkgs.rocqPackages_9_1.overrideScope (
+        _self: super:
         let
           wasmcert = super.wasmcert.override { version = "2.2.1"; };
           metarocq = super.metarocq.override {
@@ -74,14 +93,15 @@
         in
         {
           inherit wasmcert metarocq;
-        });
+        }
+      );
 
       base64 =
-        (rocqPackages.callPackage "${rocq-base64}/.nix/rocq-overlays/base64/default.nix" { })
-        .overrideAttrs (old: {
-          version = "unstable-${builtins.substring 0 8 rocq-base64.rev}";
-          src = rocq-base64;
-        });
+        (rocqPackages.callPackage "${rocq-base64}/.nix/rocq-overlays/base64/default.nix" { }).overrideAttrs
+          (old: {
+            version = "unstable-${builtins.substring 0 8 rocq-base64.rev}";
+            src = rocq-base64;
+          });
 
       # CertiRocq's own sources at one pinned commit of the womeier fork
       # (github.com/womeier/CertiRocq), used both as the package's src and as
@@ -115,7 +135,9 @@
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
             name = "coq9.1-CertiRocq-unstable-cb74dd6b";
-            meta = (old.meta or { }) // { broken = false; };
+            meta = (old.meta or { }) // {
+              broken = false;
+            };
           });
 
       # Rocq sources and the build driver.  Keeps build products and editor
@@ -181,6 +203,50 @@
           platforms = [ system ];
         };
       };
+      # Fetch only the pinned bundle resources used by this report, not the
+      # multi-gigabyte full bundle. Update the hash when adding TeX dependencies.
+      reportResources =
+        pkgs.runCommand "authentikate-report-tex-resources"
+          {
+            nativeBuildInputs = [
+              pkgs.tectonic
+              pkgs.cacert
+            ];
+            outputHashMode = "recursive";
+            outputHashAlgo = "sha256";
+            outputHash = "sha256-CNuxoOVTo2dwnwZVZhPcJ2Gp2zbq79+ntfs1rogxjGw=";
+          }
+          ''
+            export HOME=$TMPDIR/home
+            mkdir -p "$HOME" work
+            cp -r ${./report}/. work/
+            cd work
+            tectonic --bundle ${pkgs.tectonic.unwrapped.TECTONIC_BUNDLE_LOCKED} main.tex
+            mkdir -p $out
+            cp -r "$HOME/.cache/tectonic/bundles" $out/
+          '';
+
+      report = pkgs.stdenvNoCC.mkDerivation {
+        pname = "authentikate-report";
+        version = "0.1.0";
+        src = ./report;
+        nativeBuildInputs = [ pkgs.tectonic ];
+        buildPhase = ''
+          runHook preBuild
+          export HOME=$TMPDIR/home
+          mkdir -p "$HOME/.cache/tectonic"
+          cp -r ${reportResources}/bundles "$HOME/.cache/tectonic/"
+          chmod -R u+w "$HOME"
+          tectonic --only-cached --bundle ${pkgs.tectonic.unwrapped.TECTONIC_BUNDLE_LOCKED} main.tex
+          runHook postBuild
+        '';
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out
+          cp main.pdf $out/
+          runHook postInstall
+        '';
+      };
     in
     {
       packages.${system} = {
@@ -195,50 +261,59 @@
         inherit base64;
         inherit jco;
         rust-toolchain = rustToolchain;
+        inherit report;
       };
 
       # The proofs are checked by building, so building is the test suite.
       checks.${system}.build = authentikate-wasm;
 
-      devShells.${system}.default = pkgs.mkShell {
-        name = "authentikate";
-        packages = [
-          rocqPackages.rocq-core
-          rocqPackages.coq
-          CertiRocq
-          base64
-          rocqPackages.stdlib
-          rocqPackages.coq-lsp
-          pkgs.gnumake
-          pkgs.curl
-          pkgs.python3
+      devShells.${system} = {
+        default = pkgs.mkShell {
+          name = "authentikate";
+          packages = [
+            rocqPackages.rocq-core
+            rocqPackages.coq
+            CertiRocq
+            base64
+            rocqPackages.stdlib
+            rocqPackages.coq-lsp
+            pkgs.gnumake
+            pkgs.curl
+            pkgs.python3
 
-          # Service assembly and component regression tests use Node.
-          pkgs.nodejs
-          jco
+            # Service assembly and component regression tests use Node.
+            pkgs.nodejs
+            jco
 
-          # The crypto primitives come from a Rust library, linked in through
-          # the module's imports.
-          # Fenix includes matching native/Wasm standard libraries and rust-lld.
-          rustToolchain
+            # The crypto primitives come from a Rust library, linked in through
+            # the module's imports.
+            # Fenix includes matching native/Wasm standard libraries and rust-lld.
+            rustToolchain
 
-          # To look at what came out, and to inspect the module's imports.
-          pkgs.wabt # wasm2wat
-          pkgs.wasm-tools
-          pkgs.wac-cli
-          pkgs.binaryen
-        ];
+            # To look at what came out, and to inspect the module's imports.
+            pkgs.wabt # wasm2wat
+            pkgs.wasm-tools
+            pkgs.wac-cli
+            pkgs.binaryen
 
-        COQBIN = "${rocqPackages.coq}/bin/";
+          ];
 
-        shellHook = ''
-          echo "authentikate development environment"
-          echo "  rocq:  $(rocq --version | head -1)"
-          echo "  node:  $(node --version)"
-          echo "  rustc: $(rustc --version)"
-          echo ""
-          echo "Build the Wasm module:  make        (or: nix build)"
-        '';
+          COQBIN = "${rocqPackages.coq}/bin/";
+
+          shellHook = ''
+            echo "authentikate development environment"
+            echo "  rocq:  $(rocq --version | head -1)"
+            echo "  node:  $(node --version)"
+            echo "  rustc: $(rustc --version)"
+            echo ""
+            echo "Build the Wasm module:  make        (or: nix build)"
+          '';
+        };
+
+        report = pkgs.mkShell {
+          name = "authentikate-report";
+          packages = [ pkgs.tectonic ];
+        };
       };
     };
 }

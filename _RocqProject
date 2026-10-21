@@ -2,6 +2,7 @@
 -Q tests Authentikate.Tests
 
 theories/Bytes.v
+theories/MetaRocqString.v
 theories/Base64.v
 theories/Base64Proofs.v
 theories/Json.v

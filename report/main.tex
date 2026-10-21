@@ -1,0 +1,68 @@
+\documentclass[12pt,a4paper]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{pdflscape}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,fit,backgrounds}
+\usepackage[hidelinks]{hyperref}
+
+% Allow compilation from either the repository root or the report directory.
+\makeatletter
+\def\input@path{{report/}}
+\makeatother
+
+\newcommand{\repo}{https://github.com/womeier/authentikate/blob/main/}
+\newcommand{\source}[2]{\href{\repo#1}{#2}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\ty}[1]{{\footnotesize\ttfamily\detokenize{#1}}}
+\newcommand{\links}[2]{\smallskip\source{#1}{Implementation}\quad\source{#2}{Adapter}}
+\newcommand{\tested}{\textbf{Tested; no formal proof.}}
+\newcommand{\partialproof}{\textbf{Selected source properties proved.}}
+\newcommand{\trusted}{\textbf{External capability; assumed.}}
+
+\title{Authentikate Report}
+\author{Wolfgang Meier}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\chapter{Introduction}
+Introduce the topic, motivation, and objectives of the report.
+
+\chapter{Background}
+Describe the relevant concepts and related work.
+
+\chapter{Implementation}
+Explain the approach, design, and implementation.
+
+\section{Architecture}
+Figure~\ref{fig:architecture} shows the backend components and verification
+boundaries. Figure~\ref{fig:login-flow} traces the login request and its possible
+outcomes.
+
+\begin{landscape}
+\begin{figure}[p]
+\centering
+\resizebox{0.85\linewidth}{!}{\input{architecture.tex}}
+\caption{Backend architecture, component interfaces, and verification boundaries.}
+\label{fig:architecture}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\resizebox{0.85\linewidth}{!}{\input{login-flow.tex}}
+\caption{Frontend--backend login flow and alternative responses.}
+\label{fig:login-flow}
+\end{figure}
+\end{landscape}
+
+\chapter{Conclusion}
+Summarize the results and discuss future work.
+
+\end{document}
