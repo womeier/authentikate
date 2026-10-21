@@ -108,7 +108,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
- "url",
  "wasmtime",
  "wasmtime-wasi",
  "zeroize",

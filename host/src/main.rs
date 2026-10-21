@@ -254,76 +254,8 @@ impl Runtime {
     }
 }
 
-struct Policy {
-    port: u16,
-    public_origin: Option<url::Url>,
-}
-
-impl Policy {
-    fn new(port: u16, public_origin: Option<&str>) -> Result<Self> {
-        let public_origin = public_origin.map(url::Url::parse).transpose()?;
-        if let Some(origin) = &public_origin {
-            ensure!(
-                matches!(origin.scheme(), "http" | "https")
-                    && origin.host_str().is_some()
-                    && origin.username().is_empty()
-                    && origin.password().is_none()
-                    && origin.path() == "/"
-                    && origin.query().is_none()
-                    && origin.fragment().is_none(),
-                "PUBLIC_ORIGIN must be an http(s) origin without credentials, path, query or fragment"
-            );
-        }
-        Ok(Self {
-            port,
-            public_origin,
-        })
-    }
-
-    fn permits(&self, request: &Request) -> bool {
-        let hosts = request
-            .headers()
-            .get_all(header::HOST)
-            .iter()
-            .collect::<Vec<_>>();
-        let [host] = hosts.as_slice() else {
-            return false;
-        };
-        let Ok(host) = host.to_str() else {
-            return false;
-        };
-        let expected_origin = if let Some(origin) = &self.public_origin {
-            let authority = &origin[url::Position::BeforeHost..url::Position::AfterPort];
-            if !host.eq_ignore_ascii_case(authority) {
-                return false;
-            }
-            origin.origin().ascii_serialization()
-        } else {
-            let allowed = ["127.0.0.1", "localhost", "[::1]"].map(|name| {
-                if self.port == 80 {
-                    name.to_string()
-                } else {
-                    format!("{name}:{}", self.port)
-                }
-            });
-            if !allowed.iter().any(|value| host.eq_ignore_ascii_case(value)) {
-                return false;
-            }
-            format!("http://{}", host.to_ascii_lowercase())
-        };
-        let origins = request
-            .headers()
-            .get_all(header::ORIGIN)
-            .iter()
-            .collect::<Vec<_>>();
-        origins.is_empty()
-            || (origins.len() == 1 && origins[0].as_bytes() == expected_origin.as_bytes())
-    }
-}
-
 struct App {
     runtime: Runtime,
-    policy: Policy,
     gate: Arc<Semaphore>,
     slots: Arc<Semaphore>,
 }
@@ -361,9 +293,6 @@ async fn dispatch(app: Arc<App>, request: Request) -> Response {
             StatusCode::BAD_REQUEST,
             "Use an origin-form relative request target",
         );
-    }
-    if !app.policy.permits(&request) {
-        return error(StatusCode::FORBIDDEN, "Host or Origin is not allowed");
     }
     let path = request.uri().path();
     let operation = match path {
@@ -487,11 +416,6 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "127.0.0.1:3000".into())
         .parse()
         .context("LISTEN must be an IP address and port")?;
-    let public_origin = std::env::var("PUBLIC_ORIGIN").ok();
-    ensure!(
-        listen.ip().is_loopback() || public_origin.is_some(),
-        "Non-loopback LISTEN requires an explicit PUBLIC_ORIGIN"
-    );
     let path =
         std::env::var("HOST_COMPONENT").unwrap_or_else(|_| "build/host.component.wasm".into());
     let sender = std::env::var("SIGNUP_EMAIL_FROM")
@@ -499,17 +423,12 @@ async fn main() -> Result<()> {
     let runtime = Runtime::new(&path, sender)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let address = listener.local_addr()?;
-    let policy = Policy::new(address.port(), public_origin.as_deref())?;
-    eprintln!(
-        "Authentikate demo: {}",
-        public_origin.unwrap_or_else(|| format!("http://{address}"))
-    );
+    eprintln!("Authentikate demo: http://{address}");
     eprintln!(
         "Ephemeral demo: accounts and signing key are lost on restart. Welcome emails go to stdout."
     );
     let app = Arc::new(App {
         runtime,
-        policy,
         gate: Arc::new(Semaphore::new(1)),
         slots: Arc::new(Semaphore::new(8)),
     });
@@ -555,49 +474,6 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
-    #[test]
-    fn host_and_origin_policy() {
-        let policy = Policy::new(3000, None).unwrap();
-        for (host, origin, expected) in [
-            ("127.0.0.1:3000", None, true),
-            ("localhost:3000", Some("http://localhost:3000"), true),
-            ("[::1]:3000", Some("http://[::1]:3000"), true),
-            ("rebound.test:3000", Some("http://rebound.test:3000"), false),
-            ("127.0.0.1:1", None, false),
-            ("127.0.0.1:3000", Some("https://untrusted.test"), false),
-            ("127.0.0.1:3000", Some("null"), false),
-        ] {
-            let mut req = request(Method::GET, "/", "");
-            req.headers_mut()
-                .insert(header::HOST, host.parse().unwrap());
-            if let Some(origin) = origin {
-                req.headers_mut()
-                    .insert(header::ORIGIN, origin.parse().unwrap());
-            }
-            assert_eq!(policy.permits(&req), expected, "{host} {origin:?}");
-        }
-        let policy = Policy::new(3000, Some("https://demo.example.test")).unwrap();
-        let mut req = request(Method::GET, "/", "");
-        assert!(!policy.permits(&req));
-        req.headers_mut()
-            .insert(header::HOST, "demo.example.test".parse().unwrap());
-        req.headers_mut()
-            .insert(header::ORIGIN, "https://demo.example.test".parse().unwrap());
-        assert!(policy.permits(&req));
-        req.headers_mut()
-            .append(header::ORIGIN, "https://demo.example.test".parse().unwrap());
-        assert!(!policy.permits(&req));
-        for origin in [
-            "ftp://example.test",
-            "https://user@example.test",
-            "https://example.test/path",
-            "https://example.test?x",
-            "https://example.test#x",
-        ] {
-            assert!(Policy::new(3000, Some(origin)).is_err(), "{origin}");
-        }
-    }
-
     // Intentionally fails when the composed artifact is missing or stale.
     #[tokio::test(flavor = "multi_thread")]
     async fn composed_authentication_and_http_boundaries() {
@@ -614,7 +490,6 @@ mod tests {
         let slots = Arc::new(Semaphore::new(8));
         let app = router(Arc::new(App {
             runtime,
-            policy: Policy::new(3000, None).unwrap(),
             gate: gate.clone(),
             slots: slots.clone(),
         }));
@@ -687,19 +562,19 @@ mod tests {
             app.clone().oneshot(req).await.unwrap().status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
-        let mut req = request(Method::POST, "/api/login", "{}");
+        let mut req = request(Method::GET, "/", "");
         req.headers_mut()
             .insert(header::ORIGIN, "https://untrusted.test".parse().unwrap());
         assert_eq!(
             app.clone().oneshot(req).await.unwrap().status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
         let mut req = request(Method::GET, "/", "");
         req.headers_mut()
             .insert(header::HOST, "rebound.test:3000".parse().unwrap());
         assert_eq!(
             app.clone().oneshot(req).await.unwrap().status(),
-            StatusCode::FORBIDDEN
+            StatusCode::OK
         );
 
         let credentials =

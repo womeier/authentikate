@@ -11,7 +11,6 @@ getrandom = { version = "0.3", features = ["std"] }
 http-body-util = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
-url = "2"
 wasmtime = { version = "50.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std", "parallel-compilation"] }
 wasmtime-wasi = { version = "50.0.0", default-features = false, features = ["p2"] }
 zeroize = "1"

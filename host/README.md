@@ -35,18 +35,12 @@ root lockfile and target directory.
 | Environment | Default | Meaning |
 | --- | --- | --- |
 | `LISTEN` | `127.0.0.1:3000` | IP socket address, including port; port 0 chooses a free port |
-| `PUBLIC_ORIGIN` | unset | Exact approved HTTP(S) origin for a custom authority/reverse proxy |
 | `HOST_COMPONENT` | `build/host.component.wasm` | Composed component path, relative to the working directory |
 | `SIGNUP_EMAIL_FROM` | `Authentikate <hello@example.test>` | Welcome-email sender |
 
-Without `PUBLIC_ORIGIN`, only `127.0.0.1`, `localhost`, and `[::1]` Host authorities
-at the actual listening port are accepted. IPv6 requires an IPv6 listener.
-Non-loopback `LISTEN` requires an explicit `PUBLIC_ORIGIN`; this is an opt-in,
-not production hardening. For a proxy, set for example
-`PUBLIC_ORIGIN=https://demo.example.test`, preserve that Host header, and terminate
-TLS at the proxy. Forwarded headers are deliberately not trusted. Supplied Origin
-headers must exactly match the approved origin; missing Origin is allowed for
-non-browser clients. No permissive CORS headers are emitted.
+The host does not restrict Host or Origin headers. `LISTEN` defaults to loopback;
+setting a non-loopback address exposes the demo on that interface. Terminate TLS
+at a reverse proxy if needed. No permissive CORS headers are emitted.
 
 ## Composition
 
@@ -96,7 +90,7 @@ cargo test --locked
 Tests require the real composed artifact and fail if it is missing or broken.
 They cover signup/login/validate across fresh instances, claims, signature
 tampering, wrong/missing accounts, concurrent duplicate signup, malformed JSON,
-Host/Origin and absolute-target rejection, JSON media type, 16 KiB limits,
+custom Host/Origin acceptance and absolute-target rejection, JSON media type, 16 KiB limits,
 chunked socket requests, assets, bounded admission, and actual stdout emails.
 On Linux, `/dev/full` tests an actual stdout failure and the surviving account.
 
