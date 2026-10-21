@@ -332,7 +332,33 @@ function request(endpoint, body, now = 0xffffffffffffffffn) {
 for (const endpoint of ['login', 'validate', 'signup']) {
   assert.deepEqual(request(endpoint, '{}'), { status: 400, body: { error: 'bad request' } });
 }
+// Exercise raw bytes rather than JSON.stringify, which escapes control characters.
+for (let byte = 0; byte <= 255; byte++) {
+  const accepted = byte >= 0x20 && byte <= 0x7e && byte !== 0x22 && byte !== 0x5c;
+  for (const [prefix, suffix] of [
+    ['{"token":"invalid","extra":"', '"}'],
+    ['{"token":"invalid","', '":true}'],
+  ]) {
+    const body = Buffer.concat([Buffer.from(prefix), Buffer.from([byte]), Buffer.from(suffix)]);
+    assert.deepEqual(request('validate', body), accepted
+      ? { status: 200, body: { valid: false } }
+      : { status: 400, body: { error: 'bad request' } }, `string byte ${byte}`);
+  }
+}
+for (const endpoint of ['login', 'signup']) {
+  for (const field of ['email', 'password']) {
+    for (const invalid of ['\x00', '\x1f', '\x7f', '\u00e9', '\ud83d\ude00']) {
+      const fields = { email: 'user@example.test', password: 'password' };
+      fields[field] = invalid;
+      const body = `{"email":"${fields.email}","password":"${fields.password}"}`;
+      assert.deepEqual(request(endpoint, body), { status: 400, body: { error: 'bad request' } });
+    }
+  }
+}
+assert.deepEqual(request('validate', ' \t\r\n{ "token" : " ~" }\n'),
+  { status: 200, body: { valid: false } });
 assert.equal(gets, 0); assert.equal(hashes, 0);
+assert.equal(enrolls, 0); assert.equal(writes, 0); assert.equal(emails.length, 0);
 assert.deepEqual(request('validate', '{"token":"invalid"}'), { status: 200, body: { valid: false } });
 const credentials = '{"email":"user@example.test","password":"password"}';
 assert.equal(request('login', credentials).status, 401);

@@ -183,7 +183,8 @@ Proof. intros H. by_digit H. Qed.
 (* ---- strings ------------------------------------------------------------ *)
 
 Definition ok_string (s : bytes) : Prop :=
-  ~ bytes_In quote s /\ ~ bytes_In backslash s.
+  ~ bytes_In quote s /\ ~ bytes_In backslash s /\
+  forall b, bytes_In b s -> printable_ascii b = true.
 
 Lemma skip_ws_head (b : byte) (l : bytes) :
   is_ws b = false -> skip_ws (BS.String b l) = BS.String b l.
@@ -193,13 +194,18 @@ Lemma parse_string_print : forall s acc rest,
   ok_string s -> parse_string (BS.append s (BS.String quote rest)) acc =
     Some (BS.append (bytes_rev acc) s, rest).
 Proof.
-  induction s as [| b s IH]; intros acc rest [Hq Hb].
+  induction s as [| b s IH]; intros acc rest [Hq [Hb Ha]].
   - cbn [BS.append parse_string]. rewrite (byte_dec_lb (@Logic.eq_refl byte quote)).
     now rewrite bytes_append_empty.
   - cbn [BS.append parse_string].
     rewrite byte_eqb_false by (intro; subst; apply Hq; now left).
     rewrite byte_eqb_false by (intro; subst; apply Hb; now left).
-    rewrite IH by (split; intro; [apply Hq | apply Hb]; now right).
+    rewrite Ha by now left.
+    assert (Hs : ok_string s).
+    { split; [intro H; apply Hq; now right |].
+      split; [intro H; apply Hb; now right |].
+      intros c Hc. apply Ha. now right. }
+    rewrite IH by exact Hs.
     rewrite bytes_rev_cons. now rewrite <- bytes_append_assoc.
 Qed.
 

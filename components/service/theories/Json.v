@@ -3,14 +3,15 @@
 (*                                                                            *)
 (*  A total parser on bytes, returning an option, and a canonical printer.     *)
 (*  Only what the two endpoints and a claim set need: flat and nested objects, *)
-(*  strings, non-negative integers, booleans.  No arrays, no null, no floats,  *)
-(*  no escapes.                                                               *)
+(*  printable ASCII strings, non-negative integers, booleans.                 *)
+(*  No arrays, no null, no floats, no escapes.                                *)
 (*                                                                            *)
 (*  Deliberate strictness, because a parser is attack surface:                 *)
 (*                                                                            *)
 (*  - A backslash in a string is rejected rather than interpreted.  A          *)
 (*    consequence worth knowing: a password cannot contain a backslash or a    *)
 (*    double quote.                                                           *)
+(*  - String keys and values reject control and non-ASCII bytes.               *)
 (*  - A duplicate key is rejected.  Two spellings of the same claim is how     *)
 (*    one reader is made to disagree with another about what a token says.     *)
 (*  - A trailing comma is rejected.                                           *)
@@ -72,6 +73,10 @@ Definition is_ws (b : byte) : bool :=
   let v := N_of_byte b in
   orb (N.eqb v 32) (orb (N.eqb v 9) (orb (N.eqb v 10) (N.eqb v 13))).
 
+Definition printable_ascii (b : byte) : bool :=
+  let v := N_of_byte b in
+  andb (N.leb 32 v) (N.leb v 126).
+
 Fixpoint skip_ws (input : bytes) : bytes :=
   match input with
   | BS.String b rest => if is_ws b then skip_ws rest else input
@@ -92,7 +97,8 @@ Fixpoint parse_string (input acc : bytes) : option (bytes * bytes) :=
   | BS.String b rest =>
       if Byte.eqb b quote then Some (bytes_rev acc, rest)
       else if Byte.eqb b backslash then None
-      else parse_string rest (BS.String b acc)
+      else if printable_ascii b then parse_string rest (BS.String b acc)
+      else None
   end.
 
 Fixpoint take_digits (input acc : bytes) : bytes * bytes :=

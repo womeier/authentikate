@@ -33,12 +33,14 @@ body as bytes, and returns a status code and JSON body as bytes. The HTTP host
 supplies configuration; clients send only the request body. See
 [service.wit](components/service/wit/service.wit).
 
-The parser supports a restricted JSON subset: objects, strings without escapes,
-non-negative integers, and booleans. It rejects duplicate keys, arrays, `null`,
-negative numbers, and floating-point numbers. In particular, passwords cannot
-contain a double quote or backslash. The printer does not escape strings, so
-hosts must also supply a JSON-safe issuer (`iss`), without quotes, backslashes,
-or control characters. See [Json.v](components/service/theories/Json.v).
+The parser supports a restricted JSON subset: objects, printable ASCII strings
+without escapes, non-negative integers, and booleans. String keys and values
+accept only bytes `0x20` through `0x7E`, excluding double quote and backslash.
+Emails and passwords therefore cannot contain Unicode or control characters.
+JSON whitespace outside strings is unchanged. It rejects duplicate keys, arrays,
+`null`, negative numbers, and floating-point numbers. The printer does not escape
+strings, so hosts must also supply an issuer (`iss`) in the same printable ASCII
+subset. See [Json.v](components/service/theories/Json.v).
 
 Time comes from `wasi:clocks/wall-clock@0.2.0`. The component reads the clock
 once per request and passes Unix seconds into the pure Rocq core, which retains
