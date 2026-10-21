@@ -13,6 +13,6 @@ theories/Backoff.v
 theories/Jwt.v
 theories/Api.v
 theories/Proofs.v
-test/Bytes.v
-test/Signup.v
+tests/Bytes.v
+tests/Signup.v
 theories/extraction.v

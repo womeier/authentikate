@@ -1,4 +1,4 @@
-// Run with node test/email.mjs. All host capabilities are mocks, never network APIs.
+// Run with node tests/email.mjs. All host capabilities are mocks, never network APIs.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ const backends = process.argv.includes('--stdout') ? ['stdout'] : ['stdout', 'le
 for (const backend of backends) {
   const directory = pathToFileURL(`${output}/${backend}/`);
   execFileSync(process.execPath, [
-    fileURLToPath(new URL('test/node_modules/.bin/jco', root)),
+    fileURLToPath(new URL('tests/node_modules/.bin/jco', root)),
     'transpile', fileURLToPath(new URL(`build/email-${backend}.component.wasm`, root)),
     '-o', fileURLToPath(directory), '--name', 'email', '--instantiation', 'sync',
     '--no-wasi-shim', '--quiet',

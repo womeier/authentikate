@@ -11,7 +11,7 @@ The Rust crate is built twice with mutually exclusive backend features:
 Build with `make email-components`, or `nix develop --command make email-components`.
 Install the Rust `wasm32-unknown-unknown` target first. `make test-email` also runs
 Rust unit tests and component tests with mocked WASI capabilities (no real email).
-The optional component-test tooling is installed with `npm ci --prefix test`;
+The optional component-test tooling is installed with `npm ci --prefix tests`;
 these Node dependencies are not used by the Rust web host.
 CI runs `make test-email-stdout`, which builds and tests only the stdout backend;
 it does not build the Lettermint backend or require its credentials.

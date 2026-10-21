@@ -80,14 +80,13 @@ Build the service, Rust crypto providers and stdout email provider, compose them
 at the component level with WAC, then start the Rust web host from the root:
 
 ```sh
-cargo install wac-cli --version 0.12.0 --locked
 rustup target add wasm32-unknown-unknown
 make host-component
 cargo run --locked
 ```
 
 Open http://127.0.0.1:3000 to sign up, log in, and validate a token.
-The build requires the existing Rocq/Node/Binaryen/wasm-tools toolchain; use the
+The Nix development shell includes WAC 0.12.0 and the Rocq/Node/Binaryen/wasm-tools toolchain; use the
 development shell for `make` if needed (retain rustup's Wasm-enabled compiler on
 `PATH`). If all four `build/*.component.wasm` inputs already exist, use
 `make compose-host` instead. After composition, `cargo run` needs no Node, WAC,

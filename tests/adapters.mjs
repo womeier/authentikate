@@ -6,7 +6,7 @@
 // means hashing under the wrong cost, $utf8_ok wrong means a trap on
 // attacker-controlled input.
 //
-// Run: test/run.sh
+// Run: tests/run.sh
 import fs from 'fs';
 const m = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
 const i = new WebAssembly.Instance(m, {});

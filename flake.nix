@@ -133,8 +133,8 @@
         doCheck = true;
         checkPhase = ''
           runHook preCheck
-          node test/ffi-adapters.mjs
-          node test/component.mjs
+          node tests/ffi-adapters.mjs
+          node tests/component.mjs
           runHook postCheck
         '';
 
@@ -179,7 +179,7 @@
           rocqPackages.coq-lsp
           pkgs.gnumake
 
-          # The host wrapper runs the module under Node.
+          # Service assembly and component regression tests use Node.
           pkgs.nodejs
 
           # The crypto primitives come from a Rust library, linked in through
@@ -196,6 +196,7 @@
           # To look at what came out, and to inspect the module's imports.
           pkgs.wabt # wasm2wat
           pkgs.wasm-tools
+          pkgs.wac-cli
           pkgs.binaryen
         ];
 

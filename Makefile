@@ -7,8 +7,8 @@ component: rocq
 	node tools/build-component.mjs
 
 test: component
-	node test/ffi-adapters.mjs
-	node test/component.mjs
+	node tests/ffi-adapters.mjs
+	node tests/component.mjs
 
 crypto-components:
 	mkdir -p build
@@ -47,12 +47,12 @@ test-host: compose-host
 
 test-email-stdout: email-stdout-component
 	cargo test --locked --manifest-path email/Cargo.toml
-	node --test-name-pattern=stdout test/email.mjs --stdout
+	node --test-name-pattern=stdout tests/email.mjs --stdout
 
 test-email: email-components
 	cargo test --locked --manifest-path email/Cargo.toml
 	cargo test --locked --manifest-path email/Cargo.toml --no-default-features --features lettermint
-	node test/email.mjs
+	node tests/email.mjs
 
 clean: Makefile.rocq
 	@+$(MAKE) -f Makefile.rocq cleanall

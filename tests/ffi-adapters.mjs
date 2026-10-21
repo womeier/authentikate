@@ -1,4 +1,4 @@
-// Run after the component build: nix develop --command node test/ffi-adapters.mjs [build-dir]
+// Run after the component build: nix develop --command node tests/ffi-adapters.mjs [build-dir]
 // Exercise the actual exports without rewriting WAT or exporting internals.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

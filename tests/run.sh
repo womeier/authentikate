@@ -5,6 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-python3 test/wrap.py "$tmp/t.wat"
+python3 tests/wrap.py "$tmp/t.wat"
 wasm-tools parse "$tmp/t.wat" -o "$tmp/t.wasm"
-node test/adapters.mjs "$tmp/t.wasm"
+node tests/adapters.mjs "$tmp/t.wasm"

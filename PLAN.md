@@ -36,7 +36,6 @@ nix build
 nix develop --command make
 nix develop --command make test
 nix develop --command make crypto-components
-cargo install wac-cli --version 0.12.0 --locked
 make host-component
 cargo test --locked
 cargo run --locked
@@ -45,7 +44,8 @@ cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
 ```
 
 The Rust Wasm build needs the `wasm32-unknown-unknown` target. The host needs
-Rust >=1.88 and `build/host.component.wasm`. `make compose-host` composes existing
+Rust >=1.88 and `build/host.component.wasm`. WAC 0.12.0 is included in the Nix
+development shell. `make compose-host` composes existing
 service/provider artifacts without rebuilding Rocq; `make host-component` builds
 all four first. Node remains only build/test tooling, not a running server.
 `nix build` still installs the uncomposed service artifacts under `result/`.
@@ -416,7 +416,7 @@ It therefore validates per RFC 3629 — rejecting overlongs, surrogates and
 anything above U+10FFFF — and answers `Some None` for a key that fails, which
 is honest: every key this service writes went through the same path, so a
 non-UTF-8 key names no account. The current default adapter suite exercises
-invalid UTF-8 get/set behavior; the existing `test/run.sh` helper also checks
+invalid UTF-8 get/set behavior; the existing `tests/run.sh` helper also checks
 the validator against Node's decoder, but is not the default Nix test driver.
 
 ## Rate limiting
@@ -475,7 +475,7 @@ The sequence is raw `kv_get`, reject any existing value, enroll, validate and
 add email in Rocq, then set. Only `Some true` acknowledges creation (`201 {}`);
 `None` and `Some false` are `500`, as are enrollment or record validation
 failure. `created_requires_persistence` proves this structural implication,
-not future durability or uniqueness. `test/Signup.v` covers refusals and
+not future durability or uniqueness. `tests/Signup.v` covers refusals and
 corrupt/mismatched existing records as well as success.
 
 Atomic create-if-absent remains unimplemented. The synchronous single-process
@@ -674,7 +674,7 @@ proof.
 
 - `nix build` (also the flake build check) compiles `_RocqProject`, including
   proofs, pure bytes/signup regressions and real extraction. It then runs
-  `test/ffi-adapters.mjs` and `test/component.mjs` before installing artifacts.
+  `tests/ffi-adapters.mjs` and `tests/component.mjs` before installing artifacts.
 - Adapter/runtime tests cover the void/global-result ABI, ignored force
   argument, u32 handles, memory growth, all seven alignment boundaries,
   wrapper marshalling, actual extracted closures, sequential calls, failures,
@@ -691,7 +691,7 @@ proof.
 - Desktop and mobile demo flows have been tested manually. This is separate
   from the HTTP suite, not an automated cross-browser or timing guarantee.
 - `.github/workflows/nix.yml` runs `nix build`, installs optional email-test tooling
-  with `npm ci --prefix test`, composes providers, tests the Rust HTTP host, runs both Rust crypto suites and
+  with `npm ci --prefix tests`, composes providers, tests the Rust HTTP host, runs both Rust crypto suites and
   uploads the Wasm artifacts. Cachix is read-only for pull requests; the action
   handles pushes without a separate unconditional `cachix push`. The obsolete
   `just` commands are removed. Local workflow validation passes; no remote green

@@ -8,10 +8,9 @@ with Axum and runs the composed Wasm component in Wasmtime.
 
 Requires Rust >=1.88. Building components also requires the existing Rocq
 toolchain, Node (build/test tooling only), Binaryen, wasm-tools, the Rust
-`wasm32-unknown-unknown` target, and WAC 0.12.0:
+`wasm32-unknown-unknown` target, and WAC 0.12.0 (included in the Nix development shell):
 
 ```sh
-cargo install wac-cli --version 0.12.0 --locked
 rustup target add wasm32-unknown-unknown
 make host-component
 cargo run --locked
@@ -101,4 +100,4 @@ no durable storage, TLS, recovery, rate limiting, distributed uniqueness or
 security/timing proof for the whole service. Welcome emails expose recipient
 addresses on stdout. Keep this demo on loopback unless deliberately testing a
 controlled proxy. Node remains only for component build/adapter/email tests;
-the optional email test dependencies live in `test/` (`npm ci --prefix test`).
+the optional email test dependencies live in `tests/` (`npm ci --prefix tests`).
