@@ -2,13 +2,17 @@
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.fenix = {
+    url = "github:nix-community/fenix";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
   inputs.rocq-base64 = {
     url = "github:womeier/rocq-base64";
     flake = false;
   };
 
   outputs =
-    { self, nixpkgs, rocq-base64 }:
+    { self, nixpkgs, fenix, rocq-base64 }:
     let
       # Linux x86_64 only, on purpose: the one platform this is developed on.
       # The Wasm the build produces is platform-independent anyway.
@@ -19,6 +23,32 @@
         inherit system;
         # CertiRocq depends on CompCert (unfree) for its Clight backend.
         config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "compcert" ];
+      };
+
+      rustToolchain = with fenix.packages.${system}; combine [
+        (stable.withComponents [ "cargo" "rustc" "rust-std" "rustfmt" "clippy" "rust-analyzer" "rust-src" ])
+        targets.wasm32-unknown-unknown.stable.rust-std
+      ];
+
+      jco = pkgs.buildNpmPackage {
+        pname = "authentikate-component-test-tools";
+        version = "1.39.0";
+        src = lib.fileset.toSource {
+          root = ./tests;
+          fileset = lib.fileset.unions [ ./tests/package.json ./tests/package-lock.json ];
+        };
+        npmDepsHash = "sha256-YqhhpvR5/S8jYytyeC9cib+50nog9H6JytAUxkyIKeQ=";
+        dontNpmBuild = true;
+        npmFlags = [ "--ignore-scripts" ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out/lib $out/bin
+          cp -r node_modules $out/lib/
+          makeWrapper ${pkgs.nodejs}/bin/node $out/bin/jco \
+            --add-flags $out/lib/node_modules/@bytecodealliance/jco/dist/jco.js
+          runHook postInstall
+        '';
       };
 
       # One Rocq 9.1 toolchain.
@@ -163,6 +193,8 @@
         # matches; otherwise it rebuilds from the fork.)
         inherit CertiRocq;
         inherit base64;
+        inherit jco;
+        rust-toolchain = rustToolchain;
       };
 
       # The proofs are checked by building, so building is the test suite.
@@ -178,20 +210,17 @@
           rocqPackages.stdlib
           rocqPackages.coq-lsp
           pkgs.gnumake
+          pkgs.curl
+          pkgs.python3
 
           # Service assembly and component regression tests use Node.
           pkgs.nodejs
+          jco
 
           # The crypto primitives come from a Rust library, linked in through
           # the module's imports.
-          pkgs.cargo
-          pkgs.rustc
-          pkgs.rustfmt
-          pkgs.clippy
-          pkgs.rust-analyzer
-          # The wasm32 target links with lld, which nixpkgs' rustc does not
-          # bundle as rust-lld.
-          pkgs.lld
+          # Fenix includes matching native/Wasm standard libraries and rust-lld.
+          rustToolchain
 
           # To look at what came out, and to inspect the module's imports.
           pkgs.wabt # wasm2wat

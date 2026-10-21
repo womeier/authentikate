@@ -1,5 +1,5 @@
 -Q theories Authentikate
--Q test Authentikate.Tests
+-Q tests Authentikate.Tests
 
 theories/Bytes.v
 theories/Base64.v

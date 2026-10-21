@@ -13,8 +13,7 @@ const components = {};
 const backends = process.argv.includes('--stdout') ? ['stdout'] : ['stdout', 'lettermint'];
 for (const backend of backends) {
   const directory = pathToFileURL(`${output}/${backend}/`);
-  execFileSync(process.execPath, [
-    fileURLToPath(new URL('tests/node_modules/.bin/jco', root)),
+  execFileSync('jco', [
     'transpile', fileURLToPath(new URL(`build/email-${backend}.component.wasm`, root)),
     '-o', fileURLToPath(directory), '--name', 'email', '--instantiation', 'sync',
     '--no-wasi-shim', '--quiet',

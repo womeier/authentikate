@@ -50,28 +50,20 @@ jobs:
           mkdir -p build
           cp result/authentikate.component.wasm build/
 
-      - name: Install optional email component test tooling
-        run: nix develop --command npm ci --prefix tests --no-audit --no-fund
-
       - name: Test Rust crypto providers
         run: |
           nix develop --command cargo test --locked --manifest-path crypto/argon2/Cargo.toml
           nix develop --command cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
       - name: Test stdout email component
-        # Use rustup's compiler and installed Wasm target, with Nix's component tools.
-        run: nix develop --command bash -c 'PATH="$HOME/.cargo/bin:$PATH" make test-email-stdout'
+        run: nix develop --command make test-email-stdout
 
       - name: Compose actual Rust providers and test Rust HTTP host
         run: |
-          nix develop --command bash -c 'PATH="$HOME/.cargo/bin:$PATH" make crypto-components compose-host'
-          cargo fmt --check
-          cargo check --locked
-          cargo test --locked
+          nix develop --command make crypto-components compose-host
+          nix develop --command cargo fmt --check
+          nix develop --command cargo check --locked
+          nix develop --command cargo test --locked
 
       - uses: actions/upload-artifact@v4
         with:

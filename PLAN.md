@@ -43,7 +43,8 @@ cargo test --locked --manifest-path crypto/argon2/Cargo.toml
 cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
 ```
 
-The Rust Wasm build needs the `wasm32-unknown-unknown` target. The host needs
+The Nix development shell provides a locked Fenix Rust toolchain with the
+`wasm32-unknown-unknown` standard library; no rustup setup is needed. The host needs
 Rust >=1.88 and `build/host.component.wasm`. WAC 0.12.0 is included in the Nix
 development shell. `make compose-host` composes existing
 service/provider artifacts without rebuilding Rocq; `make host-component` builds
@@ -690,8 +691,8 @@ proof.
   do not exercise WASI randomness or prove entropy quality.
 - Desktop and mobile demo flows have been tested manually. This is separate
   from the HTTP suite, not an automated cross-browser or timing guarantee.
-- `.github/workflows/nix.yml` runs `nix build`, installs optional email-test tooling
-  with `npm ci --prefix tests`, composes providers, tests the Rust HTTP host, runs both Rust crypto suites and
+- `.github/workflows/nix.yml` runs `nix build`, uses the development shell's
+  Fenix Rust and JCO tooling, composes providers, tests the Rust HTTP host, runs both Rust crypto suites and
   uploads the Wasm artifacts. Cachix is read-only for pull requests; the action
   handles pushes without a separate unconditional `cachix push`. The obsolete
   `just` commands are removed. Local workflow validation passes; no remote green

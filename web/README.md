@@ -11,13 +11,14 @@ toolchain, Node (build/test tooling only), Binaryen, wasm-tools, the Rust
 `wasm32-unknown-unknown` target, and WAC 0.12.0 (included in the Nix development shell):
 
 ```sh
-rustup target add wasm32-unknown-unknown
+nix develop
 make host-component
 cargo run --locked
 ```
 
-Use the Nix development shell for the component build if needed, with rustup's
-Wasm-enabled compiler and WAC on `PATH`. `make compose-host` composes existing
+The Nix development shell provides a locked Fenix Rust toolchain including the
+Wasm target, WAC and the component build tools; no rustup setup is needed.
+`make compose-host` composes existing
 `build/{authentikate,argon2,ed25519,email-stdout}.component.wasm` without invoking
 Rocq. Both targets produce `build/host.component.wasm`. Once that exists, running
 the host requires no Node, WAC, Rocq or Wasm build tools. Missing artifacts fail
@@ -100,4 +101,4 @@ no durable storage, TLS, recovery, rate limiting, distributed uniqueness or
 security/timing proof for the whole service. Welcome emails expose recipient
 addresses on stdout. Keep this demo on loopback unless deliberately testing a
 controlled proxy. Node remains only for component build/adapter/email tests;
-the optional email test dependencies live in `tests/` (`npm ci --prefix tests`).
+the Nix development shell includes JCO for the email component tests.
