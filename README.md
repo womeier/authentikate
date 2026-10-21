@@ -58,6 +58,12 @@ service WIT and assembly), `components/crypto/` and `components/email/`
 service artifacts live in `build/`; each Rust crate retains its own lockfile and
 target directory.
 
+The root Cargo workspace selects `host/` by default, so `cargo run --locked`
+and `cargo test --locked` work from the repository root. The provider crates
+remain independent Cargo projects. Rocq compilation and service assembly rules
+live in `components/service/Makefile`, included by the root Makefile; run all
+Make commands from the repository root.
+
 ## Component Interfaces
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,

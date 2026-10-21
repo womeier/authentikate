@@ -151,6 +151,7 @@
           in
           lib.elem relative [
             "Makefile"
+            "components/service/Makefile"
             "_RocqProject"
           ]
           || builtins.any (

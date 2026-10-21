@@ -23,7 +23,7 @@
 };
 \node[participant] (backend) at (19,-2.25) {
   \textbf{Backend}\\
-  \source{host/main.rs}{Rust HTTP boundary} +
+  \source{host/src/main.rs}{Rust HTTP boundary} +
   \source{components/service/theories/Api.v}{Rocq service} + provider interfaces
 };
 \draw[lifeline] (4,-2.8) -- (4,-24.1);
@@ -41,7 +41,7 @@
 \draw[message] (19,-5) -- (20.5,-5) -- (20.5,-5.45) -- (19,-5.45);
 \node[note] at (22,-4.85) {
   \textbf{1. Check the HTTP envelope.}\par
-  \source{host/main.rs}{Host/Origin, method, content type and 16 KiB limit}.
+  \source{host/src/main.rs}{Host/Origin, method, content type and 16 KiB limit}.
   Boundary rejection ends the request without a credential lookup.
 };
 
@@ -126,7 +126,7 @@
   copies the returned token into the validation field. Token validation is a
   separate request, not part of login. Login does not write account records or
   send email. \source{host/assets/app.js}{UI implementation}\quad
-  \source{tests/http.rs}{HTTP flow tests}\quad
+  \source{host/tests/http.rs}{HTTP flow tests}\quad
   \source{components/service/theories/Proofs.v\#L99}{No-token-without-check statement}.
   This sequence describes behavior; it is not an end-to-end security proof.
 };

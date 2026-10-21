@@ -90,7 +90,7 @@ immune to it.
 ## Layers
 
 ```
-   HTTP /api/* -> host/main.rs -> Wasmtime -> host.component.wasm (WAC)
+   HTTP /api/* -> host/src/main.rs -> Wasmtime -> host.component.wasm (WAC)
                               ┌───────────────────────────────────────┐
                               │  Rocq core module (CertiRocq)         │
                               │   routing, base64url, JSON, JWT,      │

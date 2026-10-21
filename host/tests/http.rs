@@ -15,6 +15,7 @@ struct Server {
 impl Server {
     fn start(stdout: Stdio) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_authentikate-host"))
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
             .env("LISTEN", "127.0.0.1:0")
             .env_remove("PUBLIC_ORIGIN")
             .env_remove("HOST_COMPONENT")

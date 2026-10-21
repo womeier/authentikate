@@ -1,16 +1,5 @@
 all: component
 
-rocq: Makefile.rocq
-	@mkdir -p build
-	@+$(MAKE) -f Makefile.rocq $(if $(wildcard build/Authentikate.extraction.authentikate_api.wasm),,-W components/service/theories/extraction.v) all
-
-component: rocq
-	node components/service/build.mjs
-
-test: component
-	node tests/ffi-adapters.mjs
-	node tests/component.mjs
-
 crypto-components:
 	mkdir -p build
 	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path components/crypto/argon2/Cargo.toml
@@ -55,17 +44,6 @@ test-email: email-components
 	cargo test --locked --manifest-path components/email/Cargo.toml --no-default-features --features lettermint
 	node tests/email.mjs
 
-clean: Makefile.rocq
-	@+$(MAKE) -f Makefile.rocq cleanall
-	@rm -f Makefile.rocq Makefile.rocq.conf build/*.wasm
+include components/service/Makefile
 
-Makefile.rocq: _RocqProject
-	$(COQBIN)rocq makefile -f _RocqProject -o Makefile.rocq
-
-force _RocqProject Makefile: ;
-
-%: Makefile.rocq force
-	@mkdir -p build
-	@+$(MAKE) -f Makefile.rocq $@
-
-.PHONY: all rocq component test crypto-components email-stdout-component email-components host-component compose-host test-host test-email-stdout test-email clean force
+.PHONY: all crypto-components email-stdout-component email-components host-component compose-host test-host test-email-stdout test-email

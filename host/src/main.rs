@@ -374,12 +374,15 @@ async fn dispatch(app: Arc<App>, request: Request) -> Response {
             let asset = match path {
                 "/" => Some((
                     "text/html; charset=utf-8",
-                    include_str!("assets/index.html"),
+                    include_str!("../assets/index.html"),
                 )),
-                "/style.css" => Some(("text/css; charset=utf-8", include_str!("assets/style.css"))),
+                "/style.css" => Some((
+                    "text/css; charset=utf-8",
+                    include_str!("../assets/style.css"),
+                )),
                 "/app.js" => Some((
                     "text/javascript; charset=utf-8",
-                    include_str!("assets/app.js"),
+                    include_str!("../assets/app.js"),
                 )),
                 _ => None,
             };
@@ -599,7 +602,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn composed_authentication_and_http_boundaries() {
         let runtime = Runtime::new(
-            "build/host.component.wasm",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm"),
             "Authentikate <hello@example.test>".into(),
         )
         .unwrap();

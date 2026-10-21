@@ -37,7 +37,7 @@
   Read once per service call. Unix seconds become an explicit \code{N}
   argument inside the pure Rocq core.\par
   \trusted{} Truthful time is not proved; wall time is not monotonic.\par
-  \source{host/main.rs}{Rust / Wasmtime host}\quad
+  \source{host/src/main.rs}{Rust / Wasmtime host}\quad
   \source{components/service/adapters/service.wat}{Clock adapter}\par
   \source{components/service/wit/deps/clocks/wall-clock.wit}{Standard WIT types}
 };
@@ -195,8 +195,8 @@
   per request with process-local signing seed and account storage.\par
   \tested{} Real HTTP/component integration.\par
   \source{host/composition.wac}{Composition}\quad
-  \source{host/main.rs}{Host}\quad
-  \source{tests/http.rs}{HTTP tests}
+  \source{host/src/main.rs}{Host}\quad
+  \source{host/tests/http.rs}{HTTP tests}
 };
 \node[checked] (argonrust) at (11,-20) {
   \textbf{Active Argon2 provider component} \hfill Rust\par
@@ -225,7 +225,7 @@
   \ty{bucket.set(string,bytes) -> result<(),error>}\par\smallskip
   \tested{} Ephemeral in-memory storage. No durability or distributed
   create-if-absent guarantee.\par
-  \links{host/main.rs}{components/service/adapters/store.wat}\par
+  \links{host/src/main.rs}{components/service/adapters/store.wat}\par
   \source{components/service/wit/deps/keyvalue/store.wit}{WASI keyvalue 0.2.0-draft contract}
 };
 \node[checked] (stdoutemail) at (44,-20) {
@@ -250,7 +250,7 @@
   \source{components/service/theories/Api.v}{Control flow}\quad
   \source{components/service/theories/Proofs.v\#L147}{Creation statement}\par
   \source{tests/component.mjs}{Runtime tests}\quad
-  \source{tests/http.rs}{HTTP tests}
+  \source{host/tests/http.rs}{HTTP tests}
 };
 \node[external] (random) at (11,-26) {
   \textbf{WASI secure randomness} \hfill Host implementation\par
@@ -260,7 +260,7 @@
   capability; the Rust host also creates the process signing seed.\par
   \source{components/crypto/wit/deps/random/random.wit}{Standard type declaration}\par
   \source{components/crypto/argon2/src/lib.rs}{Consumer implementation}\quad
-  \source{host/main.rs}{Host wiring}; no entropy theorem.
+  \source{host/src/main.rs}{Host wiring}; no entropy theorem.
 };
 \node[external] (kvstandard) at (22,-26) {
   \textbf{External persistent WASI keyvalue provider}\par
