@@ -25,7 +25,7 @@
 
 \title{Authentikate Report}
 \author{Wolfgang Meier}
-\date{\today}
+\date{October 2026}
 
 \begin{document}
 
@@ -33,10 +33,47 @@
 \tableofcontents
 
 \chapter{Introduction}
-Introduce the topic, motivation, and objectives of the report.
+This report describes a partly verified authentication backend service with the following functionality:
+\begin{itemize}
+  \item A client can create an account, provided an email address and password.
+  \item A client can log in, provided an email address and password. This returns a signed JWT token.
+  \item A client can ask the service to verify a JWT token.
+\end{itemize}
+
+The main logic of the service is implemented in Rocq and extracted to WebAssembly using CertiRocq.
+It is combined with other Wasm components built from separate libraries. A goal was to test the feasibility of that integration.
+
+Most of the project's code was generated with the help of various LLMs, in particular GPT 6.1 Sol and Opus 5.
+For the report itself, LLMs were used to assist the creation of the figures, but \textit{not} for writing.
 
 \chapter{Background}
-Describe the relevant concepts and related work.
+
+\section{WebAssembly: modules and components}
+When one refers to \textit{WebAssembly} or \textit{Wasm}, one usually refers to the WebAssembly (core) module standard \todo{wasmspec}.
+Commonly advertised features of Wasm are its performance and security - a Wasm module is a sandbox that can interact with the host only in
+ways that are explicitely permitted. For instance, 
+
+In the context of verification, the main advantage is that the specification formally defines the syntax, the type system (with progress and preservation statements)
+and an operational semantics for every instruction. New feature additions to the standard are mechanized in Rocq, and reported mistakes integrated.
+WasmCert-Coq is the best-tested mechanisation of the Wasm standard I'm aware of, there are also mechanisations in Lean and Isabelle: \todo{links}.
+
+A more recent addition to the Wasm ecosystem is the Wasm component model \todo{}.
+In its essence, a Wasm component is a Wasm module wrapped in a nice interface, listing function imports and exports. And allowing the composition of Wasm components in a principled way.
+While a Wasm module essentially\todo{footnote about Wasm 3.0} only has primitive integer and float types, the type system used when defining a Wasm component
+additionally has native strings, option and result types. The Wasm component model defines the representation of these types and lifting operations.
+
+I'm not aware of a mechanization of the Wasm component standard, in fact it doesn't yet have a standardised semantics.
+Eventually, it should allow verifying the interaction between Wasm core modules and glue code.
+
+\todo{example component}
+
+Defining such an interface may not seem terribly exciting. However, it being standardised means that other projects are building tooling and infrastructure for integration. \todo{list bindings generator and composition}. \todo{WASI}.
+
+that makes it more convenient to deploy and integrate Wasm code in larger software projects.
+
+
+Today, CertiRocq's Wasm backend\todo{cite} generates a Wasm (core) module. This module exposes a number of internals relevant for writing glue code.
+
 
 \chapter{Implementation}
 Explain the approach, design, and implementation.
