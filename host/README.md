@@ -52,7 +52,7 @@ non-browser clients. No permissive CORS headers are emitted.
 and Rocq service components. It connects the service imports directly to those
 component exports, with no host crypto implementations or forwarding callbacks.
 It exports the service API and the same signer/hash instances for initialization.
-`component/host.wit` describes this host-facing surface; bindings use the authoritative
+`host/world.wit` describes this host-facing surface; bindings use the authoritative
 service, crypto and keyvalue WIT sources, staged by `host/build.rs`.
 
 The host generates a random signing seed once per process and provisions it into

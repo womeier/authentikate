@@ -1,4 +1,4 @@
-// Run after node component/build.mjs. Hosts below test ABI/control flow,
+// Run after node components/service/build.mjs. Hosts below test ABI/control flow,
 // not cryptography; real crypto remains mandatory component imports.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

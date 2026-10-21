@@ -21,9 +21,9 @@ def grab(path, name):
 
 out = sys.argv[1]
 fns = [
-    grab('component/adapters/argon2.wat', 'read_N')
+    grab('components/service/adapters/argon2.wat', 'read_N')
         .replace('(func $read_N', '(func (export "read_N")'),
-    grab('component/adapters/store.wat', 'utf8_ok')
+    grab('components/service/adapters/store.wat', 'utf8_ok')
         .replace('(func $utf8_ok', '(func (export "utf8_ok")'),
 ]
 with open(out, 'w') as f:

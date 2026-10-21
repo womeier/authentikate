@@ -18,7 +18,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 
 | Area | Current status |
 | --- | --- |
-| Rocq service | Signup, login and validate compile through `theories/extraction.v`, included in `_RocqProject` |
+| Rocq service | Signup, login and validate compile through `components/service/theories/extraction.v`, included in `_RocqProject` |
 | Default Nix build | Checks proofs and adapter/runtime tests; installs core and component Wasm artifacts |
 | Bytes/base64 | MetaRocq bytestrings; local upstream instance and strict unpadded rocq-base64 `ByteString` wrapper, pinned at `b0f629e5` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
@@ -39,8 +39,8 @@ nix develop --command make crypto-components
 make host-component
 cargo test --locked
 cargo run --locked
-cargo test --locked --manifest-path providers/crypto/argon2/Cargo.toml
-cargo test --locked --manifest-path providers/crypto/ed25519/Cargo.toml
+cargo test --locked --manifest-path components/crypto/argon2/Cargo.toml
+cargo test --locked --manifest-path components/crypto/ed25519/Cargo.toml
 ```
 
 The Nix development shell provides a locked Fenix Rust toolchain with the
@@ -54,7 +54,7 @@ all four first. Node remains only build/test tooling, not a running server.
 ## The service
 
 Three operations, JSON in and JSON out. The component exports
-`authentikate:service/api@0.1.0` (`component/wit/service.wit`), not WASI HTTP: each
+`authentikate:service/api@0.1.0` (`components/service/wit/service.wit`), not WASI HTTP: each
 operation takes config, Unix time and request bytes and returns status/body.
 The Rust demo exposes the following HTTP routes:
 
@@ -97,10 +97,10 @@ immune to it.
                               │   claim checks, record decoding —      │
                               │   every decision                      │
                               │          │ registered primitives      │
-                              │  component/adapters/argon2.wat        │
-                              │  component/adapters/ed25519.wat       │
-                              │  component/adapters/store.wat         │
-                              │  component/adapters/service.wat       │
+                              │  components/service/adapters/         │
+                              │    argon2.wat, ed25519.wat             │
+                              │    store.wat                          │
+                              │    service.wat                        │
                               └──────────┬────────────────────────────┘
                                          │ canonical ABI
                  +----------------+----------------+
@@ -123,14 +123,13 @@ with SQL, the schema and the decoding both sit outside the verified
 perimeter. The timing design aims to keep secret operations behind the crypto
 boundary; this is not a proof that the whole service is constant-time.
 
-### Rocq (`theories/`)
+### Rocq (`components/service/theories/`)
 
 - `Bytes.v` — `bytes := MetaRocq.Utils.bytestring.String.t`, byte helpers and
   encoding arithmetic. This is not the earlier `list byte` API.
-- `Base64.v` — a thin wrapper over rocq-base64's `ByteString.encode/decode url_unpadded`,
-  strict and unpadded. `Base64Proofs.v` specializes the library's round trip.
+- `Base64.v` — the MetaRocq bytestring instance, strict unpadded wrappers over
+  rocq-base64's `ByteString.encode/decode url_unpadded`, and correctness proofs.
   The flake pins rocq-base64 `b0f629e5`, which no longer depends on MetaRocq.
-  `MetaRocqString.v` locally copies upstream's `metarocq/` instance and proofs.
 - `Json.v` — enough JSON to read a two-field request object and write a
   response (including nested claims). A parser on bytes, total, returning an option. Only a
   canonical printer, so the round-trip proof does not need a general one.
@@ -209,7 +208,7 @@ boundary; this is not a proof that the whole service is constant-time.
 Use `N`, not `nat`, for timestamps and lengths.  CertiCoq represents `nat` in
 unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
 
-### The FFI (`component/adapters/`)
+### The FFI (`components/service/adapters/`)
 
 The mechanism is `CertiRocq Register`, not unregistered axioms. The earlier
 upstream backend gap is resolved by the fork pinned at `6d34b50b` in
@@ -222,14 +221,14 @@ compiler's constant forcing adds a leading dummy argument before the real
 Rocq arguments. Explicit registration arities count it and adapters ignore it;
 without this workaround imports can be called too early with shifted arguments.
 
-Three adapters (`component/adapters/argon2.wat`, `component/adapters/ed25519.wat`,
-`component/adapters/store.wat`) bridge heap values to canonical ABI. `component/adapters/service.wat`
+Three adapters (`components/service/adapters/argon2.wat`, `components/service/adapters/ed25519.wat`,
+`components/service/adapters/store.wat`) bridge heap values to canonical ABI. `components/service/adapters/service.wat`
 provides canonical signup/login/validate wrappers, config/clock marshalling,
 curried closure calls and response lowering. Its seven FFI boundary wrappers
 restore four-byte heap alignment after byte-oriented foreign allocations,
 including error paths returning immediate `None`.
 
-`component/build.mjs` merges the extracted core, adapters and runtime
+`components/service/build.mjs` merges the extracted core, adapters and runtime
 with `wasm-merge`, removes link-only exports and unused builtins (checking
 they are unreferenced), prunes with `wasm-opt`, embeds authoritative WIT and
 runs `wasm-tools component new` and validation. The output still imports
@@ -259,7 +258,7 @@ One trap worth recording: foreign byte results can exceed generated heap
 headroom. A bytestring costs 12 bytes per nonempty cell, so adapters grow
 memory themselves rather than trusting it; the runtime restores alignment.
 
-`theories/extraction.v` is compiled in `_RocqProject`. Two design details
+`components/service/theories/extraction.v` is compiled in `_RocqProject`. Two design details
 remain worth recording:
 
 - The `Register` vernacular itself is fine today — it is the plugin's own
@@ -297,19 +296,19 @@ JSON content type, a 16 KiB streaming limit and a body read deadline. Loopback i
 the default; explicit `LISTEN`/`PUBLIC_ORIGIN` support controlled proxy tests.
 Accounts and keys vanish on restart. See `host/README.md` for commands and limits.
 
-### Rust crypto (`providers/crypto/`)
+### Rust crypto (`components/crypto/`)
 
 Two components, each exporting one interface of the `authentikate:crypto@0.1.0`
 package:
 
-- `providers/crypto/wit/argon2.wit`, `providers/crypto/argon2/` — Argon2 on RustCrypto's `argon2`,
+- `components/crypto/wit/argon2.wit`, `components/crypto/argon2/` — Argon2 on RustCrypto's `argon2`,
   with `subtle` for the constant-time tag comparison.  Exposes `derive`,
   `verify`, `enroll` and `recommended-params`; no PHC strings or clock.
   Enrollment imports `wasi:random/random@0.2.0`, requests 16 fresh bytes and
   returns public JSON with base64url salt/tag and numeric algorithm/cost fields.
   Salt generation stays outside Rocq; the public salt is stored and passed
   through Rocq, not kept secret.
-- `providers/crypto/wit/ed25519.wit`, `providers/crypto/ed25519/` — Ed25519 on `ed25519-dalek`.
+- `components/crypto/wit/ed25519.wit`, `components/crypto/ed25519/` — Ed25519 on `ed25519-dalek`.
   Exposes host provisioning via `import-key`, plus `public-key`, `sign` and
   `verify`, the last of them strict in the
   RFC 8032 sense. Checked against the RFC 8032 §7.1 vectors. Private keys
@@ -333,7 +332,7 @@ claim. Verified-library alternatives such as libcrux and HACL\* remain worth
 evaluating, but their guarantees must be checked for the selected algorithm,
 implementation and toolchain, not transferred to this service by name. The
 swap is invisible above the component boundary, including to `Crypto.v`.
-See the note at the top of `providers/crypto/ed25519/src/lib.rs`.
+See the note at the top of `components/crypto/ed25519/src/lib.rs`.
 
 ## Persistence
 
@@ -411,7 +410,7 @@ returned, it decoded, named this email, and verified" — true of the running
 system.  What no design can say is that the store returned the record that
 was written for that email.
 
-The adapter, `component/adapters/store.wat`, has one wrinkle worth knowing: keys are
+The adapter, `components/service/adapters/store.wat`, has one wrinkle worth knowing: keys are
 `string` in `wasi:keyvalue`, so the canonical ABI *traps* on a key that is
 not well-formed UTF-8, and the email in a login body is attacker-controlled.
 It therefore validates per RFC 3629 — rejecting overlongs, surrogates and
@@ -574,7 +573,7 @@ module.
 ## Spec and client
 
 Not implemented: there is no root `openapi.yaml`, generated `client/`, or
-`gen-client` flake app. `component/wit/service.wit` is the current component contract;
+`gen-client` flake app. `components/service/wit/service.wit` is the current component contract;
 it is not an HTTP/OpenAPI contract. The intended work remains:
 
 - Hand-write `openapi.yaml` for all three demo HTTP endpoints and errors.
@@ -719,7 +718,7 @@ proof.
   email; the demo supplies an ephemeral Map. Store lookup timing is provider
   behavior, not proved independent of key presence. Signup explicitly
   discloses existence; login dummy hashing does not eliminate all channels.
-- **Does the bucket need a name?**  `component/adapters/store.wat` opens the default
+- **Does the bucket need a name?**  `components/service/adapters/store.wat` opens the default
   bucket with the empty identifier, because a named one needs its name as a
   pointer into linear memory and a `data` segment in the adapter would write
   at a fixed offset into the CertiRocq heap.  A named bucket wants the host

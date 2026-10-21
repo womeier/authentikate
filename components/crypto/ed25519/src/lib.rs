@@ -16,7 +16,7 @@
 //! a Wasm-friendly build -- the reason `PLAN.md` names it.  Argon2 could not
 //! go there (libcrux has no Argon2), but Ed25519 can, and swapping it is a
 //! change behind this file: the WIT interface is library-agnostic, so nothing
-//! above the component boundary -- and in particular nothing in `theories/`,
+//! above the component boundary -- and in particular nothing in `components/service/theories/`,
 //! where the axiom is stated -- has to move when it happens.
 
 // std, not no_std: on wasm32-unknown-unknown the standard library's I/O is

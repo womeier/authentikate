@@ -3,8 +3,8 @@
 ;; Companion to argon2.wat. Both export `cabi_realloc` and carry the same
 ;; marshalling helpers; the service assembly retains only its public allocator.
 ;;
-;; Interface: providers/crypto/wit/ed25519.wit (repository-relative).
-;; Build with `make component`; component/build.mjs merges the core adapters.
+;; Interface: components/crypto/wit/ed25519.wit (repository-relative).
+;; Build with `make component`; components/service/build.mjs merges the core adapters.
 ;; `make host-component` composes the resulting service with Rust providers.
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
@@ -29,7 +29,7 @@
   (import "rocq" "result" (global $result (mut i32)))
 
   ;; ---- from the ed25519 component ------------------------------------------
-  ;; Canonical ABI lowerings of providers/crypto/wit/ed25519.wit. Every result needs more
+  ;; Canonical ABI lowerings of components/crypto/wit/ed25519.wit. Every result needs more
   ;; than one flat value, so each call takes a trailing return area.
   (import "authentikate:crypto/ed25519@0.1.0" "public-key"
     (func $wit_public_key

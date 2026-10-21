@@ -1,19 +1,17 @@
--Q theories Authentikate
+-Q components/service/theories Authentikate
 -Q tests Authentikate.Tests
 
-theories/Bytes.v
-theories/MetaRocqString.v
-theories/Base64.v
-theories/Base64Proofs.v
-theories/Json.v
-theories/JsonProofs.v
-theories/Crypto.v
-theories/Claims.v
-theories/Store.v
-theories/Backoff.v
-theories/Jwt.v
-theories/Api.v
-theories/Proofs.v
+components/service/theories/Bytes.v
+components/service/theories/Base64.v
+components/service/theories/Json.v
+components/service/theories/JsonProofs.v
+components/service/theories/Crypto.v
+components/service/theories/Claims.v
+components/service/theories/Store.v
+components/service/theories/Backoff.v
+components/service/theories/Jwt.v
+components/service/theories/Api.v
+components/service/theories/Proofs.v
 tests/Bytes.v
 tests/Signup.v
-theories/extraction.v
+components/service/theories/extraction.v

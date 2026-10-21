@@ -8,8 +8,8 @@
 ;; Its EmptyString/String constructors have the same layout as nil/cons,
 ;; so the marshalling below is unchanged by the migration from `list byte`.
 ;;
-;; Interface: providers/crypto/wit/argon2.wit (repository-relative).
-;; Build with `make component`; component/build.mjs merges the core adapters.
+;; Interface: components/crypto/wit/argon2.wit (repository-relative).
+;; Build with `make component`; components/service/build.mjs merges the core adapters.
 ;; `make host-component` composes the resulting service with Rust providers.
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
@@ -47,7 +47,7 @@
   (import "rocq" "result" (global $result (mut i32)))
 
   ;; ---- from the argon2 component -------------------------------------------
-  ;; Canonical ABI lowerings of providers/crypto/wit/argon2.wit. `params` is a record of
+  ;; Canonical ABI lowerings of components/crypto/wit/argon2.wit. `params` is a record of
   ;; four u32, so it flattens to four i32 in field order; `algorithm` is an
   ;; enum, so one i32.  The results need more than one flat value, so they
   ;; come back through a return area we supply.

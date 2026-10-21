@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, cpSync, existsSync, rmSync, mkd
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL('../../', import.meta.url));
 const out = resolve(process.argv[2] ?? join(root, 'build'));
 mkdirSync(out, { recursive: true });
 const run = (tool, args) => execFileSync(tool, args, { cwd: root, stdio: 'inherit' });
@@ -63,18 +63,18 @@ for (const match of rocq.matchAll(/\(import "env" "([^"]+)" \(func \(;(\d+);\)/g
   rocq = rocq.replace(new RegExp(`  \\(elem \\(;\\d+;\\) \\(i32\\.const ${index}\\) func ${index}\\)\\n`), '');
 }
 parse('rocq', rocq);
-const argon = text(join(root, 'component/adapters/argon2.wat'));
+const argon = text(join(root, 'components/service/adapters/argon2.wat'));
 const helpers = ['$alloc', '$list_len', '$read_N', '$lower', '$lift_bytes'].map(name => {
   const start = argon.indexOf(`(func ${name} `);
   if (start < 0) throw new Error(`Missing adapter helper ${name}`);
   return form(argon, start);
 }).join('\n');
-parse('service', text(join(root, 'component/adapters/service.wat')).replace(';; @HEAP_HELPERS@', helpers));
+parse('service', text(join(root, 'components/service/adapters/service.wat')).replace(';; @HEAP_HELPERS@', helpers));
 for (const name of ['argon2', 'ed25519', 'store', 'email']) {
   // Only the wrapper allocator and public service functions survive the merge.
-  let adapter = text(join(root, 'component/adapters', `${name}.wat`));
+  let adapter = text(join(root, 'components/service/adapters', `${name}.wat`));
   if (name === 'email') {
-    const store = text(join(root, 'component/adapters/store.wat'));
+    const store = text(join(root, 'components/service/adapters/store.wat'));
     const emailHelpers = [
       ...['$alloc', '$list_len', '$lower'].map(name => form(argon, argon.indexOf(`(func ${name} `))),
       ...['$some', '$utf8_ok'].map(name => form(store, store.indexOf(`(func ${name} `))),
@@ -106,11 +106,11 @@ if (unexpected.length) throw new Error(`Unresolved imports: ${JSON.stringify(une
 // Stage the authoritative dependency sources, not a second manual crypto WIT.
 const wit = mkdtempSync(join(out, 'wit-'));
 try {
-  cpSync(join(root, 'component/wit'), wit, { recursive: true });
-  cpSync(join(root, 'providers/crypto/wit'), join(wit, 'deps/crypto'), { recursive: true });
-  cpSync(join(root, 'providers/email/wit'), join(wit, 'deps/email'), { recursive: true });
-  if (existsSync(join(root, 'providers/crypto/wit/deps'))) {
-    cpSync(join(root, 'providers/crypto/wit/deps'), join(wit, 'deps'), { recursive: true });
+  cpSync(join(root, 'components/service/wit'), wit, { recursive: true });
+  cpSync(join(root, 'components/crypto/wit'), join(wit, 'deps/crypto'), { recursive: true });
+  cpSync(join(root, 'components/email/wit'), join(wit, 'deps/email'), { recursive: true });
+  if (existsSync(join(root, 'components/crypto/wit/deps'))) {
+    cpSync(join(root, 'components/crypto/wit/deps'), join(wit, 'deps'), { recursive: true });
   }
   run('wasm-tools', ['component', 'embed', wit, '--world', 'service', join(out, 'authentikate.core.wasm'),
     '-o', join(out, 'authentikate.embedded.wasm')]);

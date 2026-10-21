@@ -24,7 +24,7 @@
 \node[participant] (backend) at (19,-2.25) {
   \textbf{Backend}\\
   \source{host/main.rs}{Rust HTTP boundary} +
-  \source{theories/Api.v}{Rocq service} + provider interfaces
+  \source{components/service/theories/Api.v}{Rocq service} + provider interfaces
 };
 \draw[lifeline] (4,-2.8) -- (4,-24.1);
 \draw[lifeline] (19,-2.8) -- (19,-24.1);
@@ -48,30 +48,30 @@
 \draw[message] (19,-6.65) -- (20.5,-6.65) -- (20.5,-7.1) -- (19,-7.1);
 \node[note] at (22,-6.5) {
   \textbf{2. Enter the component and read the clock.}\par
-  \source{component/wit/service.wit}{\code{login(config, body:list<u8>) -> response}}.
-  \source{component/adapters/service.wat}{The wrapper reads WASI wall time once}; pure Rocq receives Unix seconds.
+  \source{components/service/wit/service.wit}{\code{login(config, body:list<u8>) -> response}}.
+  \source{components/service/adapters/service.wat}{The wrapper reads WASI wall time once}; pure Rocq receives Unix seconds.
 };
 
 \draw[message] (19,-8.3) -- (20.5,-8.3) -- (20.5,-8.75) -- (19,-8.75);
 \node[note] at (22,-8.15) {
   \textbf{3. Parse and validate the request.}\par
-  \source{theories/Api.v}{\code{parse_request RtLogin body}} requires email/password strings.
+  \source{components/service/theories/Api.v}{\code{parse_request RtLogin body}} requires email/password strings.
   Malformed JSON or missing/wrongly typed fields returns \code{400}.
 };
 
 \draw[message] (19,-9.95) -- (20.5,-9.95) -- (20.5,-10.4) -- (19,-10.4);
 \node[note] at (22,-9.8) {
   \textbf{4. Fetch and decode the account.}\par
-  \source{component/adapters/store.wat}{WASI keyvalue bucket get(email)};
-  \source{theories/Store.v}{Rocq decodes the record and checks its email}.
+  \source{components/service/adapters/store.wat}{WASI keyvalue bucket get(email)};
+  \source{components/service/theories/Store.v}{Rocq decodes the record and checks its email}.
   Store refusal returns \code{500}. Missing/corrupt/mismatched records select dummy credentials.
 };
 
 \draw[message] (19,-11.65) -- (20.5,-11.65) -- (20.5,-12.1) -- (19,-12.1);
 \node[note] at (22,-11.5) {
   \textbf{5. Verify the password inside the crypto provider.}\par
-  \source{component/adapters/argon2.wat}{Argon2 verification} receives the real or dummy salt, parameters and tag.
-  \source{theories/Api.v\#L104}{\code{login_check}} hashes even when the user is absent.
+  \source{components/service/adapters/argon2.wat}{Argon2 verification} receives the real or dummy salt, parameters and tag.
+  \source{components/service/theories/Api.v\#L104}{\code{login_check}} hashes even when the user is absent.
   This is not a constant-time theorem.
 };
 
@@ -83,8 +83,8 @@
 \draw[message] (19,-14.8) -- (20.5,-14.8) -- (20.5,-15.25) -- (19,-15.25);
 \node[note] at (22,-14.65) {
   \textbf{6. Mint the token.}\par
-  \source{theories/Jwt.v}{Pinned EdDSA header; claims \code{sub,iss,iat,exp}}.
-  \source{component/adapters/ed25519.wat}{Sign with the opaque key handle}.
+  \source{components/service/theories/Jwt.v}{Pinned EdDSA header; claims \code{sub,iss,iat,exp}}.
+  \source{components/service/adapters/ed25519.wat}{Sign with the opaque key handle}.
   Password and private key are not included in the JWT.
 };
 \draw[reply] (19,-16.65) -- node[msglabel,above] {
@@ -127,7 +127,7 @@
   separate request, not part of login. Login does not write account records or
   send email. \source{host/assets/app.js}{UI implementation}\quad
   \source{tests/http.rs}{HTTP flow tests}\quad
-  \source{theories/Proofs.v\#L99}{No-token-without-check statement}.
+  \source{components/service/theories/Proofs.v\#L99}{No-token-without-check statement}.
   This sequence describes behavior; it is not an end-to-end security proof.
 };
 \end{tikzpicture}

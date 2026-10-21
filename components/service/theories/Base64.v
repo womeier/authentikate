@@ -1,25 +1,11 @@
-(* Copied from rocq-base64/metarocq/MetaRocqString.v at
-   b0f629e5b1170d8015b30c44323b6bc220dd9613.
-   Copyright (c) 2026 Wolfgang Meier. MIT License; see LICENSE. *)
+(* Copyright (c) 2026 Wolfgang Meier. MIT License; see LICENSE. *)
 
-(** * The MetaRocq bytestring instance
-
-    Base64 operations and their correctness proofs are provided by [ByteString].
-    This module supplies the byte conversions and relates the generic length
-    result to MetaRocq's native length.
-
-    This bridge is kept out of the installed [rocq-base64] package so that
-    depending on it does not pull in MetaRocq; it is built and tested only in
-    CI, from this directory. See [metarocq/Tests.v]. *)
-
+(* Strict, unpadded base64url for JWTs and stored account fields. *)
 From Stdlib Require Import Strings.Byte Lists.List Arith.PeanoNat.
-From MetaRocq.Utils Require bytestring.
+From Authentikate Require Import Bytes.
 From Base64 Require Import Alphabet.
 From Base64 Require ByteString.
 Import ListNotations.
-
-(** MetaRocq's [String] module would otherwise shadow the standard library's. *)
-Module BS := MetaRocq.Utils.bytestring.String.
 
 Lemma print_parse (l : list byte) : BS.print (BS.parse l) = l.
 Proof. induction l as [|b l IH]; cbn; congruence. Qed.
@@ -44,6 +30,15 @@ Proof. induction s as [|b s IH]; cbn; congruence. Qed.
   ByteString.fits_shorter _ _ _ _ := I
 }.
 
+Definition encode (s : bytes) : bytes := ByteString.encode url_unpadded s.
+Definition decode (s : bytes) : option bytes := ByteString.decode url_unpadded s.
+
+Theorem decode_encode (s : bytes) : decode (encode s) = Some s.
+Proof. apply ByteString.decode_encode; [apply url_unpadded_wf | exact I]. Qed.
+
+Theorem encode_decode (s t : bytes) : decode s = Some t -> encode t = s.
+Proof. apply ByteString.encode_decode. apply url_unpadded_wf. Qed.
+
 Theorem bytestring_encode_length c (s : BS.t) :
   BS.length (ByteString.encode c s) =
   if pad c then 4 * ((BS.length s + 2) / 3)
@@ -57,7 +52,6 @@ Proof.
   exact (@ByteString.encode_length BS.t metarocq_bytestring c s I).
 Qed.
 
-(** The generic [append] matches MetaRocq's own bytestring concatenation. *)
 Lemma append_bytestring s t : ByteString.append s t = BS.append s t.
 Proof.
   change (BS.parse (BS.print s ++ BS.print t) = BS.append s t).

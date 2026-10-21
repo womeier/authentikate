@@ -17,7 +17,7 @@ CI runs `make test-email-stdout`, which builds and tests only the stdout backend
 it does not build the Lettermint backend or require its credentials.
 The default Nix service build does not bundle these providers.
 Run these commands from the repository root. The crate and its lockfile live in
-`providers/email/`; the internal service adapter is `component/adapters/email.wat`.
+`components/email/`; the internal service adapter is `components/service/adapters/email.wat`.
 
 ## Sending
 

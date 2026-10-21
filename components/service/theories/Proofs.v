@@ -24,7 +24,7 @@
 
 From Stdlib Require Import List NArith Lia Bool Arith Wf_nat
   Strings.Byte Strings.String.
-From Authentikate Require Import Bytes Base64 Base64Proofs Json Crypto Claims
+From Authentikate Require Import Bytes Base64 Json Crypto Claims
   Store Jwt Api.
 
 Import ListNotations.
@@ -332,7 +332,7 @@ Proof.
   unfold bytes_In, Base64.encode, ByteString.encode in Hin.
   change (In dot (BS.print (BS.parse
     (Base64.Base64.encode Alphabet.url (BS.print bs))))) in Hin.
-  rewrite MetaRocqString.print_parse in Hin.
+  rewrite Base64.print_parse in Hin.
   pose proof (Base64.Base64.encode_charset Alphabet.url (BS.print bs)) as Hchars.
   apply Forall_forall with (x := dot) in Hchars; [| exact Hin].
   destruct Hchars as [Hchar | Hpad]; [| discriminate].
@@ -341,11 +341,11 @@ Qed.
 
 (* ---- base64url is lossless ---------------------------------------------- *)
 
-(* Specialized from rocq-base64 in Base64Proofs.v; restated here because this
+(* Specialized from rocq-base64 in Base64.v; restated here because this
    is the file that says what is established. *)
 Corollary base64_round_trip :
   forall bs, Base64.decode (Base64.encode bs) = Some bs.
-Proof. exact Base64Proofs.decode_encode. Qed.
+Proof. exact Base64.decode_encode. Qed.
 
 (* ---- the trust boundary, as a hypothesis -------------------------------- *)
 

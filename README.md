@@ -37,8 +37,8 @@ nix build
 
 The flake includes [rocq-base64](https://github.com/womeier/rocq-base64), built
 with the same Rocq toolchain as CertiRocq, without a MetaRocq dependency.
-The service uses a local copy of upstream's MetaRocq bytestring instance in
-`theories/MetaRocqString.v` with strict, unpadded base64url encoding.
+The service defines its MetaRocq bytestring instance, strict unpadded base64url
+wrappers, and correctness proofs in `components/service/theories/Base64.v`.
 The default build checks the Rocq proofs and extracts the real signup, login,
 and validation service. It produces `authentikate.component.wasm` and
 `authentikate.core.wasm` in the Nix output, or under `build/` with:
@@ -48,19 +48,21 @@ nix develop --command make
 nix develop --command make test
 ```
 
-The service is extracted from `theories/extraction.v`. Its intermediate Wasm is
+The service is extracted from `components/service/theories/extraction.v`. Its intermediate Wasm is
 written to `build/Authentikate.extraction.authentikate_api.wasm`, not the project root.
 
-Sources are grouped under `component/` (WAT adapters, service WIT and assembly),
-`host/` (Rust host and embedded assets), `providers/` (independent Rust crypto and
-email crates), `theories/`, `tests/`, and `report/`. Generated service artifacts
-live in `build/`; each Rust crate retains its own lockfile and target directory.
+Sources are grouped under `components/service/` (Rocq sources, WAT adapters,
+service WIT and assembly), `components/crypto/` and `components/email/`
+(independent Rust provider crates), `host/` (Rust host and embedded assets),
+`tests/` (test suites), and `report/` (report sources and figures). Generated
+service artifacts live in `build/`; each Rust crate retains its own lockfile and
+target directory.
 
 ## Component Interfaces
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,
 and `validate`. Each accepts configuration and a JSON
-request body, and returns an HTTP status and JSON body. See `component/wit/service.wit`.
+request body, and returns an HTTP status and JSON body. See `components/service/wit/service.wit`.
 
 Time comes from `wasi:clocks/wall-clock@0.2.0`. The component reads the clock
 once per request and passes Unix seconds into the pure Rocq core, which retains
@@ -70,7 +72,7 @@ explicit time arguments for deterministic tests and expiration reasoning.
 
 The host is trusted to supply an accurate current UTC-referenced POSIX timestamp.
 WASI's "wall clock" is the appropriate interface for this: its
-[`now` contract](component/wit/deps/clocks/wall-clock.wit) specifies seconds since
+[`now` contract](components/service/wit/deps/clocks/wall-clock.wit) specifies seconds since
 `1970-01-01T00:00:00Z`, not local civil time or elapsed time. This matches JWT's
 [`NumericDate`](https://www.rfc-editor.org/rfc/rfc7519.html#section-2), which
 ignores leap seconds. A monotonic clock cannot replace it for absolute expiry
@@ -99,7 +101,7 @@ an acknowledged write and email acceptance; known accounts return `409` without
 sending email. Get-then-set is not atomic: production account uniqueness
 requires a transactional store or external serialization.
 
-Cryptography uses custom component interfaces in `providers/crypto/wit/`: Argon2 enrollment
+Cryptography uses custom component interfaces in `components/crypto/wit/`: Argon2 enrollment
 and verification, and Ed25519 signing and verification. Signing uses opaque u32
 handles; private keys never enter the Rocq heap. Rust implementations can be
 built separately, with the Rust `wasm32-unknown-unknown` target installed:
@@ -110,13 +112,13 @@ nix develop --command make crypto-components
 
 The service component imports these crypto interfaces rather than bundling an
 implementation. Argon2 enrollment uses `wasi:random/random@0.2.0` for fresh salts.
-The standard WIT declarations used by the build are pinned in `component/wit/deps/` and
-`providers/crypto/wit/deps/`.
+The standard WIT declarations used by the build are pinned in `components/service/wit/deps/` and
+`components/crypto/wit/deps/`.
 
 ## Email Components
 
 Two interchangeable providers export `authentikate:email/sender@0.1.0` from
-`providers/email/wit/email.wit`: a stdout backend for tests and a Lettermint backend for
+`components/email/wit/email.wit`: a stdout backend for tests and a Lettermint backend for
 production. Build them with the same Rust target as the crypto providers:
 
 ```sh
@@ -124,7 +126,7 @@ nix develop --command make email-components
 nix develop --command make test-email
 ```
 
-See `providers/email/README.md` for configuration, host capabilities, and delivery semantics.
+See `components/email/README.md` for configuration, host capabilities, and delivery semantics.
 Signup imports this interface and sends a plain-text welcome message after the
 account write succeeds. Configure its sender with the API's `email-from` field.
 Email failure returns `500` but leaves the account stored; retrying signup returns

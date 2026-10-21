@@ -1,14 +1,14 @@
 ;; Adapter: wasi:keyvalue as a CertiRocq registered primitive.
 ;;
-;; Same two calling conventions as component/adapters/argon2.wat, and the same
+;; Same two calling conventions as components/service/adapters/argon2.wat, and the same
 ;; value representation -- see the header of that file, which documents it.
 ;; The allocator, the bytestring lowering and the bytestring lifting are copies of
 ;; the ones there.  They are copied rather than shared because wasm-merge
 ;; takes whole modules and these adapters are merged independently; a shared
 ;; prelude would need a fourth module and an import graph to go with it.
 ;;
-;; Build with `make component`; component/build.mjs merges this alongside
-;; the crypto adapters and the core extracted by theories/extraction.v.
+;; Build with `make component`; components/service/build.mjs merges this alongside
+;; the crypto adapters and the core extracted by components/service/theories/extraction.v.
 ;; Note that all three adapters export `cabi_realloc`, so the merge needs
 ;; --rename-export-conflicts and the component wrapping needs exactly one of
 ;; them to keep the name.

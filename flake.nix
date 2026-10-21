@@ -166,24 +166,23 @@
               ]
             )
           ) [
-            "theories"
-            "component"
-            "providers/crypto/wit"
-            "providers/email/wit"
+            "components/service"
+            "components/crypto/wit"
+            "components/email/wit"
             "tests"
           ]
           || (
             type == "directory"
             && lib.elem relative [
-              "providers"
-              "providers/crypto"
-              "providers/email"
+              "components"
+              "components/crypto"
+              "components/email"
             ]
           );
       };
 
       # The service as a single Wasm module, compiled by CertiRocq from
-      # theories/extraction.v, wrapped with canonical component interfaces.
+      # components/service/theories/extraction.v, wrapped with canonical component interfaces.
       authentikate-wasm = pkgs.stdenv.mkDerivation {
         pname = "authentikate-wasm";
         version = "0.1.0";
