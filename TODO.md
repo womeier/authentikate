@@ -1,6 +1,6 @@
 # Deferred Work
 
-- [ ] Replace the Rocq service build's internal `wasm-merge` step with explicit
+- [ ] Replace `component/build.mjs`'s internal `wasm-merge` step with explicit
   component-model wiring of the generated core module and adapters. Retain the
   current merge for now; Rust crypto/email providers already use component-level
   composition.

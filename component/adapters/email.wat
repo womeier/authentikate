@@ -1,4 +1,4 @@
-;; Template expanded by tools/build-component.mjs with the existing heap and
+;; Template expanded by component/build.mjs with the existing heap and
 ;; UTF-8 helpers. Email strings must be validated before canonical ABI lifting.
 (module
   (import "rocq" "memory" (memory 1))

@@ -84,4 +84,6 @@ Record api : Set := MkApi {
 Definition authentikate_api : api :=
   {| api_login := login; api_validate := validate; api_signup := signup |}.
 
-CertiRocq Compile Wasm authentikate_api.
+CertiRocq Compile Wasm
+  --output "build/Authentikate.extraction.authentikate_api"
+  authentikate_api.

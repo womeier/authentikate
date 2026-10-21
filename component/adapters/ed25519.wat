@@ -1,19 +1,11 @@
 ;; Adapter: Ed25519 as a CertiRocq registered primitive.
 ;;
-;; The companion to ../argon2/adapter.wat, and deliberately a separate file:
-;; each adapter is composed with its own component, so neither has to know the
-;; other exists.  One consequence of standing alone is that both export
-;; `cabi_realloc` and both carry the same marshalling helpers -- if the two
-;; are ever merged into a single core module, exactly one copy of those can
-;; survive.
+;; Companion to argon2.wat. Both export `cabi_realloc` and carry the same
+;; marshalling helpers; the service assembly retains only its public allocator.
 ;;
-;; Build (see ../wit/ed25519.wit for the interface):
-;;
-;;   wasm-tools parse adapter.wat -o adapter.wasm
-;;   wasm-merge rocq.wasm rocq adapter.wasm <ns> -o merged.wasm
-;;   wasm-tools component embed world.wit merged.wasm -o embedded.wasm
-;;   wasm-tools component new embedded.wasm -o rocq.comp.wasm
-;;   wac plug rocq.comp.wasm --plug ed25519.comp.wasm -o service.wasm
+;; Interface: providers/crypto/wit/ed25519.wit (repository-relative).
+;; Build with `make component`; component/build.mjs merges the core adapters.
+;; `make host-component` composes the resulting service with Rust providers.
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
 ;; their Rocq return value into the imported mutable `rocq.result` global.
@@ -37,7 +29,7 @@
   (import "rocq" "result" (global $result (mut i32)))
 
   ;; ---- from the ed25519 component ------------------------------------------
-  ;; Canonical ABI lowerings of ../wit/ed25519.wit.  Every result needs more
+  ;; Canonical ABI lowerings of providers/crypto/wit/ed25519.wit. Every result needs more
   ;; than one flat value, so each call takes a trailing return area.
   (import "authentikate:crypto/ed25519@0.1.0" "public-key"
     (func $wit_public_key

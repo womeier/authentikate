@@ -12,7 +12,7 @@
 (*    answered [error] rather than to assume it cannot.                       *)
 (*                                                                            *)
 (*  The record is instantiated once, in [extraction.v], with the registered    *)
-(*  primitives that the two adapters in [crypto/] realise.                     *)
+(*  primitives that the adapters in [component/adapters/] realise.              *)
 (******************************************************************************)
 
 From Stdlib Require Import List NArith Strings.Byte.
@@ -56,7 +56,7 @@ Module Key : KEY.
 End Key.
 
 (* Argon2's cost knobs, mirroring the [params] record and the [algorithm] enum
-   in crypto/wit/argon2.wit.  Public, all of them: how expensive a hash was is
+   in providers/crypto/wit/argon2.wit. Public, all of them: how expensive a hash was is
    not a secret, and it cannot be one -- it is stored beside the tag, because a
    tag is only verifiable under the parameters it was derived with.
 

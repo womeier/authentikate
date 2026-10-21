@@ -14,7 +14,12 @@ fn copy_wit(source: &Path, destination: &Path) {
 }
 
 fn main() {
-    for path in ["wit", "crypto/wit", "email/wit", "host/world.wit"] {
+    for path in [
+        "component/wit",
+        "providers/crypto/wit",
+        "providers/email/wit",
+        "component/host.wit",
+    ] {
         println!("cargo:rerun-if-changed={path}");
     }
     let out = env::var_os("OUT_DIR").unwrap();
@@ -23,11 +28,11 @@ fn main() {
     if wit.exists() {
         fs::remove_dir_all(&wit).unwrap();
     }
-    copy_wit(Path::new("wit"), &wit);
-    copy_wit(Path::new("crypto/wit"), &wit.join("deps/crypto"));
-    copy_wit(Path::new("crypto/wit/deps"), &wit.join("deps"));
-    copy_wit(Path::new("email/wit"), &wit.join("deps/email"));
-    fs::copy("host/world.wit", wit.join("host.wit")).unwrap();
+    copy_wit(Path::new("component/wit"), &wit);
+    copy_wit(Path::new("providers/crypto/wit"), &wit.join("deps/crypto"));
+    copy_wit(Path::new("providers/crypto/wit/deps"), &wit.join("deps"));
+    copy_wit(Path::new("providers/email/wit"), &wit.join("deps/email"));
+    fs::copy("component/host.wit", wit.join("host.wit")).unwrap();
     fs::write(
         out.join("bindings.rs"),
         format!(

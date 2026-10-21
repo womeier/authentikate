@@ -146,15 +146,40 @@
         src = ./.;
         filter =
           path: type:
-          type == "directory"
-          || lib.hasSuffix ".v" path
-          || lib.hasSuffix ".mjs" path
-          || lib.hasSuffix ".wat" path
-          || lib.hasSuffix ".wit" path
-          || lib.elem (baseNameOf path) [
+          let
+            relative = lib.removePrefix "${toString ./.}/" (toString path);
+          in
+          lib.elem relative [
             "Makefile"
             "_RocqProject"
-          ];
+          ]
+          || builtins.any (
+            directory:
+            (relative == directory || lib.hasPrefix "${directory}/" relative)
+            && (
+              type == "directory"
+              || builtins.any (suffix: lib.hasSuffix suffix path) [
+                ".v"
+                ".mjs"
+                ".wat"
+                ".wit"
+              ]
+            )
+          ) [
+            "theories"
+            "component"
+            "providers/crypto/wit"
+            "providers/email/wit"
+            "tests"
+          ]
+          || (
+            type == "directory"
+            && lib.elem relative [
+              "providers"
+              "providers/crypto"
+              "providers/email"
+            ]
+          );
       };
 
       # The service as a single Wasm module, compiled by CertiRocq from

@@ -26,7 +26,9 @@ startup with a build instruction; Cargo does not silently rebuild Rocq.
 
 Open http://127.0.0.1:3000. Sign up, log in, and validate the populated token;
 change a signature character and validate again to see rejection. Tokens are
-not persisted in browser storage. Assets are embedded at Cargo build time.
+not persisted in browser storage. Assets in `host/assets/` are embedded at Cargo
+build time. All commands here run from the repository root; its `Cargo.toml`
+defines the host crate, independently of the provider crates.
 
 | Environment | Default | Meaning |
 | --- | --- | --- |
@@ -50,7 +52,7 @@ non-browser clients. No permissive CORS headers are emitted.
 and Rocq service components. It connects the service imports directly to those
 component exports, with no host crypto implementations or forwarding callbacks.
 It exports the service API and the same signer/hash instances for initialization.
-`host/world.wit` describes this host-facing surface; bindings use the authoritative
+`component/host.wit` describes this host-facing surface; bindings use the authoritative
 service, crypto and keyvalue WIT sources, staged by `host/build.rs`.
 
 The host generates a random signing seed once per process and provisions it into

@@ -1,6 +1,6 @@
 # Email providers
 
-Both artifacts export `authentikate:email/sender@0.1.0` (see `wit/email.wit`).
+Both artifacts export `authentikate:email/sender@0.1.0` (see [WIT](wit/email.wit)).
 The Rust crate is built twice with mutually exclusive backend features:
 
 | Artifact | Backend | Required host capabilities |
@@ -16,6 +16,8 @@ is needed. These Node tools are not used by the Rust web host.
 CI runs `make test-email-stdout`, which builds and tests only the stdout backend;
 it does not build the Lettermint backend or require its credentials.
 The default Nix service build does not bundle these providers.
+Run these commands from the repository root. The crate and its lockfile live in
+`providers/email/`; the internal service adapter is `component/adapters/email.wat`.
 
 ## Sending
 

@@ -374,12 +374,12 @@ async fn dispatch(app: Arc<App>, request: Request) -> Response {
             let asset = match path {
                 "/" => Some((
                     "text/html; charset=utf-8",
-                    include_str!("../web/index.html"),
+                    include_str!("assets/index.html"),
                 )),
-                "/style.css" => Some(("text/css; charset=utf-8", include_str!("../web/style.css"))),
+                "/style.css" => Some(("text/css; charset=utf-8", include_str!("assets/style.css"))),
                 "/app.js" => Some((
                     "text/javascript; charset=utf-8",
-                    include_str!("../web/app.js"),
+                    include_str!("assets/app.js"),
                 )),
                 _ => None,
             };

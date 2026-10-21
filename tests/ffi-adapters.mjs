@@ -98,7 +98,7 @@ try {
       tag_length: 32, salt: 'AAECAwQFBgcICQoLDA0ODw==', tag: 'AP+A',
     }))];
     const costs = [2, 19456, 2, 1, 32];
-    const e = instantiate('crypto/argon2/adapter.wat', h, {
+    const e = instantiate('component/adapters/argon2.wat', h, {
       'authentikate:crypto/argon2@0.1.0': {
         'recommended-params': () => assert.fail('verify must use stored parameters'),
         derive: () => assert.fail('verify must not derive a tag'),
@@ -149,7 +149,7 @@ try {
     let outcome = 0, handle = 0, signCalls = 0, publicCalls = 0;
     const message = [0, 255, 128], publicKey = Array.from({ length: 32 }, (_, i) => i);
     const signature = Array.from({ length: 64 }, (_, i) => 255 - i);
-    const e = instantiate('crypto/ed25519/adapter.wat', h, {
+    const e = instantiate('component/adapters/ed25519.wat', h, {
       'authentikate:crypto/ed25519@0.1.0': {
         sign(key, mp, ml, ret) {
           signCalls++;
@@ -206,7 +206,7 @@ try {
     let mode = 'value', opens = 0, gets = 0, sets = 0, setError = false;
     const key = [...Buffer.from('user@example.test')], value = [0, 255, 128, 65];
     let setValue = [...Buffer.from('{"salt":"AAECAwQFBgcICQoLDA0ODw==","tag":"AP+A"}')];
-    const e = instantiate('store/adapter.wat', h, {
+    const e = instantiate('component/adapters/store.wat', h, {
       'wasi:keyvalue/store@0.2.0-draft': {
         open(p, n, ret) {
           opens++;

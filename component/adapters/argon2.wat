@@ -8,16 +8,9 @@
 ;; Its EmptyString/String constructors have the same layout as nil/cons,
 ;; so the marshalling below is unchanged by the migration from `list byte`.
 ;;
-;; Build (see ../wit/argon2.wit for the interface):
-;;
-;;   wasm-tools parse adapter.wat -o adapter.wasm
-;;   wasm-merge rocq.wasm rocq adapter.wasm <ns> -o merged.wasm
-;;   wasm-tools component embed world.wit merged.wasm -o embedded.wasm
-;;   wasm-tools component new embedded.wasm -o rocq.comp.wasm
-;;   wac plug rocq.comp.wasm --plug argon2.comp.wasm -o service.wasm
-;;
-;; `<ns>` is whatever module name the backend puts on its primitive imports;
-;; wasm-merge assigns it at merge time, so this file does not care.
+;; Interface: providers/crypto/wit/argon2.wit (repository-relative).
+;; Build with `make component`; component/build.mjs merges the core adapters.
+;; `make host-component` composes the resulting service with Rust providers.
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
 ;; their Rocq return value into the imported mutable `rocq.result` global.
@@ -54,7 +47,7 @@
   (import "rocq" "result" (global $result (mut i32)))
 
   ;; ---- from the argon2 component -------------------------------------------
-  ;; Canonical ABI lowerings of ../wit/argon2.wit.  `params` is a record of
+  ;; Canonical ABI lowerings of providers/crypto/wit/argon2.wit. `params` is a record of
   ;; four u32, so it flattens to four i32 in field order; `algorithm` is an
   ;; enum, so one i32.  The results need more than one flat value, so they
   ;; come back through a return area we supply.

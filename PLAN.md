@@ -39,8 +39,8 @@ nix develop --command make crypto-components
 make host-component
 cargo test --locked
 cargo run --locked
-cargo test --locked --manifest-path crypto/argon2/Cargo.toml
-cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
+cargo test --locked --manifest-path providers/crypto/argon2/Cargo.toml
+cargo test --locked --manifest-path providers/crypto/ed25519/Cargo.toml
 ```
 
 The Nix development shell provides a locked Fenix Rust toolchain with the
@@ -54,7 +54,7 @@ all four first. Node remains only build/test tooling, not a running server.
 ## The service
 
 Three operations, JSON in and JSON out. The component exports
-`authentikate:service/api@0.1.0` (`wit/service.wit`), not WASI HTTP: each
+`authentikate:service/api@0.1.0` (`component/wit/service.wit`), not WASI HTTP: each
 operation takes config, Unix time and request bytes and returns status/body.
 The Rust demo exposes the following HTTP routes:
 
@@ -97,10 +97,10 @@ immune to it.
                               │   claim checks, record decoding —      │
                               │   every decision                      │
                               │          │ registered primitives      │
-                              │  argon2/adapter.wat                   │
-                              │  ed25519/adapter.wat                  │
-                              │  store/adapter.wat                    │
-                              │  runtime/service.wat wrappers         │
+                              │  component/adapters/argon2.wat        │
+                              │  component/adapters/ed25519.wat       │
+                              │  component/adapters/store.wat         │
+                              │  component/adapters/service.wat       │
                               └──────────┬────────────────────────────┘
                                          │ canonical ABI
                  +----------------+----------------+
@@ -209,7 +209,7 @@ boundary; this is not a proof that the whole service is constant-time.
 Use `N`, not `nat`, for timestamps and lengths.  CertiCoq represents `nat` in
 unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
 
-### The FFI (`crypto/*/adapter.wat`)
+### The FFI (`component/adapters/`)
 
 The mechanism is `CertiRocq Register`, not unregistered axioms. The earlier
 upstream backend gap is resolved by the fork pinned at `6d34b50b` in
@@ -222,14 +222,14 @@ compiler's constant forcing adds a leading dummy argument before the real
 Rocq arguments. Explicit registration arities count it and adapters ignore it;
 without this workaround imports can be called too early with shifted arguments.
 
-Three adapters (`crypto/argon2/adapter.wat`, `crypto/ed25519/adapter.wat`,
-`store/adapter.wat`) bridge heap values to canonical ABI. `runtime/service.wat`
+Three adapters (`component/adapters/argon2.wat`, `component/adapters/ed25519.wat`,
+`component/adapters/store.wat`) bridge heap values to canonical ABI. `component/adapters/service.wat`
 provides canonical signup/login/validate wrappers, config/clock marshalling,
 curried closure calls and response lowering. Its seven FFI boundary wrappers
 restore four-byte heap alignment after byte-oriented foreign allocations,
 including error paths returning immediate `None`.
 
-`tools/build-component.mjs` merges the extracted core, adapters and runtime
+`component/build.mjs` merges the extracted core, adapters and runtime
 with `wasm-merge`, removes link-only exports and unused builtins (checking
 they are unreferenced), prunes with `wasm-opt`, embeds authoritative WIT and
 runs `wasm-tools component new` and validation. The output still imports
@@ -276,7 +276,7 @@ remain worth recording:
   password.  We register.  `Key.of_handle` needs none of this: the host builds
   `cfg_key` and the extracted code only passes it along.
 
-### Rust host (`host/`, assets in `web/`)
+### Rust host (`host/`, assets in `host/assets/`)
 
 `cargo run` loads `build/host.component.wasm`, composed with WAC from the service,
 Rust Argon2, Rust Ed25519 and stdout email components. No host-provided crypto
@@ -295,21 +295,21 @@ The host provides WASI clock/random/stdout and keyvalue resources, but no guest
 filesystem, environment or network access. It enforces strict Host/Origin policy,
 JSON content type, a 16 KiB streaming limit and a body read deadline. Loopback is
 the default; explicit `LISTEN`/`PUBLIC_ORIGIN` support controlled proxy tests.
-Accounts and keys vanish on restart. See `web/README.md` for commands and limits.
+Accounts and keys vanish on restart. See `host/README.md` for commands and limits.
 
-### Rust crypto (`crypto/`)
+### Rust crypto (`providers/crypto/`)
 
 Two components, each exporting one interface of the `authentikate:crypto@0.1.0`
 package:
 
-- `crypto/wit/argon2.wit`, `crypto/argon2/` — Argon2 on RustCrypto's `argon2`,
+- `providers/crypto/wit/argon2.wit`, `providers/crypto/argon2/` — Argon2 on RustCrypto's `argon2`,
   with `subtle` for the constant-time tag comparison.  Exposes `derive`,
   `verify`, `enroll` and `recommended-params`; no PHC strings or clock.
   Enrollment imports `wasi:random/random@0.2.0`, requests 16 fresh bytes and
   returns public JSON with base64url salt/tag and numeric algorithm/cost fields.
   Salt generation stays outside Rocq; the public salt is stored and passed
   through Rocq, not kept secret.
-- `crypto/wit/ed25519.wit`, `crypto/ed25519/` — Ed25519 on `ed25519-dalek`.
+- `providers/crypto/wit/ed25519.wit`, `providers/crypto/ed25519/` — Ed25519 on `ed25519-dalek`.
   Exposes host provisioning via `import-key`, plus `public-key`, `sign` and
   `verify`, the last of them strict in the
   RFC 8032 sense. Checked against the RFC 8032 §7.1 vectors. Private keys
@@ -333,7 +333,7 @@ claim. Verified-library alternatives such as libcrux and HACL\* remain worth
 evaluating, but their guarantees must be checked for the selected algorithm,
 implementation and toolchain, not transferred to this service by name. The
 swap is invisible above the component boundary, including to `Crypto.v`.
-See the note at the top of `crypto/ed25519/src/lib.rs`.
+See the note at the top of `providers/crypto/ed25519/src/lib.rs`.
 
 ## Persistence
 
@@ -411,7 +411,7 @@ returned, it decoded, named this email, and verified" — true of the running
 system.  What no design can say is that the store returned the record that
 was written for that email.
 
-The adapter, `store/adapter.wat`, has one wrinkle worth knowing: keys are
+The adapter, `component/adapters/store.wat`, has one wrinkle worth knowing: keys are
 `string` in `wasi:keyvalue`, so the canonical ABI *traps* on a key that is
 not well-formed UTF-8, and the email in a login body is attacker-controlled.
 It therefore validates per RFC 3629 — rejecting overlongs, surrogates and
@@ -574,7 +574,7 @@ module.
 ## Spec and client
 
 Not implemented: there is no root `openapi.yaml`, generated `client/`, or
-`gen-client` flake app. `wit/service.wit` is the current component contract;
+`gen-client` flake app. `component/wit/service.wit` is the current component contract;
 it is not an HTTP/OpenAPI contract. The intended work remains:
 
 - Hand-write `openapi.yaml` for all three demo HTTP endpoints and errors.
@@ -719,7 +719,7 @@ proof.
   email; the demo supplies an ephemeral Map. Store lookup timing is provider
   behavior, not proved independent of key presence. Signup explicitly
   discloses existence; login dummy hashing does not eliminate all channels.
-- **Does the bucket need a name?**  `store/adapter.wat` opens the default
+- **Does the bucket need a name?**  `component/adapters/store.wat` opens the default
   bucket with the empty identifier, because a named one needs its name as a
   pointer into linear memory and a `data` segment in the adapter would write
   at a fixed offset into the CertiRocq heap.  A named bucket wants the host

@@ -52,8 +52,8 @@ jobs:
 
       - name: Test Rust crypto providers
         run: |
-          nix develop --command cargo test --locked --manifest-path crypto/argon2/Cargo.toml
-          nix develop --command cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
+          nix develop --command cargo test --locked --manifest-path providers/crypto/argon2/Cargo.toml
+          nix develop --command cargo test --locked --manifest-path providers/crypto/ed25519/Cargo.toml
 
       - name: Test stdout email component
         run: nix develop --command make test-email-stdout
