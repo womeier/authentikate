@@ -10,6 +10,3 @@
   `max(required_bytes, 65536)` and update static headroom accounting accordingly.
 - [ ] Once the helper semantics are fixed, simplify adapter allocation glue to
   use the exported helper and add allocation/growth regression tests.
-- [ ] Revisit the postponed revert of the CertiRocq pin from `cb74dd6b` to the
-  previous revision `6d34b50bfea92aece62712ae120890c9fda8e514`. The pin remains
-  unchanged until this work is resumed.
