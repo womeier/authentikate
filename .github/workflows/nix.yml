@@ -40,6 +40,9 @@ jobs:
       - name: Build and test service component
         run: nix build --print-build-logs
 
+      - name: Build composed component for Linux and macOS hosts
+        run: nix build --print-build-logs .#authentikate-host-component --out-link host-component
+
       - name: Print component interface
         run: |
           mkdir -p build

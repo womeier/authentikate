@@ -8,41 +8,24 @@ An experimental authentication backend service providing the following endpoints
 The backend is a single Wasm component composed of the following individual components:
 - main logic: written in Rocq, compiled to a Wasm module by CertiRocq, and wrapped inside a Wasm component.
 - two crypto components: password hashing with RustCrypto's `argon2` crate, Ed25519 signatures from the `libcrux-ed25519` crate
-- email sending: two implementations for the same component interface (1: writing the email to stdout, 2: actually sending an email)
+- email sending component: writes the email to stdout (could be swapped with an actual implementation)
 
-
-## Building
-The Nix flake is tested on `x86_64-linux`. The optional Cachix cache can avoid rebuilding e.g. the CertiRocq-fork this project uses.
-```sh
-cachix use womeier  # optional
-nix build
-```
-
-This builds and tests the service, producing `result/authentikate.component.wasm`
-and `result/authentikate.core.wasm`. It does not build or bundle the Rust crypto
-and email providers; use the Web Demo instructions for the composed backend.
 
 ## Web Demo
-Build the service, Rust crypto providers and stdout email provider, compose them
-at the component level with WAC, then start the Rust web host from the root:
 
+Build and run the local backend demo:
+Tested on linux, there is also (experimental) Apple Silicon macOS.
 ```sh
-nix develop
-make host-component
-cargo run --locked
+cachix use womeier
+nix run .#authentikate-local
+# visit localhost:3000 in the browser
 ```
+On macOS, the Wasm component is fetched from `womeier.cachix.org`,
+only the Rust web host is compiled locally. It is not tested.
+On Linux, the cache is optional and missing components can build locally.
 
-Open http://127.0.0.1:3000 to sign up, log in, and validate a token. The HTTP
-routes are `POST /api/signup`, `POST /api/login`, and `POST /api/validate`;
-requests require `Content-Type: application/json`.
 
-The Nix development shell supplies the Rust toolchain, Wasm target, WAC, and
-component build tools. The demo logs welcome emails to stdout rather than
-delivering them. Accounts and signing keys are held in memory: restarting loses
-accounts and invalidates previously issued tokens. This is not a production
-server. See [host/README.md](host/README.md) for configuration and tests.
-
-## Component Interfaces
+## Wasm Component Interfaces
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,
 and `validate`. Each accepts a typed configuration record and a JSON request
@@ -108,25 +91,6 @@ The service component imports these crypto interfaces rather than bundling an
 implementation. Argon2 enrollment uses `wasi:random/random@0.2.0` for fresh salts.
 The standard WIT declarations used by the build are pinned in `components/service/wit/deps/` and
 `components/crypto/wit/deps/`.
-
-## Email Components
-
-Two interchangeable providers export `authentikate:email/sender@0.1.0` from
-`components/email/wit/email.wit`: a stdout backend for tests and demos, and a
-Lettermint backend for delivery through Lettermint. Build them with the same Rust
-target as the crypto providers:
-
-```sh
-nix develop --command make email-components
-nix develop --command make test-email
-```
-
-See `components/email/README.md` for configuration, host capabilities, and delivery semantics.
-Signup imports this interface and sends a plain-text welcome message after the
-account write succeeds. Configure its sender with the API's `email-from` field
-(or `SIGNUP_EMAIL_FROM` in the demo host).
-Email failure returns `500` but leaves the account stored; retrying signup returns
-`409`, without resending. There is no email verification or durable retry queue.
 
 ## CertiRocq
 

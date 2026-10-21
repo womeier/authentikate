@@ -19,8 +19,7 @@
       rocq-base64,
     }:
     let
-      # Linux x86_64 only, on purpose: the one platform this is developed on.
-      # The Wasm the build produces is platform-independent anyway.
+      # Build the portable Wasm artifacts on Linux; Darwin only builds the host.
       system = "x86_64-linux";
       lib = nixpkgs.lib;
 
@@ -30,7 +29,8 @@
         config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "compcert" ];
       };
 
-      rustToolchain =
+      mkRustToolchain =
+        system:
         with fenix.packages.${system};
         combine [
           (stable.withComponents [
@@ -44,6 +44,8 @@
           ])
           targets.wasm32-unknown-unknown.stable.rust-std
         ];
+
+      rustToolchain = mkRustToolchain system;
 
       jco = pkgs.buildNpmPackage {
         pname = "authentikate-component-test-tools";
@@ -154,24 +156,27 @@
             "components/service/Makefile"
             "components/service/_RocqProject"
           ]
-          || builtins.any (
-            directory:
-            (relative == directory || lib.hasPrefix "${directory}/" relative)
-            && (
-              type == "directory"
-              || builtins.any (suffix: lib.hasSuffix suffix path) [
-                ".v"
-                ".mjs"
-                ".wat"
-                ".wit"
+          ||
+            builtins.any
+              (
+                directory:
+                (relative == directory || lib.hasPrefix "${directory}/" relative)
+                && (
+                  type == "directory"
+                  || builtins.any (suffix: lib.hasSuffix suffix path) [
+                    ".v"
+                    ".mjs"
+                    ".wat"
+                    ".wit"
+                  ]
+                )
+              )
+              [
+                "components/service"
+                "components/crypto/wit"
+                "components/email/wit"
+                "tests"
               ]
-            )
-          ) [
-            "components/service"
-            "components/crypto/wit"
-            "components/email/wit"
-            "tests"
-          ]
           || (
             type == "directory"
             && lib.elem relative [
@@ -228,6 +233,108 @@
           platforms = [ system ];
         };
       };
+
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = rustToolchain;
+        rustc = rustToolchain;
+      };
+
+      hostSrc = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./Makefile
+          ./host
+          ./components/crypto
+          ./components/email
+          ./components/service/wit
+        ];
+      };
+
+      # Cache this Linux-built output for all hosts, including macOS.
+      authentikate-host-component = rustPlatform.buildRustPackage {
+        pname = "authentikate-host-component";
+        version = "0.1.0";
+        src = hostSrc;
+        cargoLock.lockFile = ./Cargo.lock;
+        nativeBuildInputs = [
+          pkgs.wasm-tools
+          pkgs.wac-cli
+        ];
+        buildPhase = ''
+          runHook preBuild
+          mkdir -p build
+          cp ${authentikate-wasm}/authentikate.component.wasm build/
+          make crypto-components email-stdout-component compose-host
+          runHook postBuild
+        '';
+        doCheck = false;
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out
+          cp build/host.component.wasm $out/
+          runHook postInstall
+        '';
+      };
+
+      mkLocal =
+        pkgs:
+        let
+          hostRustPlatform = pkgs.makeRustPlatform {
+            cargo = mkRustToolchain pkgs.stdenv.hostPlatform.system;
+            rustc = mkRustToolchain pkgs.stdenv.hostPlatform.system;
+          };
+        in
+        hostRustPlatform.buildRustPackage {
+          pname = "authentikate-local";
+          version = "0.1.0";
+          src = hostSrc;
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoBuildFlags = [
+            "-p"
+            "authentikate-host"
+          ];
+          cargoTestFlags = [
+            "-p"
+            "authentikate-host"
+          ];
+          nativeBuildInputs = [
+            pkgs.makeWrapper
+          ];
+
+          preBuild = ''
+            mkdir -p build
+            cp ${authentikate-host-component}/host.component.wasm build/
+          '';
+
+          postInstall = ''
+            mkdir -p $out/share/authentikate
+            cp build/host.component.wasm $out/share/authentikate/
+            makeWrapper $out/bin/authentikate-host $out/bin/authentikate-local \
+              --set HOST_COMPONENT $out/share/authentikate/host.component.wasm
+          '';
+
+          meta = {
+            description = "Local authentication demo with in-memory accounts and stdout email";
+            mainProgram = "authentikate-local";
+            license = lib.licenses.mit;
+            platforms = [
+              system
+              "aarch64-darwin"
+            ];
+          };
+        };
+
+      authentikate-local = mkLocal pkgs;
+      darwinPackages = lib.genAttrs [ "aarch64-darwin" ] (system: {
+        authentikate-local = mkLocal (import nixpkgs { inherit system; });
+      });
+
+      authentikate-production = pkgs.writeShellScriptBin "authentikate-production" ''
+        echo "not yet supported"
+      '';
+
       # Fetch only the pinned bundle resources used by this report, not the
       # multi-gigabyte full bundle. Update the hash when adding TeX dependencies.
       reportResources =
@@ -274,20 +381,44 @@
       };
     in
     {
-      packages.${system} = {
-        default = authentikate-wasm;
-        inherit authentikate-wasm;
-        # The heavy prebuilt dependency, exposed so CI can fetch it
-        # substitute-only before building anything:
-        #   nix build --max-jobs 0 .#CertiRocq
-        # (It substitutes from womeier.cachix.org when the store path
-        # matches; otherwise it rebuilds from the fork.)
-        inherit CertiRocq;
-        inherit base64;
-        inherit jco;
-        rust-toolchain = rustToolchain;
-        inherit report;
+      packages = darwinPackages // {
+        ${system} = {
+          default = authentikate-wasm;
+          inherit authentikate-wasm;
+          inherit authentikate-local authentikate-production;
+          inherit authentikate-host-component;
+          # The heavy prebuilt dependency, exposed so CI can fetch it
+          # substitute-only before building anything:
+          #   nix build --max-jobs 0 .#CertiRocq
+          # (It substitutes from womeier.cachix.org when the store path
+          # matches; otherwise it rebuilds from the fork.)
+          inherit CertiRocq;
+          inherit base64;
+          inherit jco;
+          rust-toolchain = rustToolchain;
+          inherit report;
+        };
       };
+
+      apps =
+        (lib.mapAttrs (_: packages: {
+          authentikate-local = {
+            type = "app";
+            program = lib.getExe packages.authentikate-local;
+          };
+        }) darwinPackages)
+        // {
+          ${system} = {
+            authentikate-local = {
+              type = "app";
+              program = lib.getExe authentikate-local;
+            };
+            authentikate-production = {
+              type = "app";
+              program = lib.getExe authentikate-production;
+            };
+          };
+        };
 
       # The proofs are checked by building, so building is the test suite.
       checks.${system}.build = authentikate-wasm;
