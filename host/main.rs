@@ -54,7 +54,10 @@ impl WasiView for GuestState {
 }
 
 impl kv::Host for GuestState {
-    fn open(&mut self, identifier: String) -> Result<Result<Resource<kv::Bucket>, kv::Error>> {
+    fn open(
+        &mut self,
+        identifier: String,
+    ) -> wasmtime::Result<Result<Resource<kv::Bucket>, kv::Error>> {
         if !identifier.is_empty() {
             return Ok(Err(kv::Error::NoSuchStore));
         }
@@ -67,7 +70,7 @@ impl kv::HostBucket for GuestState {
         &mut self,
         bucket: Resource<kv::Bucket>,
         key: String,
-    ) -> Result<Result<Option<Vec<u8>>, kv::Error>> {
+    ) -> wasmtime::Result<Result<Option<Vec<u8>>, kv::Error>> {
         self.table.get(&bucket)?;
         Ok(Ok(self.records.lock().unwrap().get(&key).cloned()))
     }
@@ -76,7 +79,7 @@ impl kv::HostBucket for GuestState {
         bucket: Resource<kv::Bucket>,
         key: String,
         value: Vec<u8>,
-    ) -> Result<Result<(), kv::Error>> {
+    ) -> wasmtime::Result<Result<(), kv::Error>> {
         self.table.get(&bucket)?;
         self.records.lock().unwrap().insert(key, value);
         Ok(Ok(()))
@@ -85,7 +88,7 @@ impl kv::HostBucket for GuestState {
         &mut self,
         bucket: Resource<kv::Bucket>,
         key: String,
-    ) -> Result<Result<(), kv::Error>> {
+    ) -> wasmtime::Result<Result<(), kv::Error>> {
         self.table.get(&bucket)?;
         self.records.lock().unwrap().remove(&key);
         Ok(Ok(()))
@@ -94,7 +97,7 @@ impl kv::HostBucket for GuestState {
         &mut self,
         bucket: Resource<kv::Bucket>,
         key: String,
-    ) -> Result<Result<bool, kv::Error>> {
+    ) -> wasmtime::Result<Result<bool, kv::Error>> {
         self.table.get(&bucket)?;
         Ok(Ok(self.records.lock().unwrap().contains_key(&key)))
     }
@@ -102,7 +105,7 @@ impl kv::HostBucket for GuestState {
         &mut self,
         bucket: Resource<kv::Bucket>,
         cursor: Option<u64>,
-    ) -> Result<Result<kv::KeyResponse, kv::Error>> {
+    ) -> wasmtime::Result<Result<kv::KeyResponse, kv::Error>> {
         self.table.get(&bucket)?;
         let keys = self
             .records
@@ -114,7 +117,7 @@ impl kv::HostBucket for GuestState {
             .collect();
         Ok(Ok(kv::KeyResponse { keys, cursor: None }))
     }
-    fn drop(&mut self, bucket: Resource<kv::Bucket>) -> Result<()> {
+    fn drop(&mut self, bucket: Resource<kv::Bucket>) -> wasmtime::Result<()> {
         self.table.delete(bucket)?;
         Ok(())
     }
@@ -135,6 +138,7 @@ impl Runtime {
         options.consume_fuel(true);
         let engine = Engine::new(&options)?;
         let component = Component::from_file(&engine, path)
+            .map_err(anyhow::Error::from)
             .with_context(|| format!("Load {path}; build it with make host-component (or make compose-host for existing artifacts)"))?;
         // Refuse artifacts that ask the host to provide crypto or extra capabilities.
         for (name, _) in component.component_type().imports(&engine) {

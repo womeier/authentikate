@@ -141,7 +141,7 @@ toolchain, and a locked Fenix Rust toolchain with the `wasm32-unknown-unknown`
 standard library, plus JCO, Python and curl. No rustup or npm setup is needed. If all four
 `build/*.component.wasm` inputs already exist, use
 `make compose-host` instead. After composition, `cargo run` needs no Node, WAC,
-Rocq or Wasm build tools. Rust 1.88 or newer is required.
+Rocq or Wasm build tools. Rust 1.97 or newer is required.
 
 `cargo test --locked` exercises the composed service over HTTP, including actual
 Wasm Argon2/Ed25519 and stdout email, signature rejection, concurrency, request

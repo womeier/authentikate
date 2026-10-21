@@ -45,7 +45,7 @@ cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
 
 The Nix development shell provides a locked Fenix Rust toolchain with the
 `wasm32-unknown-unknown` standard library; no rustup setup is needed. The host needs
-Rust >=1.88 and `build/host.component.wasm`. WAC 0.12.0 is included in the Nix
+Rust >=1.97 and `build/host.component.wasm`. WAC 0.12.0 is included in the Nix
 development shell. `make compose-host` composes existing
 service/provider artifacts without rebuilding Rocq; `make host-component` builds
 all four first. Node remains only build/test tooling, not a running server.

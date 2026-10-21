@@ -6,7 +6,7 @@ with Axum and runs the composed Wasm component in Wasmtime.
 
 ## Build And Run
 
-Requires Rust >=1.88. Building components also requires the existing Rocq
+Requires Rust >=1.97. Building components also requires the existing Rocq
 toolchain, Node (build/test tooling only), Binaryen, wasm-tools, the Rust
 `wasm32-unknown-unknown` target, and WAC 0.12.0 (included in the Nix development shell):
 
