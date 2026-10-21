@@ -316,7 +316,6 @@
             rustToolchain
 
             # To look at what came out, and to inspect the module's imports.
-            pkgs.wabt # wasm2wat
             pkgs.wasm-tools
             pkgs.wac-cli
             pkgs.binaryen
