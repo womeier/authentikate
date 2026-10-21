@@ -1,34 +1,104 @@
 # Identity Workbench
 
-A local, ephemeral demonstration of the actual generated service component, not a replacement authentication implementation. Request parsing and authentication decisions run in the Rocq-generated component.
+A local, ephemeral demonstration of the actual Rocq-generated authentication
+service. The frontend is unchanged; `cargo run` at the repository root serves it
+with Axum and runs the composed Wasm component in Wasmtime.
 
-## Run
+## Build And Run
 
-Requires Node 24.7 or newer with `node:crypto.argon2Sync`, npm, and both compiled artifacts: `build/authentikate.component.wasm` (rebuilt with the email sender import and `email-from` configuration) and `build/email-stdout.component.wasm`. Build the latter with `make email-stdout-component` using the parent's Rust/Wasm toolchain, or `make test-email-stdout` to build and test it.
-
-```sh
-npm install
-npm run dev
-```
-
-Open http://127.0.0.1:3000. Startup transpiles both components with jco into `build/web-component` and compiles the resulting core modules. The service's email import is mapped to the actual stdout component's exported sender, not a JavaScript email implementation. No Nix or Wasm toolchain is needed once both components are built. `PORT` overrides 3000; `HOST` overrides the loopback-only binding default, which should be retained for this demo. Only `127.0.0.1`, `localhost`, and `[::1]` Host authorities at the actual listening port are accepted, even if `HOST` is overridden. IPv6 access additionally requires an IPv6 listener. Custom domains and reverse proxies are intentionally unsupported.
-
-Create an account using a test email and password, enter the same password in Log in, then validate the automatically populated token. Change a token character and validate again to see rejection. The response journal shows only response data, never the submitted password. Tokens are not persisted in browser storage.
-
-Successful signup writes one JSON welcome email to process stdout after the account write is acknowledged. `SIGNUP_EMAIL_FROM` overrides `Authentikate <hello@example.test>`; the subject is `Welcome to Authentikate` and the text is `Your Authentikate account has been created.` The sole recipient is the account email; messages are plain text and the idempotency key is absent. There is no native email SDK, network delivery, or email retry. A reported email write failure returns 500 but leaves the account stored: repeating signup returns 409 and login still works. Node stdout writes can be buffered; success means the host accepted the write, not durable delivery.
+Requires Rust >=1.88. Building components also requires the existing Rocq
+toolchain, Node (build/test tooling only), Binaryen, wasm-tools, the Rust
+`wasm32-unknown-unknown` target, and WAC 0.12.0:
 
 ```sh
-npm run test:web
+cargo install wac-cli --version 0.12.0 --locked
+rustup target add wasm32-unknown-unknown
+make host-component
+cargo run --locked
 ```
 
-The integration test starts the real server on an ephemeral loopback port and exercises signup, duplicate signup (including concurrent requests), login, password rejection, signature validation and returned claims, malformed input, HTTP limits, and Host/Origin rejection. It captures the full actual stdout email, checks that no password is included and only successful new signups send, and injects a stdout write failure to verify 500, then 409 and successful login for the stored account. It deliberately fails if either generated component is broken, stale, or missing.
+Use the Nix development shell for the component build if needed, with rustup's
+Wasm-enabled compiler and WAC on `PATH`. `make compose-host` composes existing
+`build/{authentikate,argon2,ed25519,email-stdout}.component.wasm` without invoking
+Rocq. Both targets produce `build/host.component.wasm`. Once that exists, running
+the host requires no Node, WAC, Rocq or Wasm build tools. Missing artifacts fail
+startup with a build instruction; Cargo does not silently rebuild Rocq.
 
-## Boundaries
+Open http://127.0.0.1:3000. Sign up, log in, and validate the populated token;
+change a signature character and validate again to see rejection. Tokens are
+not persisted in browser storage. Assets are embedded at Cargo build time.
 
-- Every service request gets fresh service and stdout email component instances, bounding the lifetime of their Wasm heaps. Compiled modules are reused.
-- The WASI keyvalue provider implements `Bucket` and `open` over a server-local Map. Records are password hashes with random salts, not plaintext passwords.
-- In this single Node process, component calls and Map operations are synchronous, so concurrent duplicate signups are serialized: one succeeds with 201 and the other receives 409. This is not a transactional uniqueness guarantee for a future asynchronous store or multiple server processes. Production persistence would require an atomic insert/unique constraint; this demo supplies neither a distributed store nor production concurrency guarantees.
-- Enrollment uses native Argon2id with 19,456 KiB, two iterations, one lane, a 32-byte tag, and 16 random salt bytes. The provider rejects excessive costs before derivation. The missing-account dummy tag is also derived with real native Argon2.
-- The server generates one Ed25519 key pair at startup. Private-key handle 1 stays host-side; configuration contains only its raw 32-byte public key. The issuer is `demo` and token TTL is 600 seconds.
-- Restarting loses accounts and the signing key. There is no production persistence, TLS, account recovery, rate limiting, or deployment hardening. Native synchronous hashing blocks Node's event loop; this is not an internet-facing server.
-- API requests must be JSON, are limited to 16 KiB, and receive no permissive CORS headers. All requests must use an allowed loopback Host and an origin-form relative request target; supplied API Origin headers must match that approved authority. This blocks the matching-Host-and-Origin DNS-rebinding case, but is not authentication or a substitute for network isolation. Keep the listener on loopback. Static assets use an explicit allowlist and a restrictive content security policy. Welcome emails log recipient addresses and message content to stdout; request bodies, tokens, passwords, and keys are not logged.
+| Environment | Default | Meaning |
+| --- | --- | --- |
+| `LISTEN` | `127.0.0.1:3000` | IP socket address, including port; port 0 chooses a free port |
+| `PUBLIC_ORIGIN` | unset | Exact approved HTTP(S) origin for a custom authority/reverse proxy |
+| `HOST_COMPONENT` | `build/host.component.wasm` | Composed component path, relative to the working directory |
+| `SIGNUP_EMAIL_FROM` | `Authentikate <hello@example.test>` | Welcome-email sender |
+
+Without `PUBLIC_ORIGIN`, only `127.0.0.1`, `localhost`, and `[::1]` Host authorities
+at the actual listening port are accepted. IPv6 requires an IPv6 listener.
+Non-loopback `LISTEN` requires an explicit `PUBLIC_ORIGIN`; this is an opt-in,
+not production hardening. For a proxy, set for example
+`PUBLIC_ORIGIN=https://demo.example.test`, preserve that Host header, and terminate
+TLS at the proxy. Forwarded headers are deliberately not trusted. Supplied Origin
+headers must exactly match the approved origin; missing Origin is allowed for
+non-browser clients. No permissive CORS headers are emitted.
+
+## Composition
+
+`host/composition.wac` instantiates the existing Rust Argon2, Ed25519, stdout-email
+and Rocq service components. It connects the service imports directly to those
+component exports, with no host crypto implementations or forwarding callbacks.
+It exports the service API and the same signer/hash instances for initialization.
+`host/world.wit` describes this host-facing surface; bindings use the authoritative
+service, crypto and keyvalue WIT sources, staged by `host/build.rs`.
+
+The host generates a random signing seed once per process and provisions it into
+each fresh composed instance via `import-key`. The returned handle is passed to
+the service; public-key derivation, signing and verification all remain inside
+the Ed25519 component. The missing-account dummy hash is initialized using the
+actual Argon2 component's `recommended-params` and `derive`. Enrollment salts come
+from WASI random inside that component. The host provides only WASI clock/random,
+stdout/I/O and an in-memory WASI keyvalue resource table. It rejects composed
+artifacts with unexpected imports, including unresolved crypto imports. No guest
+filesystem, environment, or network access is granted.
+
+Each request gets a fresh composed instance to reclaim the Rocq bump heap. Only
+one request executes at a time; up to eight admitted requests (including the
+active request) may wait/run, with excess returning 503. The permit stays held
+through blocking component execution even if the HTTP request is cancelled.
+This serializes signup's get-then-set within one process, not across processes.
+Wasmtime fuel is limited to two billion per instance and linear memories to
+128 MiB each (at most eight), with instance/table count limits as well. Fuel is
+an instruction budget, not a wall-clock deadline or full process memory limit.
+Bodies are capped at 16 KiB, including chunked requests, with a 15-second body
+read deadline. Static paths are allowlisted and use a restrictive CSP.
+
+Signup writes one JSON welcome email to stdout after the account write succeeds.
+Only sender, recipient and welcome text are logged, never passwords or hashes.
+An email-write failure returns 500 but leaves the account stored: retry returns
+409 and login still works. Success means stdout accepted the write, not delivery.
+Startup diagnostics go to stderr. The issuer is `demo`; token TTL is 600 seconds.
+
+## Tests And Limits
+
+```sh
+make compose-host
+cargo fmt --check
+cargo check --locked
+cargo test --locked
+```
+
+Tests require the real composed artifact and fail if it is missing or broken.
+They cover signup/login/validate across fresh instances, claims, signature
+tampering, wrong/missing accounts, concurrent duplicate signup, malformed JSON,
+Host/Origin and absolute-target rejection, JSON media type, 16 KiB limits,
+chunked socket requests, assets, bounded admission, and actual stdout emails.
+On Linux, `/dev/full` tests an actual stdout failure and the surviving account.
+
+Accounts and the signing seed are process-local and lost on restart. There is
+no durable storage, TLS, recovery, rate limiting, distributed uniqueness or
+security/timing proof for the whole service. Welcome emails expose recipient
+addresses on stdout. Keep this demo on loopback unless deliberately testing a
+controlled proxy. Node remains only for component build/adapter/email tests;
+the optional email test dependencies live in `test/` (`npm ci --prefix test`).

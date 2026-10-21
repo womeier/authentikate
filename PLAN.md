@@ -1,10 +1,10 @@
 # Authentikate — plan
 
 A small authentication backend whose request handling is written in Rocq,
-compiled to WebAssembly by CertiRocq, and run under Node. Cryptography is
+compiled to WebAssembly by CertiRocq, and run under a Rust Wasmtime host. Cryptography is
 not written in Rocq: registered primitives call custom component interfaces.
-Separately buildable Rust providers implement these interfaces; the running
-web demo instead supplies native Node crypto providers.
+Separately buildable Rust providers implement these interfaces; WAC composes
+them directly with the service and stdout email component for the web demo.
 
 The original goal was a constant-time service. That remains an unresolved
 security goal, not an established property of this implementation. See
@@ -23,9 +23,9 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Bytes/base64 | MetaRocq bytestrings; strict unpadded rocq-base64 `ByteString` wrapper, pinned at `9350246` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
 | Component | Custom service WIT export; custom crypto and standard WASI keyvalue imports remain unresolved providers |
-| Rust providers | Separately buildable with `make crypto-components`; not Nix packages or automatically composed into the default artifact |
-| Web demo | Actual component via jco, native Node crypto, in-memory WASI keyvalue, fresh component per request |
-| CI | Workflow builds/tests the component, runs native-crypto HTTP and Rust tests, and uploads Wasm artifacts; remote result not yet verified |
+| Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
+| Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
+| CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
 | Verification | Structural proofs and tests exist; `login_then_validate` remains admitted; no whole-service security or timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
@@ -36,24 +36,26 @@ nix build
 nix develop --command make
 nix develop --command make test
 nix develop --command make crypto-components
-npm ci
-npm run test:web
-npm run dev
+cargo install wac-cli --version 0.12.0 --locked
+make host-component
+cargo test --locked
+cargo run --locked
 cargo test --locked --manifest-path crypto/argon2/Cargo.toml
 cargo test --locked --manifest-path crypto/ed25519/Cargo.toml
 ```
 
-The Rust Wasm build needs the `wasm32-unknown-unknown` target. The demo needs
-Node >=24.7 and `build/authentikate.component.wasm` from `make`; `nix build`
-installs its artifacts under `result/` instead. Both produce
-`authentikate.core.wasm` and `authentikate.component.wasm`.
+The Rust Wasm build needs the `wasm32-unknown-unknown` target. The host needs
+Rust >=1.88 and `build/host.component.wasm`. `make compose-host` composes existing
+service/provider artifacts without rebuilding Rocq; `make host-component` builds
+all four first. Node remains only build/test tooling, not a running server.
+`nix build` still installs the uncomposed service artifacts under `result/`.
 
 ## The service
 
 Three operations, JSON in and JSON out. The component exports
 `authentikate:service/api@0.1.0` (`wit/service.wit`), not WASI HTTP: each
 operation takes config, Unix time and request bytes and returns status/body.
-The Node demo exposes the following HTTP routes:
+The Rust demo exposes the following HTTP routes:
 
 | Method | Path            | Request                        | Response                     |
 | ------ | --------------- | ------------------------------ | ---------------------------- |
@@ -87,7 +89,7 @@ immune to it.
 ## Layers
 
 ```
-   HTTP /api/* -> web/server.mjs -> jco -> authentikate.component.wasm
+   HTTP /api/* -> host/main.rs -> Wasmtime -> host.component.wasm (WAC)
                               ┌───────────────────────────────────────┐
                               │  Rocq core module (CertiRocq)         │
                               │   routing, base64url, JSON, JWT,      │
@@ -103,18 +105,16 @@ immune to it.
                  +----------------+----------------+
                  | custom crypto imports           | WASI keyvalue import
                  v                                 v
-   Actual demo: web/providers.mjs                  in-memory Map
-                native Node Argon2 + Ed25519       (standard WIT provider)
-
-   Optional providers, NOT composed by the default build:
-     Rust Argon2 component -> WASI random (fresh enrollment salts)
-     Rust Ed25519 component -> instance-local keys, host import-key provisioning
-     external WASI keyvalue provider
+   WAC connects Rust Argon2 + Ed25519 components    in-memory Rust map
+   and stdout email directly to the service.       (WASI keyvalue resource)
+     Argon2 -> WASI random (fresh enrollment salts)
+     Ed25519 -> instance-local keys, host import-key provisioning
+     stdout email -> WASI stdout/I/O
 ```
 
 The split: everything that is a decision lives in Rocq, everything that is a
-primitive lives in a provider. In the demo Node provides transport, crypto,
-storage, clock and configuration, not just transport. Note
+primitive lives in a provider. Rust provides transport, storage, clock, entropy,
+stdout and configuration, but no service crypto interfaces or forwarding. Note
 which side the stored record's *format* falls on — Rocq's, because
 `wasi:keyvalue` moves opaque bytes and `Store.decode` is what interprets
 them.  That is the main reason to prefer a blob store here over SQL columns:
@@ -232,8 +232,13 @@ with `wasm-merge`, removes link-only exports and unused builtins (checking
 they are unreferenced), prunes with `wasm-opt`, embeds authoritative WIT and
 runs `wasm-tools component new` and validation. The output still imports
 custom `authentikate:crypto/{argon2,ed25519}@0.1.0` and standard
-`wasi:keyvalue/store@0.2.0-draft`. Provider composition is not automatic;
-`wac plug` is a possible future Rust-provider integration step, not the build.
+`wasi:keyvalue/store@0.2.0-draft`. `make host-component` then uses the explicit
+`host/composition.wac` graph to connect the Rust crypto and stdout email components.
+The default `make`/Nix artifact remains the independently reusable service.
+
+The internal `wasm-merge` step is deliberately retained for now, separately from
+the implemented component-level provider composition. Deferred removal and
+CertiRocq work are tracked in [TODO.md](TODO.md).
 
 The value representation, probed from the backend's own output rather than
 assumed:
@@ -269,21 +274,26 @@ remain worth recording:
   password.  We register.  `Key.of_handle` needs none of this: the host builds
   `cfg_key` and the extracted code only passes it along.
 
-### Node host (`web/`)
+### Rust host (`host/`, assets in `web/`)
 
-`web/server.mjs` transpiles the actual component with jco and maps its three
-imported interfaces to `web/providers.mjs`. Canonical and Rocq marshalling
-live in the generated bindings and runtime wrapper, not handwritten HTTP code.
-Compiled modules are reused, but each request gets a fresh component instance
-to bound the lifetime of the unreclaimed bump heap. Provider state survives
-requests: a Map holds records and Node holds an Ed25519 key pair generated at
-startup, exposed to Rocq only as handle 1 and a public key.
+`cargo run` loads `build/host.component.wasm`, composed with WAC from the service,
+Rust Argon2, Rust Ed25519 and stdout email components. No host-provided crypto
+interfaces exist. The same signer/hash instances wired into the service are
+re-exported for seed provisioning, public-key derivation and dummy hashing.
+Bindings stage the authoritative WIT sources instead of copying crypto types.
 
-The demo uses native `node:crypto` Argon2 and Ed25519, not the Rust Wasm
-components. Enrollment uses 16 fresh random salt bytes; dummy hashing also
-uses real Argon2. It binds loopback by default, enforces Host/Origin checks,
-JSON content type and a 16 KiB body limit. Accounts and keys vanish on restart.
-Synchronous hashing blocks the event loop; this is not a production server.
+Each request gets a fresh composition to reclaim all Wasm heaps. An ephemeral
+host seed survives requests and is reimported into each signer; the host map
+preserves account records. One blocking worker executes component requests at
+a time, with bounded admission (eight including the active request). This
+serializes get-then-set in one process only. Fuel and Wasm memory limits bound
+guest execution; they are not a production resource policy or timing theorem.
+
+The host provides WASI clock/random/stdout and keyvalue resources, but no guest
+filesystem, environment or network access. It enforces strict Host/Origin policy,
+JSON content type, a 16 KiB streaming limit and a body read deadline. Loopback is
+the default; explicit `LISTEN`/`PUBLIC_ORIGIN` support controlled proxy tests.
+Accounts and keys vanish on restart. See `web/README.md` for commands and limits.
 
 ### Rust crypto (`crypto/`)
 
@@ -569,7 +579,7 @@ it is not an HTTP/OpenAPI contract. The intended work remains:
 - Check in a generated client in `client/`, from `openapi-generator` (or
   `oapi-codegen`-style generation pinned in the flake so the output is
   reproducible).  Target language to pick: TypeScript is the path of least
-  resistance given the Node host.
+   resistance for the existing browser frontend, independent of the Rust host.
 - A `nix run .#gen-client` that regenerates it, and a check that the checked-in
   client matches what the generator produces.
 
@@ -670,17 +680,18 @@ proof.
   wrapper marshalling, actual extracted closures, sequential calls, failures,
   signup persistence acknowledgments and validation's storage independence.
   Crypto imports in these tests are mocks, not Rust or native cryptography.
-- `npm run test:web` uses the actual component over HTTP with real native
-  Node Argon2/Ed25519. It checks signup/login/claims, tampering, malformed
-  input, duplicate/concurrent signup, Host/Origin and body limits.
+- `cargo test --locked` uses the actual WAC-composed service and Rust Wasm
+  Argon2/Ed25519/email. It checks signup/login/claims across fresh instances,
+  tampering, malformed input, duplicate/concurrent signup, Host/Origin and body
+  limits, real socket/chunked requests, stdout email and Linux stdout failure.
 - Rust native unit tests total 14 (4 Argon2, 10 Ed25519), covering enrollment
   format/verification and RFC vectors, invalid handles/inputs and strict
   rejection cases. Native enrollment tests supply salt to the helper; they
   do not exercise WASI randomness or prove entropy quality.
 - Desktop and mobile demo flows have been tested manually. This is separate
   from the HTTP suite, not an automated cross-browser or timing guarantee.
-- `.github/workflows/nix.yml` runs `nix build`, installs demo dependencies with
-  `npm ci`, tests the built component over HTTP, runs both Rust test suites and
+- `.github/workflows/nix.yml` runs `nix build`, installs optional email-test tooling
+  with `npm ci --prefix test`, composes providers, tests the Rust HTTP host, runs both Rust crypto suites and
   uploads the Wasm artifacts. Cachix is read-only for pull requests; the action
   handles pushes without a separate unconditional `cachix push`. The obsolete
   `just` commands are removed. Local workflow validation passes; no remote green
@@ -695,7 +706,7 @@ proof.
   requirement is unconditional, it has to be argon2i, paying for weaker
   time-memory-tradeoff resistance with more iterations than
   `recommended-params` currently returns. Enrollment selects Argon2id in the
-  Rust and Node providers; changing policy needs coordinated recommendations,
+  Rust provider; changing policy needs coordinated recommendations,
   dummy parameters, records and migration, not just an adapter edit.
 - **Should the signing key be a component resource?** Raw-key exposure to
   Rocq is already avoided by opaque u32 handles and a provider-owned key
@@ -727,8 +738,8 @@ Completed foundations:
    imports. Optional Rust components build separately, not as Nix packages.
 4. All three Rocq operations, public enrollment JSON, acknowledged writes,
    structural proofs, base64 and conditional flat JSON/decimal round trips.
-5. jco web demo with actual extracted service, native crypto and ephemeral
-   storage; HTTP integration tests and desktop/mobile checks.
+5. Rust web demo with the extracted service, component-level Rust crypto/email
+   composition, per-instance key provisioning and ephemeral storage; HTTP tests.
 6. CI workflow aligned with component builds, HTTP/Rust tests and Wasm artifact
    upload, with pull-request-safe cache configuration and local syntax validation.
 
@@ -746,13 +757,14 @@ Remaining work, in priority order:
    guarantee should precede evidence and a precise scope.
 4. Connect backoff only after choosing keying, lockout, monotone-clock and
    atomic counter semantics; the existing policy proofs alone do not rate-limit.
-5. Integrate optional Rust providers end to end, including WASI randomness and
-   instance-local key provisioning. Decide on reproducible Nix packages and
-   explicit composition; neither is part of the default service build today.
+5. Package the composed host/providers reproducibly in Nix. Component-level
+   composition, WASI randomness and per-instance key provisioning are implemented;
+   the default Nix build remains the uncomposed service. Eventually remove internal
+   `wasm-merge`; keep it for now and postpone CertiRocq changes.
 6. Add OpenAPI for the HTTP surface, choose/pin client generation and check
    reproducibility; no `gen-client` command exists yet.
 7. Harden deployment: durable storage, key custody/rotation, TLS, recovery,
    input/cost/resource budgets, nonblocking crypto execution and operational
    observability without leaking secrets. Keep the current demo loopback-only.
 8. Verify remote CI runs once authenticated;
-   retain distinct proof/ABI, native-crypto HTTP and Rust test coverage.
+   retain distinct proof/ABI, composed-component HTTP and Rust unit test coverage.

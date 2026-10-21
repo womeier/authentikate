@@ -40,6 +40,6 @@ result
 test-results/
 node_modules/
 
-# Rust build output for the crypto components.
+# Rust host and component build output.
 target/
 build/

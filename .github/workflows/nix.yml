@@ -50,8 +50,8 @@ jobs:
           mkdir -p build
           cp result/authentikate.component.wasm build/
 
-      - name: Install demo dependencies
-        run: nix develop --command npm ci --no-audit --no-fund
+      - name: Install optional email component test tooling
+        run: nix develop --command npm ci --prefix test --no-audit --no-fund
 
       - name: Test Rust crypto providers
         run: |
@@ -62,12 +62,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Install component composer
+        run: cargo install wac-cli --version 0.12.0 --locked
+
       - name: Test stdout email component
         # Use rustup's compiler and installed Wasm target, with Nix's component tools.
         run: nix develop --command bash -c 'PATH="$HOME/.cargo/bin:$PATH" make test-email-stdout'
 
-      - name: Test component over HTTP
-        run: nix develop --command npm run test:web
+      - name: Compose actual Rust providers and test Rust HTTP host
+        run: |
+          nix develop --command bash -c 'PATH="$HOME/.cargo/bin:$PATH" make crypto-components compose-host'
+          cargo fmt --check
+          cargo check --locked
+          cargo test --locked
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,4 +83,7 @@ jobs:
             result/*.wasm
             build/authentikate.component.wit
             build/email-stdout.component.wasm
+            build/argon2.component.wasm
+            build/ed25519.component.wasm
+            build/host.component.wasm
           if-no-files-found: error

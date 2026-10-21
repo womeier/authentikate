@@ -1,20 +1,20 @@
 // Run with node test/email.mjs. All host capabilities are mocks, never network APIs.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = new URL('../', import.meta.url);
-// Stay below the project's package.json so generated .js files are ES modules.
 const output = mkdtempSync(fileURLToPath(new URL('build/email-test-', root)));
+writeFileSync(`${output}/package.json`, '{"type":"module"}\n');
 after(() => rmSync(output, { recursive: true, force: true }));
 const components = {};
 const backends = process.argv.includes('--stdout') ? ['stdout'] : ['stdout', 'lettermint'];
 for (const backend of backends) {
   const directory = pathToFileURL(`${output}/${backend}/`);
   execFileSync(process.execPath, [
-    fileURLToPath(new URL('node_modules/.bin/jco', root)),
+    fileURLToPath(new URL('test/node_modules/.bin/jco', root)),
     'transpile', fileURLToPath(new URL(`build/email-${backend}.component.wasm`, root)),
     '-o', fileURLToPath(directory), '--name', 'email', '--instantiation', 'sync',
     '--no-wasi-shim', '--quiet',

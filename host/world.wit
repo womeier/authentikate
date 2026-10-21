@@ -1,0 +1,9 @@
+package authentikate:service@0.1.0;
+
+// The host implements only keyvalue. WASI supplies clock, entropy and stdout.
+world web-host {
+    import wasi:keyvalue/store@0.2.0-draft;
+    export api;
+    export authentikate:crypto/argon2@0.1.0;
+    export authentikate:crypto/ed25519@0.1.0;
+}

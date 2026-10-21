@@ -59,8 +59,8 @@
       certirocqSrc = pkgs.fetchFromGitHub {
         owner = "womeier";
         repo = "CertiRocq";
-        rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
-        hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
+        rev = "cb74dd6b6f68ade4d43293815dd908a4d777d5d0";
+        hash = "sha256-rDRJ/4Fdo61k49UrW9kIamk0rMpE3HryMA4y3P4vqsU=";
       };
 
       # CertiRocq itself: built from upstream's own overlay
@@ -78,13 +78,13 @@
           inherit pkgs;
         }).overrideAttrs
           (old: {
-            version = "unstable-6d34b50b";
+            version = "unstable-cb74dd6b";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "coq9.1-CertiRocq-unstable-6d34b50b";
+            name = "coq9.1-CertiRocq-unstable-cb74dd6b";
             meta = (old.meta or { }) // { broken = false; };
           });
 

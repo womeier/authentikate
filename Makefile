@@ -28,6 +28,23 @@ email-components: email-stdout-component
 	wasm-tools component new email/target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-lettermint.component.wasm
 	wasm-tools validate build/email-lettermint.component.wasm
 
+# Component-level composition; wasm-merge remains internal to the Rocq build.
+host-component: component crypto-components email-stdout-component
+	$(MAKE) compose-host
+
+# Also usable with existing build/*.component.wasm, without rebuilding Rocq.
+compose-host:
+	wac compose host/composition.wac \
+		-d authentikate:service=build/authentikate.component.wasm \
+		-d authentikate:argon2=build/argon2.component.wasm \
+		-d authentikate:ed25519=build/ed25519.component.wasm \
+		-d authentikate:email-stdout=build/email-stdout.component.wasm \
+		-o build/host.component.wasm
+	wasm-tools validate build/host.component.wasm
+
+test-host: compose-host
+	cargo test --locked
+
 test-email-stdout: email-stdout-component
 	cargo test --locked --manifest-path email/Cargo.toml
 	node --test-name-pattern=stdout test/email.mjs --stdout
@@ -49,4 +66,4 @@ force _RocqProject Makefile: ;
 %: Makefile.rocq force
 	@+$(MAKE) -f Makefile.rocq $@
 
-.PHONY: all rocq component test crypto-components email-stdout-component email-components test-email-stdout test-email clean force
+.PHONY: all rocq component test crypto-components email-stdout-component email-components host-component compose-host test-host test-email-stdout test-email clean force

@@ -2,6 +2,8 @@
 
 An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq.
 
+Deferred work is tracked in [TODO.md](TODO.md).
+
 ## Building
 
 Prebuilt artifacts are available via womeier's cachix.
@@ -74,20 +76,31 @@ Email failure returns `500` but leaves the account stored; retrying signup retur
 
 ## Web Demo
 
-Build the service and stdout email component first, then run the local test frontend:
+Build the service, Rust crypto providers and stdout email provider, compose them
+at the component level with WAC, then start the Rust web host from the root:
 
 ```sh
-make email-stdout-component
-npm ci
-npm run dev
+cargo install wac-cli --version 0.12.0 --locked
+rustup target add wasm32-unknown-unknown
+make host-component
+cargo run --locked
 ```
 
 Open http://127.0.0.1:3000 to sign up, log in, and validate a token.
-`npm run test:web` exercises the actual component over HTTP with native Argon2
-and Ed25519 providers and the real stdout email component. The demo implements
-WASI keyvalue with an in-memory map;
-accounts and signing keys disappear on restart. It is loopback-only by default
-and is not a production server. See `web/README.md` for details.
+The build requires the existing Rocq/Node/Binaryen/wasm-tools toolchain; use the
+development shell for `make` if needed (retain rustup's Wasm-enabled compiler on
+`PATH`). If all four `build/*.component.wasm` inputs already exist, use
+`make compose-host` instead. After composition, `cargo run` needs no Node, WAC,
+Rocq or Wasm build tools. Rust 1.88 or newer is required.
+
+`cargo test --locked` exercises the composed service over HTTP, including actual
+Wasm Argon2/Ed25519 and stdout email, signature rejection, concurrency, request
+limits and Host/Origin policy. The host never implements or forwards the service's
+crypto imports: WAC connects the existing Rust Wasm components directly.
+The demo supplies in-memory WASI keyvalue, clock, random and stdout capabilities.
+Accounts and signing keys disappear on restart. It binds loopback by default;
+`LISTEN` and `PUBLIC_ORIGIN` configure an explicit alternative. This is not a
+production server. See `web/README.md` for details.
 
 ## CertiRocq
 
