@@ -17,8 +17,7 @@ interface ed25519 {
     variant error {
         /// The private key is not 32 bytes.
         invalid-private-key(string),
-        /// The public key is not 32 bytes, or is not a valid compressed
-        /// point on the curve.
+        /// The public key is not 32 bytes.
         invalid-public-key(string),
         /// The signature is not 64 bytes.
         invalid-signature(string),
@@ -52,16 +51,14 @@ interface ed25519 {
 
     /// Check `signature` over `message` under `public-key`.
     ///
-    /// `false` means the signature does not match -- it is an answer, not an
-    /// error, the same way a wrong password is.  An `error` means an input was
-    /// the wrong shape and no question was asked.
+    /// `false` means verification failed, including invalid point encodings.
+    /// An `error` means an input had the wrong length.
     ///
     /// Verification is strict in the RFC 8032 sense: non-canonical point and
     /// scalar encodings are rejected, and so are signatures under a
-    /// small-order public key.  The permissive check that most libraries make
-    /// the default accepts signatures that a strict verifier rejects, which
-    /// means two verifiers can disagree about the same token; for a signature
-    /// that authorises something, disagreement is the bug to avoid.
+    /// small-order public key or with a small-order R point. Libcrux checks
+    /// canonical encodings and the signature equation; the wrapper rejects
+    /// small-order points before calling it.
     verify: func(
         public-key: list<u8>,
         message: list<u8>,

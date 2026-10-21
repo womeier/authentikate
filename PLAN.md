@@ -307,7 +307,7 @@ package:
   returns public JSON with base64url salt/tag and numeric algorithm/cost fields.
   Salt generation stays outside Rocq; the public salt is stored and passed
   through Rocq, not kept secret.
-- `components/crypto/wit/ed25519.wit`, `components/crypto/ed25519/` — Ed25519 on `ed25519-dalek`.
+- `components/crypto/wit/ed25519.wit`, `components/crypto/ed25519/` — Ed25519 on `libcrux-ed25519`.
   Exposes host provisioning via `import-key`, plus `public-key`, `sign` and
   `verify`, the last of them strict in the
   RFC 8032 sense. Checked against the RFC 8032 §7.1 vectors. Private keys
@@ -319,19 +319,15 @@ package:
 `make crypto-components` builds/componentizes both crates separately. They
 are neither flake packages nor included/composed by `nix build`.
 
-The earlier plan said "one of HACL\*, libcrux, or BoringSSL, and libcrux is
-the first candidate since it is itself verified".  That did not survive
-contact with Argon2, which libcrux does not have.  RustCrypto was taken for
-both, for one ecosystem and one set of build quirks.
-
-libcrux is still the destination for Ed25519, and the constant-time
-requirement sharpens the reason: dalek is *written* to be data-independent in
-its secret-dependent scalar multiplication, which is a careful-engineering
-claim. Verified-library alternatives such as libcrux and HACL\* remain worth
-evaluating, but their guarantees must be checked for the selected algorithm,
-implementation and toolchain, not transferred to this service by name. The
-swap is invisible above the component boundary, including to `Crypto.v`.
-See the note at the top of `components/crypto/ed25519/src/lib.rs`.
+Ed25519 uses libcrux; Argon2 remains on RustCrypto because libcrux has no Argon2.
+The Ed25519 wrapper rejects small-order public keys and R points in addition to
+libcrux's canonical-encoding and signature checks. Wrong-length inputs return
+errors; invalid point encodings return `false`. Private seeds use zeroizing
+buffers, but libcrux 0.0.10 does not explicitly wipe internal expanded-key
+temporaries; this does not provide full secret erasure. The WIT function
+signatures and `Crypto.v` assumptions are unchanged.
+Libcrux's guarantees must be scoped to the selected algorithm and implementation,
+not transferred to the wrapper, Wasm toolchain, or whole service by name.
 
 ## Persistence
 

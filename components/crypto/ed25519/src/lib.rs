@@ -10,22 +10,16 @@
 //!
 //! # On the library underneath
 //!
-//! This is ed25519-dalek, for consistency with `../argon2`: one ecosystem,
-//! one set of build quirks, and nothing to decide twice.  The intended
-//! destination is still libcrux, which is itself formally verified and ships
-//! a Wasm-friendly build -- the reason `PLAN.md` names it.  Argon2 could not
-//! go there (libcrux has no Argon2), but Ed25519 can, and swapping it is a
-//! change behind this file: the WIT interface is library-agnostic, so nothing
-//! above the component boundary -- and in particular nothing in `components/service/theories/`,
-//! where the axiom is stated -- has to move when it happens.
+//! Libcrux supplies key derivation, signing, and verification. The wrapper
+//! additionally rejects small-order public keys and signature points, and
+//! stores private seeds in zeroizing buffers. Libcrux 0.0.10 does not explicitly
+//! wipe its internal expanded-key temporaries; seed wiping is not full secret
+//! erasure. Libcrux's verification guarantees do not extend to this wrapper,
+//! the Wasm toolchain, or the whole service.
 
 // std, not no_std: on wasm32-unknown-unknown the standard library's I/O is
 // stubbed out and imports nothing, so using it costs no imports and saves
 // hand-rolling a panic handler and a global allocator.
-use ed25519_dalek::Signer;
-use ed25519_dalek::{
-    Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
-};
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
@@ -39,6 +33,10 @@ use exports::authentikate::crypto::ed25519::{Error, Guest};
 struct Component;
 
 const MAX_KEYS: usize = 1024;
+const SECRET_KEY_LENGTH: usize = 32;
+const PUBLIC_KEY_LENGTH: usize = 32;
+const SIGNATURE_LENGTH: usize = 64;
+type SigningKey = Zeroizing<[u8; SECRET_KEY_LENGTH]>;
 
 // Append-only: bounding the store also bounds handles, with no wraparound or
 // stale handle reuse. No key material leaves this component through the ABI.
@@ -65,10 +63,8 @@ static KEYS: Mutex<KeyStore> = Mutex::new(KeyStore { keys: Vec::new() });
 
 /// A private key is a 32-byte seed; the key pair is derived from it.
 ///
-/// `SigningKey::from_bytes` cannot fail -- every 32-byte string is a seed --
-/// so the only thing to check is the length.  The seed is wiped on drop by
-/// dalek's `zeroize` feature. Borrowing the seed avoids an extra stack copy;
-/// the imported buffer is separately wiped by `Zeroizing` in `import_key`.
+/// Every 32-byte string is a seed. Both the stored seed and the imported
+/// buffer are wiped on drop; libcrux receives a borrowed seed.
 fn signing_key(bytes: &[u8]) -> Result<SigningKey, Error> {
     let seed: &[u8; SECRET_KEY_LENGTH] = bytes.try_into().map_err(|_| {
         Error::InvalidPrivateKey(format!(
@@ -76,33 +72,57 @@ fn signing_key(bytes: &[u8]) -> Result<SigningKey, Error> {
             bytes.len()
         ))
     })?;
-    Ok(SigningKey::from_bytes(seed))
+    let mut key = Zeroizing::new([0; SECRET_KEY_LENGTH]);
+    key.copy_from_slice(seed);
+    Ok(key)
 }
 
-/// A public key is a compressed curve point, and not every 32-byte string is
-/// one: decompression is the second check after the length.
-fn verifying_key(bytes: &[u8]) -> Result<VerifyingKey, Error> {
-    let encoded: [u8; PUBLIC_KEY_LENGTH] = bytes.try_into().map_err(|_| {
+fn verifying_key(bytes: &[u8]) -> Result<&[u8; PUBLIC_KEY_LENGTH], Error> {
+    bytes.try_into().map_err(|_| {
         Error::InvalidPublicKey(format!(
             "public key must be {PUBLIC_KEY_LENGTH} bytes, got {}",
             bytes.len()
         ))
-    })?;
-    VerifyingKey::from_bytes(&encoded)
-        .map_err(|e| Error::InvalidPublicKey(format!("not a point on the curve: {e}")))
+    })
 }
 
-/// `Signature::from_bytes` cannot fail either: it splits 64 bytes into `R`
-/// and `s` and leaves judgement to the verifier, which is where strictness
-/// belongs.  So, again, only the length is checked here.
-fn signature(bytes: &[u8]) -> Result<Signature, Error> {
-    let encoded: [u8; SIGNATURE_LENGTH] = bytes.try_into().map_err(|_| {
+fn signature(bytes: &[u8]) -> Result<&[u8; SIGNATURE_LENGTH], Error> {
+    bytes.try_into().map_err(|_| {
         Error::InvalidSignature(format!(
             "signature must be {SIGNATURE_LENGTH} bytes, got {}",
             bytes.len()
         ))
-    })?;
-    Ok(Signature::from_bytes(&encoded))
+    })
+}
+
+fn public_key(seed: &[u8; SECRET_KEY_LENGTH]) -> [u8; PUBLIC_KEY_LENGTH] {
+    let mut public = [0; PUBLIC_KEY_LENGTH];
+    libcrux_ed25519::secret_to_public(&mut public, seed);
+    public
+}
+
+fn is_small_order(encoded: &[u8]) -> bool {
+    // The eight torsion points have five distinct y coordinates. Ignore the
+    // x sign bit to cover both signs. Libcrux rejects noncanonical encodings.
+    // See libsodium 1.0.18's ge25519_has_small_order blocklist in ed25519_ref10.c.
+    const ORDER_EIGHT_Y: [[u8; 32]; 2] = [
+        [
+            0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef,
+            0x98, 0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88,
+            0x6d, 0x53, 0xfc, 0x05,
+        ],
+        [
+            0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10,
+            0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77,
+            0x92, 0xac, 0x03, 0x7a,
+        ],
+    ];
+    let mut y = [0; 32];
+    y.copy_from_slice(encoded);
+    y[31] &= 0x7f;
+    let zero_or_one = y[0] <= 1 && y[1..].iter().all(|&b| b == 0);
+    let minus_one = y[0] == 0xec && y[1..31].iter().all(|&b| b == 0xff) && y[31] == 0x7f;
+    zero_or_one || minus_one || ORDER_EIGHT_Y.contains(&y)
 }
 
 impl Guest for Component {
@@ -115,23 +135,17 @@ impl Guest for Component {
     }
 
     fn public_key(key: u32) -> Result<Vec<u8>, Error> {
-        Ok(KEYS
-            .lock()
-            .map_err(|_| Error::KeyStoreUnavailable)?
-            .get(key)?
-            .verifying_key()
-            .to_bytes()
-            .to_vec())
+        let keys = KEYS.lock().map_err(|_| Error::KeyStoreUnavailable)?;
+        Ok(public_key(keys.get(key)?).to_vec())
     }
 
     fn sign(key: u32, message: Vec<u8>) -> Result<Vec<u8>, Error> {
-        Ok(KEYS
-            .lock()
-            .map_err(|_| Error::KeyStoreUnavailable)?
-            .get(key)?
-            .sign(&message)
-            .to_bytes()
-            .to_vec())
+        let keys = KEYS.lock().map_err(|_| Error::KeyStoreUnavailable)?;
+        let seed = keys.get(key)?;
+        // This error is unreachable on wasm32: a slice fits in u32.
+        libcrux_ed25519::sign(&message, seed)
+            .map(|signature| signature.to_vec())
+            .map_err(|_| Error::InvalidSignature("message exceeds u32 length limit".into()))
     }
 
     fn verify(
@@ -142,14 +156,10 @@ impl Guest for Component {
         let key = verifying_key(&public_key)?;
         let sig = signature(&signature_bytes)?;
 
-        // `verify_strict` rather than `verify`: it rejects non-canonical
-        // encodings of `R` and of the public key, and signatures under a
-        // small-order key.  Those rejections come back as `false` rather than
-        // as an error -- a small-order key is a well-formed point, so the
-        // question was asked and the answer is no.  `verify` would accept
-        // some of them, which is how two verifiers end up disagreeing about
-        // the same token.
-        Ok(key.verify_strict(&message, &sig).is_ok())
+        if is_small_order(key) || is_small_order(&sig[..32]) {
+            return Ok(false);
+        }
+        Ok(libcrux_ed25519::verify(&message, key, sig).is_ok())
     }
 }
 
@@ -224,17 +234,9 @@ mod tests {
             store.insert(signing_key(&hex(SEED_2)).unwrap()),
             Err(Error::KeyStoreFull)
         ));
+        assert_eq!(public_key(store.get(1).unwrap()).to_vec(), hex(PUBLIC_1));
         assert_eq!(
-            store.get(1).unwrap().verifying_key().to_bytes().to_vec(),
-            hex(PUBLIC_1)
-        );
-        assert_eq!(
-            store
-                .get(MAX_KEYS as u32)
-                .unwrap()
-                .verifying_key()
-                .to_bytes()
-                .to_vec(),
+            public_key(store.get(MAX_KEYS as u32).unwrap()).to_vec(),
             hex(PUBLIC_1)
         );
         assert!(matches!(
@@ -293,20 +295,73 @@ mod tests {
     #[test]
     fn a_public_key_off_the_curve_is_rejected() {
         let off_curve = hex("0200000000000000000000000000000000000000000000000000000000000000");
-        assert!(matches!(
-            Component::verify(off_curve, vec![], hex(SIG_1)),
-            Err(Error::InvalidPublicKey(_))
-        ));
+        assert!(!Component::verify(off_curve, vec![], hex(SIG_1)).unwrap());
     }
 
-    /// The identity point -- `y = 1` with the sign bit set -- is a valid
-    /// point of order 1, so it decompresses and the question gets asked; the
-    /// strict check is what then answers no.  This is the case `verify`
-    /// rather than `verify_strict` would wave through, so it is the one worth
-    /// pinning down.
+    /// Identity-key forgeries pass libcrux's equation without our extra check.
     #[test]
     fn a_small_order_public_key_verifies_nothing() {
-        let identity = hex("0100000000000000000000000000000000000000000000000000000000000080");
-        assert!(!Component::verify(identity, vec![], hex(SIG_1)).unwrap());
+        let identity = hex("0100000000000000000000000000000000000000000000000000000000000000");
+        let mut forged = vec![0; 64];
+        forged[..32].copy_from_slice(&identity);
+        assert!(libcrux_ed25519::verify(
+            b"forged",
+            identity.as_slice().try_into().unwrap(),
+            forged.as_slice().try_into().unwrap()
+        )
+        .is_ok());
+        assert!(!Component::verify(identity, b"forged".to_vec(), forged).unwrap());
+    }
+
+    #[test]
+    fn small_order_points_are_rejected_for_both_signs() {
+        for encoded in [
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+            "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        ] {
+            for sign in [0, 0x80] {
+                let mut point = hex(encoded);
+                point[31] |= sign;
+                assert!(is_small_order(&point));
+                assert!(!Component::verify(point.clone(), vec![], hex(SIG_1)).unwrap());
+                let mut sig = hex(SIG_1);
+                sig[..32].copy_from_slice(&point);
+                assert!(!Component::verify(hex(PUBLIC_1), vec![], sig).unwrap());
+            }
+        }
+        assert!(!is_small_order(&hex(PUBLIC_1)));
+        assert!(!is_small_order(&hex(SIG_1)[..32]));
+    }
+
+    #[test]
+    fn noncanonical_points_and_scalars_are_rejected() {
+        for encoded in [
+            "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        ] {
+            for sign in [0, 0x80] {
+                let mut point = hex(encoded);
+                point[31] |= sign;
+                assert!(!Component::verify(point.clone(), vec![], hex(SIG_1)).unwrap());
+                let mut sig = hex(SIG_1);
+                sig[..32].copy_from_slice(&point);
+                assert!(!Component::verify(hex(PUBLIC_1), vec![], sig).unwrap());
+            }
+        }
+        let mut sig = hex(SIG_1);
+        // Adding the subgroup order to a valid S preserves the equation, but
+        // must fail canonical-scalar validation rather than being reduced.
+        let order = hex("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010");
+        let mut carry = 0u16;
+        for (s, l) in sig[32..].iter_mut().zip(order) {
+            let sum = *s as u16 + l as u16 + carry;
+            *s = sum as u8;
+            carry = sum >> 8;
+        }
+        assert!(!Component::verify(hex(PUBLIC_1), vec![], sig).unwrap());
     }
 }

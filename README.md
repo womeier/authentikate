@@ -7,7 +7,7 @@ An experimental authentication backend service providing the following endpoints
 
 The backend is a single Wasm component composed of the following individual components:
 - main logic: written in Rocq, compiled to a Wasm module by CertiRocq, and wrapped inside a Wasm component.
-- two crypto components: password hashing with RustCrypto's `argon2` crate, Ed25519 signatures from the `ed25519-dalek` crate
+- two crypto components: password hashing with RustCrypto's `argon2` crate, Ed25519 signatures from the `libcrux-ed25519` crate
 - email sending: two implementations for the same component interface (1: writing the email to stdout, 2: actually sending an email)
 
 
@@ -99,6 +99,10 @@ built separately in the Nix development shell, which includes the Rust
 ```sh
 nix develop --command make crypto-components
 ```
+
+The Ed25519 wrapper wipes imported and stored seeds, but libcrux 0.0.10 does not
+explicitly wipe its internal expanded-key temporaries. This is not a guarantee
+of full secret erasure.
 
 The service component imports these crypto interfaces rather than bundling an
 implementation. Argon2 enrollment uses `wasi:random/random@0.2.0` for fresh salts.

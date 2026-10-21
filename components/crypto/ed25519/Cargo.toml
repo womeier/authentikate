@@ -9,17 +9,6 @@ description = "Ed25519 signatures, as a WebAssembly component"
 crate-type = ["cdylib"]
 
 [dependencies]
-# ed25519-dalek, the same pure-Rust choice as `../argon2` makes for Argon2:
-# no libc, no WASI shim, and -- with `rand_core` left off -- no random source,
-# so it compiles to wasm32-unknown-unknown importing nothing.  `zeroize` wipes
-# key material on drop; `fast` keeps the precomputed tables, which is the
-# right trade for a signer on the request path.
-#
-# Eventually this should be libcrux: see the note at the top of `src/lib.rs`.
-ed25519-dalek = { version = "2", default-features = false, features = [
-    "alloc",
-    "fast",
-    "zeroize",
-] }
+libcrux-ed25519 = { version = "=0.0.10", default-features = false }
 wit-bindgen = "0.46"
 zeroize = "1"
