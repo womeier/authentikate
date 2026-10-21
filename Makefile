@@ -2,20 +2,19 @@ all: component
 
 crypto-components:
 	mkdir -p build
-	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path components/crypto/argon2/Cargo.toml
-	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path components/crypto/ed25519/Cargo.toml
-	wasm-tools component new components/crypto/argon2/target/wasm32-unknown-unknown/release/authentikate_argon2.wasm -o build/argon2.component.wasm
-	wasm-tools component new components/crypto/ed25519/target/wasm32-unknown-unknown/release/authentikate_ed25519.wasm -o build/ed25519.component.wasm
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-argon2 -p authentikate-ed25519
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_argon2.wasm -o build/argon2.component.wasm
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_ed25519.wasm -o build/ed25519.component.wasm
 
 email-stdout-component:
 	mkdir -p build
-	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path components/email/Cargo.toml
-	wasm-tools component new components/email/target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-stdout.component.wasm
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-email
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-stdout.component.wasm
 	wasm-tools validate build/email-stdout.component.wasm
 
 email-components: email-stdout-component
-	cargo build --locked --release --target wasm32-unknown-unknown --manifest-path components/email/Cargo.toml --no-default-features --features lettermint
-	wasm-tools component new components/email/target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-lettermint.component.wasm
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-email --no-default-features --features lettermint
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-lettermint.component.wasm
 	wasm-tools validate build/email-lettermint.component.wasm
 
 # Component-level composition; wasm-merge remains internal to the Rocq build.
@@ -36,12 +35,12 @@ test-host: compose-host
 	cargo test --locked
 
 test-email-stdout: email-stdout-component
-	cargo test --locked --manifest-path components/email/Cargo.toml
+	cargo test --locked -p authentikate-email
 	node --test-name-pattern=stdout tests/email.mjs --stdout
 
 test-email: email-components
-	cargo test --locked --manifest-path components/email/Cargo.toml
-	cargo test --locked --manifest-path components/email/Cargo.toml --no-default-features --features lettermint
+	cargo test --locked -p authentikate-email
+	cargo test --locked -p authentikate-email --no-default-features --features lettermint
 	node tests/email.mjs
 
 include components/service/Makefile

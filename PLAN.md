@@ -39,8 +39,7 @@ nix develop --command make crypto-components
 make host-component
 cargo test --locked
 cargo run --locked
-cargo test --locked --manifest-path components/crypto/argon2/Cargo.toml
-cargo test --locked --manifest-path components/crypto/ed25519/Cargo.toml
+cargo test --locked -p authentikate-argon2 -p authentikate-ed25519
 ```
 
 The Nix development shell provides a locked Fenix Rust toolchain with the

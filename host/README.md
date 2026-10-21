@@ -29,7 +29,8 @@ change a signature character and validate again to see rejection. Tokens are
 not persisted in browser storage. Assets in `host/assets/` are embedded at Cargo
 build time. All commands here run from the repository root; its `Cargo.toml`
 defines a workspace with `host` as the default member. `host/Cargo.toml` defines
-the host crate; the provider crates remain independent.
+the host crate; the provider crates are also workspace members and share the
+root lockfile and target directory.
 
 | Environment | Default | Meaning |
 | --- | --- | --- |

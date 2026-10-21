@@ -20,12 +20,3 @@ wit-bindgen = "0.46"
 
 [dev-dependencies]
 serde_json = "1"
-
-[profile.release]
-# Argon2's whole job is to be slow in memory and fast in cycles; do not trade
-# speed for size here.
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true

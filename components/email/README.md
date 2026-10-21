@@ -16,8 +16,9 @@ is needed. These Node tools are not used by the Rust web host.
 CI runs `make test-email-stdout`, which builds and tests only the stdout backend;
 it does not build the Lettermint backend or require its credentials.
 The default Nix service build does not bundle these providers.
-Run these commands from the repository root. The crate and its lockfile live in
-`components/email/`; the internal service adapter is `components/service/adapters/email.wat`.
+Run these commands from the repository root. The crate lives in
+`components/email/` and shares the root workspace lockfile and target directory;
+the internal service adapter is `components/service/adapters/email.wat`.
 
 ## Sending
 

@@ -53,14 +53,15 @@ written to `build/Authentikate.extraction.authentikate_api.wasm`, not the projec
 
 Sources are grouped under `components/service/` (Rocq sources, WAT adapters,
 service WIT and assembly), `components/crypto/` and `components/email/`
-(independent Rust provider crates), `host/` (Rust host and embedded assets),
+(Rust provider crates), `host/` (Rust host and embedded assets),
 `tests/` (test suites), and `report/` (report sources and figures). Generated
-service artifacts live in `build/`; each Rust crate retains its own lockfile and
-target directory.
+service artifacts live in `build/`; all Rust crates share the root `Cargo.lock`
+and `target/` directory.
 
 The root Cargo workspace selects `host/` by default, so `cargo run --locked`
-and `cargo test --locked` work from the repository root. The provider crates
-remain independent Cargo projects. Rocq compilation and service assembly rules
+and `cargo test --locked` work from the repository root. The provider crates are
+workspace members, built and tested explicitly with `-p authentikate-argon2`,
+`-p authentikate-ed25519`, or `-p authentikate-email`. Rocq compilation and service assembly rules
 live in `components/service/Makefile`, included by the root Makefile; run all
 Make commands from the repository root.
 
