@@ -1,4 +1,4 @@
-(* Pure signup regressions.  Secret values are only passed to mocks that ignore
+(* Pure signup regressions. Secret values are only passed to mocks that ignore
    them; the tests do not unfold or inspect the opaque Secret.t. *)
 From Stdlib Require Import List NArith Strings.Byte Strings.String.
 From Authentikate Require Import Bytes Json Crypto Store Api.

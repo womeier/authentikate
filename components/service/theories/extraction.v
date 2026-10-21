@@ -85,5 +85,5 @@ Definition authentikate_api : api :=
   {| api_login := login; api_validate := validate; api_signup := signup |}.
 
 CertiRocq Compile Wasm
-  --output "build/Authentikate.extraction.authentikate_api"
+  --output "../../build/Authentikate.extraction.authentikate_api"
   authentikate_api.

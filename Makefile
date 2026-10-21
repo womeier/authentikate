@@ -43,6 +43,7 @@ test-email: email-components
 	cargo test --locked -p authentikate-email --no-default-features --features lettermint
 	node tests/email.mjs
 
-include components/service/Makefile
+rocq component test clean:
+	$(MAKE) -C components/service $@
 
-.PHONY: all crypto-components email-stdout-component email-components host-component compose-host test-host test-email-stdout test-email
+.PHONY: all rocq component test clean crypto-components email-stdout-component email-components host-component compose-host test-host test-email-stdout test-email

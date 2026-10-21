@@ -18,7 +18,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 
 | Area | Current status |
 | --- | --- |
-| Rocq service | Signup, login and validate compile through `components/service/theories/extraction.v`, included in `_RocqProject` |
+| Rocq service | Signup, login and validate compile through `components/service/theories/extraction.v`, included in `components/service/_RocqProject` |
 | Default Nix build | Checks proofs and adapter/runtime tests; installs core and component Wasm artifacts |
 | Bytes/base64 | MetaRocq bytestrings; local upstream instance and strict unpadded rocq-base64 `ByteString` wrapper, pinned at `b0f629e5` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
@@ -33,8 +33,8 @@ Commands from the repository root:
 
 ```sh
 nix build
-nix develop --command make
-nix develop --command make test
+nix develop --command make -C components/service
+nix develop --command make -C components/service test
 nix develop --command make crypto-components
 make host-component
 cargo test --locked
@@ -202,7 +202,7 @@ boundary; this is not a proof that the whole service is constant-time.
   Proved, and **not wired into `handle`**; see [Rate limiting](#rate-limiting).
 - `Proofs.v` — what is actually established (see below).
 - `extraction.v` — the service extraction: eight registered primitives and
-  signup/login/validate, compiled by the default build through `_RocqProject`.
+  signup/login/validate, compiled by the default build through `components/service/_RocqProject`.
 
 Use `N`, not `nat`, for timestamps and lengths.  CertiCoq represents `nat` in
 unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
@@ -257,7 +257,7 @@ One trap worth recording: foreign byte results can exceed generated heap
 headroom. A bytestring costs 12 bytes per nonempty cell, so adapters grow
 memory themselves rather than trusting it; the runtime restores alignment.
 
-`components/service/theories/extraction.v` is compiled in `_RocqProject`. Two design details
+`components/service/theories/extraction.v` is compiled in `components/service/_RocqProject`. Two design details
 remain worth recording:
 
 - The `Register` vernacular itself is fine today — it is the plugin's own
@@ -475,7 +475,8 @@ The sequence is raw `kv_get`, reject any existing value, enroll, validate and
 add email in Rocq, then set. Only `Some true` acknowledges creation (`201 {}`);
 `None` and `Some false` are `500`, as are enrollment or record validation
 failure. `created_requires_persistence` proves this structural implication,
-not future durability or uniqueness. `tests/Signup.v` covers refusals and
+not future durability or uniqueness. `components/service/theories/SignupTests.v`
+covers refusals and
 corrupt/mismatched existing records as well as success.
 
 Atomic create-if-absent remains unimplemented. The synchronous single-process
@@ -672,8 +673,8 @@ proof.
 
 ## Tests and evidence
 
-- `nix build` (also the flake build check) compiles `_RocqProject`, including
-  proofs, pure bytes/signup regressions and real extraction. It then runs
+- `nix build` (also the flake build check) compiles `components/service/_RocqProject`, including
+  proofs, pure signup regressions and real extraction. It then runs
   `tests/ffi-adapters.mjs` and `tests/component.mjs` before installing artifacts.
 - Adapter/runtime tests cover the void/global-result ABI, ignored force
   argument, u32 handles, memory growth, all seven alignment boundaries,

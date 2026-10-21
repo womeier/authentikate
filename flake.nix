@@ -152,7 +152,7 @@
           lib.elem relative [
             "Makefile"
             "components/service/Makefile"
-            "_RocqProject"
+            "components/service/_RocqProject"
           ]
           || builtins.any (
             directory:
@@ -203,7 +203,7 @@
         buildPhase = ''
           runHook preBuild
           ulimit -s unlimited 2>/dev/null || true
-          make -j $NIX_BUILD_CORES
+          make -C components/service -j $NIX_BUILD_CORES
           runHook postBuild
         '';
 

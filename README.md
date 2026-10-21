@@ -44,8 +44,8 @@ and validation service. It produces `authentikate.component.wasm` and
 `authentikate.core.wasm` in the Nix output, or under `build/` with:
 
 ```sh
-nix develop --command make
-nix develop --command make test
+nix develop --command make -C components/service
+nix develop --command make -C components/service test
 ```
 
 The service is extracted from `components/service/theories/extraction.v`. Its intermediate Wasm is
@@ -61,9 +61,11 @@ and `target/` directory.
 The root Cargo workspace selects `host/` by default, so `cargo run --locked`
 and `cargo test --locked` work from the repository root. The provider crates are
 workspace members, built and tested explicitly with `-p authentikate-argon2`,
-`-p authentikate-ed25519`, or `-p authentikate-email`. Rocq compilation and service assembly rules
-live in `components/service/Makefile`, included by the root Makefile; run all
-Make commands from the repository root.
+`-p authentikate-ed25519`, or `-p authentikate-email`. Rocq compilation and service
+assembly live in `components/service/Makefile`, with their own `_RocqProject`.
+Run `make -C components/service` to build the service or add `test` to test it.
+The root Makefile forwards `rocq`, `component`, `test`, and `clean` to this
+standalone build; provider and host commands run from the repository root.
 
 ## Component Interfaces
 
