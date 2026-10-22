@@ -1210,3 +1210,159 @@ Qed.
    the statement. *)
 Print Assumptions signup_then_validate.
 
+(* ---- what the client gets ----------------------------------------------- *)
+
+(* [render] turns a response into bytes and nothing in this file used to say
+   anything about them.  For the token response that was almost an accident --
+   [parse_token_request] is exactly that object -- but the validation response
+   is nested, and nesting is what [parse_print_obj] could not reach.  With
+   the general round trip in JsonProofs.v it can be said properly: a client
+   parsing a validation response reads back the claim set the service
+   validated, field for field. *)
+
+Lemma claims_value_ok : forall c,
+  ok_string (c_sub c) -> ok_string (c_iss c) ->
+  (c_iat c < 10 ^ 32)%N -> (c_exp c < 10 ^ 32)%N ->
+  value_ok (Claims.to_json c).
+Proof.
+  intros [sub iss iat exp] Hsub Hiss Hiat Hexp.
+  cbn [c_sub c_iss c_iat c_exp] in Hsub, Hiss, Hiat, Hexp.
+  unfold Claims.to_json. cbn [c_sub c_iss c_iat c_exp].
+  apply value_ok_obj.
+  - apply value_fields_cons; [ ok_literal | now apply value_ok_str |].
+    apply value_fields_cons; [ ok_literal | now apply value_ok_str |].
+    apply value_fields_cons; [ ok_literal | now apply value_ok_num |].
+    apply value_fields_cons; [ ok_literal | now apply value_ok_num |].
+    apply value_fields_nil.
+  - cbn. repeat split; (reflexivity || exact I).
+Qed.
+
+(* Six of the parser's sixteen, for the deepest thing this service prints. *)
+Lemma claims_fuel : forall c, value_fuel (Claims.to_json c) = 6%nat.
+Proof. intros c. reflexivity. Qed.
+
+(* The nested response, read back.  [Json.get] of the two fields is settled by
+   conversion, and the claims field is [to_json c] on the nose -- so a client
+   recovers [c] itself rather than something that agrees with it on the four
+   fields it thought to look at. *)
+Theorem validity_reads_back : forall v c,
+  ok_string (c_sub c) -> ok_string (c_iss c) ->
+  (c_iat c < 10 ^ 32)%N -> (c_exp c < 10 ^ 32)%N ->
+  exists j cj,
+    Json.parse (render (Validity v (Some c))) = Some j /\
+    Json.get (lit ("valid"%string)) j = Some (JBool v) /\
+    Json.get (lit ("claims"%string)) j = Some cj /\
+    Claims.of_json cj = Some c.
+Proof.
+  intros v c Hsub Hiss Hiat Hexp.
+  exists (JObj [(lit ("valid"%string), JBool v);
+                (lit ("claims"%string), Claims.to_json c)]).
+  exists (Claims.to_json c).
+  unfold render.
+  split.
+  - apply parse_print.
+    + apply value_ok_obj.
+      * apply value_fields_cons; [ ok_literal | apply value_ok_bool |].
+        apply value_fields_cons; [ ok_literal | now apply claims_value_ok |].
+        apply value_fields_nil.
+      * cbn. repeat split; (reflexivity || exact I).
+    + cbn. lia.
+  - split; [ reflexivity |].
+    split; [ reflexivity | apply of_json_to_json ].
+Qed.
+
+(* And the whole of [render]: the service never puts a body on the wire that
+   its own parser would reject.  The conditions are on what the response
+   carries, because that is the only part [render] does not choose: the keys
+   and the error strings are literals. *)
+Definition response_ok (r : response) : Prop :=
+  match r with
+  | Token t => ok_string t
+  | Validity _ (Some c) =>
+      ok_string (c_sub c) /\ ok_string (c_iss c) /\
+      (c_iat c < 10 ^ 32)%N /\ (c_exp c < 10 ^ 32)%N
+  | _ => True
+  end.
+
+Ltac flat_response :=
+  apply parse_print;
+  [ apply value_ok_obj;
+    [ repeat (apply value_fields_cons;
+                [ ok_literal
+                | (apply value_ok_bool
+                   || (apply value_ok_str; (ok_literal || assumption))) |]);
+      apply value_fields_nil
+    | cbn; repeat split; (reflexivity || exact I) ]
+  | cbn; lia ].
+
+Theorem render_parses : forall r,
+  response_ok r -> exists j, Json.parse (render r) = Some j.
+Proof.
+  intros r Hr. destruct r as [t | v [c |] | | | | |]; cbn [response_ok] in Hr.
+  - eexists. unfold render. flat_response.
+  - destruct Hr as [H1 [H2 [H3 H4]]].
+    destruct (validity_reads_back v c H1 H2 H3 H4) as [j [cj [Hj _]]].
+    now exists j.
+  - eexists. unfold render. flat_response.
+  - eexists. unfold render. flat_response.
+  - eexists. unfold render. flat_response.
+  - eexists. unfold render. flat_response.
+  - eexists. unfold render. flat_response.
+  - eexists. unfold render. flat_response.
+Qed.
+
+(* Two of [response_ok]'s four conditions come for free on the validate path:
+   the claims were read out of a parsed payload, and the parser only produces
+   printable escape-free strings. *)
+Lemma of_json_claims_ok : forall j c,
+  json_ok j -> Claims.of_json j = Some c ->
+  ok_string (c_sub c) /\ ok_string (c_iss c).
+Proof.
+  intros j c Hj H. unfold Claims.of_json in H.
+  destruct (Json.get_str (lit ("sub"%string)) j) as [sub |] eqn:Es;
+    [| discriminate].
+  destruct (Json.get_str (lit ("iss"%string)) j) as [iss |] eqn:Ei;
+    [| discriminate].
+  destruct (Json.get_num (lit ("iat"%string)) j) as [iat |]; [| discriminate].
+  destruct (Json.get_num (lit ("exp"%string)) j) as [exp |]; [| discriminate].
+  injection H as E. subst c. cbn [c_sub c_iss].
+  split; [ eapply get_str_ok; [ exact Hj | exact Es ]
+         | eapply get_str_ok; [ exact Hj | exact Ei ] ].
+Qed.
+
+Lemma validated_claims_strings : forall ops kv mail cfg now body c,
+  handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+  ok_string (c_sub c) /\ ok_string (c_iss c).
+Proof.
+  intros ops kv mail cfg now body c H.
+  apply validate_verifies in H as [token Hv].
+  apply verify_accepts_only_signed in Hv
+    as [p [sg [pb [j [Hver [Hdp [Hj Hoj]]]]]]].
+  eapply of_json_claims_ok; [ eapply parse_json_ok, Hj | exact Hoj ].
+Qed.
+
+(* The other two do not, and the reason is worth recording: [N_of_decimal]
+   reads a numeral of any length, while [decimal_of_N] has a 32-digit budget,
+   so a claim set naming a timestamp at or above [10 ^ 32] would be printed
+   wrong -- the service would misreport a token it had just accepted.  No
+   token this service mints is like that ([minted] carries the bound), so
+   under [signing_oracle] the two hypotheses are discharged rather than
+   assumed; without it they are the honest statement of a printer limit. *)
+Corollary validated_claims_reach_the_client :
+  forall ops kv mail cfg now body c,
+    (c_iat c < 10 ^ 32)%N -> (c_exp c < 10 ^ 32)%N ->
+    handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+    exists j cj,
+      Json.parse (render (Validity true (Some c))) = Some j /\
+      Json.get (lit ("valid"%string)) j = Some (JBool true) /\
+      Json.get (lit ("claims"%string)) j = Some cj /\
+      Claims.of_json cj = Some c.
+Proof.
+  intros ops kv mail cfg now body c Hiat Hexp H.
+  destruct (validated_claims_strings _ _ _ _ _ _ _ H) as [Hsub Hiss].
+  now apply validity_reads_back.
+Qed.
+
+(* Nothing new is assumed by any of this: the round trip is a theorem about
+   [print] and [parse], and the response path uses no cryptography. *)
+Print Assumptions validated_claims_reach_the_client.

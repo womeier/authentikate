@@ -26,7 +26,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
 | Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
-| Verification | Structural proofs and tests exist; `login_then_validate` and `accepted_implies_authenticated` are proved and `Print Assumptions` reports both closed; unforgeability is assumed in `signing_oracle`, not proved; no timing proof |
+| Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store write-read coherence in `store_commits`, neither proved; no timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
 Commands from the repository root:
@@ -132,10 +132,14 @@ boundary; this is not a proof that the whole service is constant-time.
 - `Json.v` — enough JSON to read a two-field request object and write a
   response (including nested claims). A parser on bytes, total, returning an option. Only a
   canonical printer, so the round-trip proof does not need a general one.
-  `JsonProofs.v` has the round trip: `parse (print (JObj fs)) = Some (JObj fs)`
-  for flat objects, axiom-free, under string well-formedness, fresh keys,
-  fewer than 15 fields and numeric values below `10^32`. It is not a general
-  round trip for arbitrary bytes or nested objects.
+  `JsonProofs.v` has the round trip: `parse (print j) = Some j`, axiom-free,
+  at any depth, under a recursive well-formedness predicate (`value_ok`:
+  printable escape-free strings, numbers below `10^32`, keys fresh within
+  each object) and a fuel measure (`value_fuel j <= 16`, the parser's
+  budget — a validation response costs nine). The flat statement the rest of
+  the development uses, `parse_print_obj`, is a corollary. It is not a round
+  trip for arbitrary bytes: `print (parse b) = b` is false for any `b`
+  carrying whitespace or an escape.
 - `Claims.v` — `exp`/`iat` checks against a clock the host supplies, on `N`.
 - `Jwt.v` — the compact JWS: split on `.`, decode the halves, check the
   header, hand the signing input to the crypto operations.
@@ -608,11 +612,12 @@ provider correctness, storage consistency or deployment security:
 4. **Expiry is honest.**  `validate` answers `valid: true` only if the
    signature check passed *and* `exp > now`.
 5. **Round-trips.**  `decode (encode bs) = Some bs` for base64url, and
-   `parse (print (JObj fs)) = Some (JObj fs)` for flat objects — values are
-   well-formed strings, numbers or booleans, keys fresh, fewer than 15 fields,
-   numbers below `10^32`. Both proved under their stated assumptions. The
-   flat theorem covers candidate claims/token objects, not the nested
-   validation response or arbitrary byte strings.
+   `parse (print j) = Some j` for any `j` whose strings are printable and
+   escape-free, whose numbers are below `10^32`, whose keys are fresh within
+   each object, and whose `value_fuel` is at most the parser's 16 — nesting
+   included. Both proved under their stated assumptions. It is not a round
+   trip for arbitrary byte strings, and the other direction (`print (parse b)
+   = b`) is false by design: whitespace and field order are not preserved.
 6. **Guess bounds under backoff.** See [Rate limiting](#rate-limiting).
    These are policy trace theorems, not bounds on this running service.
 7. **Creation requires acknowledgment.** `created_requires_persistence`
@@ -624,6 +629,20 @@ provider correctness, storage consistency or deployment security:
    was found and Argon2 accepted the password supplied with it, and pins the
    claims to `MkClaims email iss iat (iat + ttl)`. It rests on an assumed
    signing oracle; see below.
+9. **The stored record reads back.** `enrollment_record_decode` proves that
+   what signup writes is a record naming the email signup was asked for,
+   carrying the component's salt, parameters and tag. Axiom-free, and the
+   reason `Store.enrollment_record` prints its own eight-field object instead
+   of prepending an email to the provider's JSON; see below.
+10. **The response reads back.** `render_parses` proves the service never puts
+   a body on the wire its own parser would reject, and
+   `validated_claims_reach_the_client` proves a `valid: true` response carries
+   a `claims` object that reads back as exactly the claim set `validate`
+   accepted. Both axiom-free, on the general round trip above. The two
+   timestamp bounds are hypotheses: `N_of_decimal` reads a numeral of any
+   length while `decimal_of_N` has a 32-digit budget, so a claim set naming a
+   timestamp at or above `10^32` would be printed wrong. No token this service
+   mints is like that, so under `signing_oracle` the bounds are discharged.
 
 Not established without an assumption: forgery rejection. Merely assuming a
 verifier is a function says nothing about which signatures it accepts.
@@ -726,6 +745,72 @@ its subject), revocation (which `validate` cannot express, since it reads no
 store), which login issued the token (`issued` and `login_body` are
 existential), and store honesty.
 
+### The account lifecycle
+
+`created_requires_persistence` said a 201 means an acknowledged write. It did
+not say the account can then be used, which is what a caller of `signup`
+wants, and signup was the one endpoint with no end-to-end theorem. It is now
+proved:
+
+```coq
+Corollary signup_then_validate :
+  forall ops kv kv' mail cfg now now' d email password body,
+    argon2_spec ops ->
+    store_commits kv kv' ->
+    crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
+    ok_string (cfg_iss cfg) ->
+    (now' + cfg_ttl cfg < 10 ^ 32)%N ->
+    (d < cfg_ttl cfg)%N ->
+    parse_request RtSignup body = Signup email password ->
+    handle ops kv mail cfg now RtSignup body = Created ->
+    exists token c,
+      handle ops kv' mail cfg now' RtLogin body = Token token /\
+      handle ops kv' mail cfg (now' + d) RtValidate (render (Token token))
+        = Validity true (Some c) /\
+      c_sub c = email.
+```
+
+Three things stand between a 201 and a usable account, and they are dealt
+with differently.
+
+`argon2_spec` is assumed: an enrollment verifies against the password it was
+made from. It is the counterpart of `crypto_spec`, correctness and not
+security, and is stated over `Store.public_of_json` — the component's own
+output, with no serialization of this module's in between — so that a bug in
+`enrollment_record` cannot hide inside the assumption.
+
+`store_commits` is assumed, and is the interesting one. There is no state in
+the model, so "the account is there afterwards" cannot be said of one store;
+it is said of two, the store signup ran against and the store the later login
+runs against, related by `kv_set kv key v = Some true -> kv_get kv' key =
+Some (Some v)`. That is the production storage question written down rather
+than answered. It does not say the write is durable, that no other writer
+touched the key in between, that get-then-set is atomic, or that a second
+signup for the same email loses: two concurrent signups can both reach
+`Created` against stores that each satisfy it.
+
+The serialization is proved, and this cost a code change.
+`Store.enrollment_record` used to prepend an email field to the Argon2
+component's JSON; it now reads the seven public fields and prints its own
+eight-field object (`Store.record_json`). For the Rust provider the stored
+bytes are identical — the field order is unchanged — but the shape is now one
+`parse_print_obj` applies to, which is what `enrollment_record_decode` needs:
+a provider field holding a nested object or a number wider than a `u32` is
+printable and reparsable, but not by any theorem in this development. The
+same change bounds what a provider can put into storage, and makes the
+refusal of a provider-supplied email explicit rather than an accident of
+duplicate-key handling.
+
+The signing hypothesis is not decoration: `Jwt.sign` returning `None` is a
+500, so without it the honest conclusion would be "a token or an internal
+error". `login_then_validate_wire` is `login_then_validate` restated over
+`render (Token token)` — the object it built by hand is the response the host
+sends, and saying so costs one `unfold`.
+
+Not covered: liveness (every hypothesis is an implication), uniqueness, and
+anything about concurrency.
+
 `Print Assumptions login_then_validate` already runs in the proof file. That
 turns "what are we actually trusting" into output rather than a comment, and
 it shrinks visibly as the lemmas land.
@@ -804,7 +889,7 @@ Completed foundations:
 3. Component merge/pruning/WIT embedding; custom crypto and standard keyvalue
    imports. Optional Rust components build separately, not as Nix packages.
 4. All three Rocq operations, public enrollment JSON, acknowledged writes,
-   structural proofs, base64 and conditional flat JSON/decimal round trips.
+   structural proofs, base64 and conditional JSON/decimal round trips.
 5. Rust web demo with the extracted service, component-level Rust crypto/email
    composition, per-instance key provisioning and ephemeral storage; HTTP tests.
 6. CI workflow aligned with component builds, HTTP/Rust tests and Wasm artifact
@@ -814,13 +899,18 @@ Remaining work, in priority order:
 
 1. Decide the operational questions the proofs cannot settle: the Host/Origin
    policy's final shape, and backoff keying (step 4 below). Both outweigh
-   further proof work for actual security. The security direction is now
-   proved (`accepted_implies_authenticated`); what it does not cover — replay,
-   revocation, timing — is either a protocol decision or needs measurement,
-   not another theorem of this shape.
+   further proof work for actual security. The security direction is proved
+   (`accepted_implies_authenticated`) and so is the lifecycle
+   (`signup_then_validate`); what they do not cover — replay, revocation,
+   timing — is either a protocol decision or needs measurement, not another
+   theorem of this shape. The nested JSON round trip is done
+   (`validated_claims_reach_the_client`), so the response path is covered too.
 2. Define production storage/effect semantics and atomic create-if-absent;
-   test concurrent writers beyond the synchronous demo. Decide whether account
-   existence disclosure is acceptable or needs a confirmation-mail flow.
+   test concurrent writers beyond the synchronous demo. `store_commits` states
+   the read-back promise the lifecycle theorem needs and nothing more — a
+   provider still has to satisfy it, and atomicity and durability are not in
+   it. Decide whether account existence disclosure is acceptable or needs a
+   confirmation-mail flow.
 3. Define the threat/leakage model, choose Argon2 policy, implement timing
    measurements (`dudect`-style) and re-hash-on-login migration. No timing
    guarantee should precede evidence and a precise scope.

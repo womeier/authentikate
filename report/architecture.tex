@@ -73,6 +73,11 @@
   (an accepted token implies a credential check), under an assumed
   \source{components/service/theories/Proofs.v\#L684}{\code{signing_oracle}}:
   unforgeability is assumed, not proved.\par
+  \source{components/service/theories/Proofs.v\#L1182}{\code{signup_then_validate}}
+  carries a created account through login to validation, under an assumed
+  \source{components/service/theories/Proofs.v\#L1083}{\code{argon2_spec}} and
+  \source{components/service/theories/Proofs.v\#L1106}{\code{store_commits}}
+  (a write that was acknowledged reads back; neither atomicity nor durability).\par
   No whole-service constant-time, replay, revocation, durable-storage,
   atomic-creation or actual-email-delivery theorem is established.
 };
@@ -94,10 +99,11 @@
   \textbf{JSON parser and canonical printer} \hfill Rocq\par
   \ty{parse : bytes -> option json}\par
   \ty{print : json -> bytes}\par\smallskip
-  Conditional flat-object round trip: qualifying strings and keys, bounded
-  field count and decimal values. Not arbitrary / nested JSON.\par
+  Conditional round trip at any depth: qualifying strings and keys, bounded
+  decimal values, and a fuel budget of 16. Not arbitrary bytes; the
+  print-after-parse direction is false by design.\par
   \source{components/service/theories/Json.v}{Implementation}\quad
-  \source{components/service/theories/JsonProofs.v\#L456}{Round-trip statement}\par
+  \source{components/service/theories/JsonProofs.v\#L527}{Round-trip statement}\par
   \source{components/service/adapters/service.wat}{Byte-level adapter; no JSON host parser}
 };
 \node[proved] (protocol) at (22,-8) {
