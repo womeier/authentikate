@@ -78,24 +78,13 @@ fn enrollment_with_salt(password: &[u8], salt: Vec<u8>) -> Result<Vec<u8>, Error
     ).into_bytes())
 }
 
-/// Translate the knobs, and say which one was wrong.  `argon2::Params` checks
-/// the interdependencies (memory against parallelism, tag length against the
-/// variant's minimum), and its error does not name the offending field, so
-/// the obvious cases are checked here first to keep the message useful.
+/// Translate and validate the knobs using Argon2's parameter constraints.
 fn params(p: &WitParams) -> Result<Params, Error> {
-    let bad = |m: &str| Error::InvalidParams(m.to_string());
-
-    if p.parallelism < 1 {
-        return Err(bad("parallelism must be at least 1"));
-    }
-    if p.iterations < 1 {
-        return Err(bad("iterations must be at least 1"));
-    }
-    if p.memory_kib < 8 * p.parallelism {
-        return Err(bad("memory-kib must be at least 8 * parallelism"));
-    }
-    if p.tag_length < 4 {
-        return Err(bad("tag-length must be at least 4 bytes"));
+    // argon2 0.5.3 multiplies parallelism before checking its upper bound.
+    if p.parallelism > Params::MAX_P_COST {
+        return Err(Error::InvalidParams(
+            argon2::Error::ThreadsTooMany.to_string(),
+        ));
     }
 
     Params::new(
@@ -217,6 +206,15 @@ export!(Component);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_parallelism_is_rejected_without_panicking() {
+        let p = WitParams {
+            parallelism: u32::MAX,
+            ..RECOMMENDED
+        };
+        assert!(matches!(params(&p), Err(Error::InvalidParams(_))));
+    }
 
     fn record(password: &[u8], salt: Vec<u8>) -> serde_json::Value {
         let bytes = enrollment_with_salt(password, salt).unwrap();
