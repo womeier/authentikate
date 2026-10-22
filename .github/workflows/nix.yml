@@ -32,16 +32,8 @@ jobs:
       - name: Build development environment including MetaRocq and CertiRocq
         run: nix develop --profile dev-profile -c true
 
-      - name: Cache development environment
-        if: github.event_name != 'pull_request'
-        run: cachix push womeier dev-profile
-
       - name: Build compiled host dependencies
         run: nix build --print-build-logs .#authentikate-host-deps --out-link host-deps
-
-      - name: Cache compiled host dependencies
-        if: github.event_name != 'pull_request'
-        run: cachix push womeier host-deps
 
       # The derivation checks Rocq proofs, primitive adapters and extracted runtime.
       - name: Build and test service component
