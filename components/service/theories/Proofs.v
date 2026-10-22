@@ -1169,6 +1169,59 @@ Proof.
   reflexivity.
 Qed.
 
+Lemma record_email_safe_ok : forall email,
+  Store.record_email_safe email = true <-> ok_string email.
+Proof.
+  intros email.
+  assert (E : Store.record_email_safe email = ok_stringb email).
+  { induction email as [| b rest IH]; [reflexivity |].
+    change (andb (ok_byteb b) (Store.record_email_safe rest) =
+            andb (ok_byteb b) (ok_stringb rest)).
+    now rewrite IH. }
+  rewrite E. clear E. split; [apply ok_stringb_ok |].
+  intros H. induction email as [| b rest IH]; [reflexivity |].
+  cbn [ok_stringb]. apply andb_true_iff. split.
+  - apply (proj2 (ok_string_pointwise _) H). unfold bytes_In. now left.
+  - apply IH. apply ok_string_pointwise. intros c Hin.
+    apply (proj2 (ok_string_pointwise _) H). unfold bytes_In in *.
+    now right.
+Qed.
+
+(* Equality with the former print/decode implementation for parser-safe emails,
+   including malformed provider JSON and the exact bytes on success. *)
+Theorem enrollment_record_equivalent : forall email public_json,
+  ok_string email ->
+  Store.enrollment_record email public_json =
+  match Json.parse public_json with
+  | Some j =>
+      match Json.get (lit ("email"%string)) j, Store.public_of_json j with
+      | None, Some p =>
+          let v := Json.print (Store.record_json email p) in
+          match Store.decode v with
+          | Some _ => Some v
+          | None => None
+          end
+      | _, _ => None
+      end
+  | None => None
+  end.
+Proof.
+  intros email pj He. unfold Store.enrollment_record.
+  destruct (Json.parse pj) as [j |] eqn:Ej; [| reflexivity].
+  destruct (Json.get (lit ("email"%string)) j); [reflexivity |].
+  destruct (Store.public_of_json j) as [p |] eqn:Ep; [| reflexivity].
+  rewrite (proj2 (record_email_safe_ok email) He).
+  pose proof (public_of_json_facts _ _ (parse_json_ok _ _ Ej) Ep)
+    as [Hs [Ht [B1 [B2 [B3 [B4 B5]]]]]].
+  unfold Store.decode.
+  rewrite record_json_round_trip by assumption.
+  rewrite (of_json_record_json _ _ _ Ep).
+  destruct (Base64.decode (pr_salt64 p));
+    destruct (Base64.decode (pr_tag64 p)); reflexivity.
+Qed.
+
+Print Assumptions enrollment_record_equivalent.
+
 (* The whole of it: what signup wrote is a record naming the email signup was
    asked for, carrying the salt, parameters and tag the component returned.
    The email is the part that matters -- [Store.stored] answers [Absent] for
@@ -1184,7 +1237,7 @@ Lemma enrollment_record_decode : forall email pj v,
     Base64.decode (pr_tag64 p) = Some tag /\
     Store.decode v = Some (MkUser email salt (pr_params p) (Secret.of_bytes tag)).
 Proof.
-  intros email pj v He H. unfold Store.enrollment_record in H.
+  intros email pj v He H. rewrite enrollment_record_equivalent in H by exact He.
   destruct (Json.parse pj) as [j |] eqn:Ej; [| discriminate].
   destruct (Json.get (lit ("email"%string)) j) as [x |]; [discriminate |].
   destruct (Store.public_of_json j) as [p |] eqn:Ep; [| discriminate].
@@ -1223,6 +1276,15 @@ Proof.
   destruct (Json.get_str (lit ("password"%string)) j) as [pw |];
     [| discriminate].
   injection H as E1 E2. now subst.
+Qed.
+
+(* Every email reaching enrollment from signup passes the defensive guard. *)
+Corollary signup_email_record_safe : forall body email password,
+  parse_request RtSignup body = Signup email password ->
+  Store.record_email_safe email = true.
+Proof.
+  intros body email password H. apply record_email_safe_ok.
+  exact (login_email_ok _ _ _ (signup_is_login _ _ _ H)).
 Qed.
 
 (* The second trust boundary, and the counterpart of [crypto_spec]: what the

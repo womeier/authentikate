@@ -143,19 +143,30 @@ Definition record_json (email : bytes) (p : public_record) : json :=
          (lit ("parallelism"%string), JNum (ap_parallelism (pr_params p)));
          (lit ("tag_length"%string), JNum (ap_tag_length (pr_params p))) ].
 
+(* Exactly the parser's string-content invariant, not merely printable ASCII.
+   Request emails satisfy it; arbitrary callers of [enrollment_record] need not. *)
+Fixpoint record_email_safe (email : bytes) : bool :=
+  match email with
+  | BS.EmptyString => true
+  | BS.String b rest =>
+      andb (andb (negb (Byte.eqb b Json.quote))
+                 (andb (negb (Byte.eqb b Json.backslash)) (Json.printable_ascii b)))
+           (record_email_safe rest)
+  end.
+
 Definition enrollment_record (email public_json : bytes) : option bytes :=
   match Json.parse public_json with
   | Some j =>
       match Json.get (lit ("email"%string)) j, public_of_json j with
       | None, Some p =>
-          let v := Json.print (record_json email p) in
-          (* Written only if it reads back: the write path does not store what
-             the read path would refuse.  The base64 fields are decoded for
-             the first time here. *)
-          match decode v with
-          | Some _ => Some v
-          | None => None
-          end
+          if record_email_safe email then
+            (* The parser established safe salt/tag strings, and [public_of_json]
+               checked the numeric bounds.  Only base64 validation remains. *)
+            match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
+            | Some _, Some _ => Some (Json.print (record_json email p))
+            | _, _ => None
+            end
+          else None
       | _, _ => None
       end
   | None => None

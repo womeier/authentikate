@@ -48,6 +48,85 @@ Example enrollment_rejects_invalid :
     [None; None; None].
 Proof. vm_compute. reflexivity. Qed.
 
+(* Reject quote injection even for callers bypassing [parse_request]. *)
+Example enrollment_rejects_quote_injection :
+  Store.enrollment_record (lit "user"",""extra"":""value"%string)
+    public_enrollment = None.
+Proof. vm_compute. reflexivity. Qed.
+
+Example enrollment_rejects_unsafe_email_bytes :
+  map (fun b => Store.enrollment_record (BS.String (byte_of_N b) BS.EmptyString)
+                public_enrollment)
+    [0; 31; 34; 92; 127; 128; 255] =
+    [None; None; None; None; None; None; None].
+Proof. vm_compute. reflexivity. Qed.
+
+Example enrollment_accepts_safe_email_edges :
+  map (fun e => Store.enrollment_record e public_enrollment)
+    [BS.EmptyString; lit " ~"%string] =
+  map (fun e => Some (Json.print (Store.record_json e
+    (MkPublic (lit "c2FsdA"%string) (lit "dGFn"%string)
+      (MkParams 2 19456 2 1 3))))) [BS.EmptyString; lit " ~"%string].
+Proof. vm_compute. reflexivity. Qed.
+
+Definition enrollment_fixture (salt tag : bytes) (p : argon2_params)
+    (extra : list (bytes * json)) : bytes :=
+  Json.print (JObj
+    ([(lit "salt"%string, JStr salt); (lit "tag"%string, JStr tag);
+      (lit "algorithm"%string, JNum (ap_algorithm p));
+      (lit "memory_kib"%string, JNum (ap_memory_kib p));
+      (lit "iterations"%string, JNum (ap_iterations p));
+      (lit "parallelism"%string, JNum (ap_parallelism p));
+      (lit "tag_length"%string, JNum (ap_tag_length p))] ++ extra)).
+
+Example enrollment_checks_every_u32_bound :
+  map (fun p => Store.enrollment_record email
+    (enrollment_fixture (lit "c2FsdA"%string) (lit "dGFn"%string) p []))
+    [MkParams 4294967296 1 1 1 1; MkParams 1 4294967296 1 1 1;
+     MkParams 1 1 4294967296 1 1; MkParams 1 1 1 4294967296 1;
+     MkParams 1 1 1 1 4294967296] = [None; None; None; None; None].
+Proof. vm_compute. reflexivity. Qed.
+
+Example enrollment_preserves_u32_edges_and_ignores_extra_fields :
+  map (fun n =>
+    let p := MkParams n n n n n in
+    Store.enrollment_record email
+      (enrollment_fixture (lit "c2FsdA"%string) (lit "dGFn"%string) p
+        [(lit "ignored"%string, JObj [(lit "nested"%string, JBool true)])]))
+    [0; 4294967295] =
+  map (fun n => Some (Json.print (Store.record_json email
+    (MkPublic (lit "c2FsdA"%string) (lit "dGFn"%string)
+      (MkParams n n n n n))))) [0; 4294967295].
+Proof. vm_compute. reflexivity. Qed.
+
+Example enrollment_rejects_provider_email_of_any_type :
+  map (fun value => Store.enrollment_record email
+    (enrollment_fixture (lit "c2FsdA"%string) (lit "dGFn"%string)
+      (MkParams 2 19456 2 1 3) [(lit "email"%string, value)]))
+    [JStr BS.EmptyString; JNum 0; JBool false; JObj []] =
+    [None; None; None; None].
+Proof. vm_compute. reflexivity. Qed.
+
+Example enrollment_checks_both_base64_fields :
+  map (fun pair => Store.enrollment_record email
+    (enrollment_fixture (fst pair) (snd pair) (MkParams 2 19456 2 1 3) []))
+    [(lit "+invalid"%string, lit "dGFn"%string);
+     (lit "c2FsdA"%string, lit "+invalid"%string);
+     (lit "A"%string, lit "dGFn"%string);
+     (lit "c2FsdA"%string, lit "A"%string)] = [None; None; None; None].
+Proof. vm_compute. reflexivity. Qed.
+
+(* No new salt/tag length policy: even empty decoded fields retain the old
+   behavior, and successful validation stores their original encoded bytes. *)
+Example enrollment_preserves_decodable_base64_bytes :
+  map (fun pair => Store.enrollment_record email
+    (enrollment_fixture (fst pair) (snd pair) (MkParams 2 19456 2 1 3) []))
+    [(BS.EmptyString, BS.EmptyString); (lit "_w"%string, lit "-w"%string)] =
+  map (fun pair => Some (Json.print (Store.record_json email
+    (MkPublic (fst pair) (snd pair) (MkParams 2 19456 2 1 3)))))
+    [(BS.EmptyString, BS.EmptyString); (lit "_w"%string, lit "-w"%string)].
+Proof. vm_compute. reflexivity. Qed.
+
 Section Service.
 Variable cfg : config.
 
