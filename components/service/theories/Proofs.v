@@ -654,3 +654,239 @@ Qed.
    [crypto_spec], as a hypothesis of the theorem rather than as an axiom of
    the development. *)
 Print Assumptions login_then_validate.
+
+(* ---- the security direction: accepted means authenticated --------------- *)
+
+(* Everything above is correctness: a token this service minted validates.
+   The property a caller actually wants is the converse -- that a token that
+   validates was minted by this service, for an email whose password was
+   checked.  That direction cannot be proved from [crypto_spec], which says
+   only that signing produces something verification accepts; it says nothing
+   about what else verification accepts.  So it needs an assumption, and the
+   assumption is the whole of the security argument, stated where it can be
+   read.
+
+   It is deliberately a record of its own rather than a second field of
+   [crypto_spec].  Adding it there would give [crypto_spec] a [signed] index
+   and make [login_then_validate] -- which is correctness, and needs no
+   unforgeability -- carry an assumption it does not use.  Keeping them apart
+   keeps each theorem's hypotheses honest about what it rests on. *)
+
+(* Verification accepts only messages the signer signed.  For Ed25519 this is
+   strong unforgeability, which holds against an adversary who does not have
+   the private key: here, anything outside the component, since the key never
+   leaves the crypto provider and only [Key.t] handles cross the boundary.
+
+   Note what [signed] is not: it is not "was passed to [ed25519_sign]".  It is
+   a predicate the caller chooses, and the theorems below are only as strong
+   as the predicate it is instantiated with.  Instantiated with [fun _ => True]
+   the assumption is free and the conclusions are empty. *)
+Record signing_oracle (ops : crypto_ops) (pk : bytes) (signed : bytes -> Prop)
+  : Prop :=
+  MkOracle {
+    verify_only_signed : forall msg sg,
+      ed25519_verify ops pk msg sg = Some true -> signed msg
+  }.
+
+(* The predicate worth instantiating it with: the messages this service signs.
+   Read as a description of the [login] path -- a request parsed as a login, a
+   store lookup that found a record, an Argon2 check that said yes -- plus the
+   exact bytes [Jwt.sign] hands the signer for that claim set.
+
+   The clock bound is inside the predicate rather than a hypothesis of the
+   theorems because [now] is existential here: a token's claims do not say
+   which request produced them, so the bound has to travel with the claim set
+   it constrains.  That makes the assumption marginally stronger (verification
+   accepts only messages minted under a representable clock), which is true of
+   any deployment whose clock fits in 32 digits.
+
+   What it does not say, and what no theorem here can: that the record the
+   store returned is the record signup wrote for that email.  As in
+   [no_token_without_verify], the store is not assumed honest. *)
+Definition minted (ops : crypto_ops) (kv : store_ops) (cfg : config)
+                  (msg : bytes) : Prop :=
+  exists now email password body u,
+    parse_request RtLogin body = Login email password /\
+    Store.stored kv email = Found u /\
+    argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true /\
+    (now + cfg_ttl cfg < 10 ^ 32)%N /\
+    msg = Jwt.signing_input Jwt.header_b64
+            (Base64.encode (Json.print (Claims.to_json
+              (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)%N)))).
+
+(* [minted] is not vacuous: a successful login mints a message satisfying it.
+   Worth proving, because an assumption whose predicate nothing satisfies is
+   an assumption that something is unforgeable *and* never signed, and the
+   theorems below would be about the empty set of tokens. *)
+Lemma login_mints : forall ops kv mail cfg now body token,
+  (now + cfg_ttl cfg < 10 ^ 32)%N ->
+  handle ops kv mail cfg now RtLogin body = Token token ->
+  exists email, minted ops kv cfg
+    (Jwt.signing_input Jwt.header_b64
+      (Base64.encode (Json.print (Claims.to_json
+        (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)%N))))).
+Proof.
+  intros ops kv mail cfg now body token Hb H.
+  apply no_token_without_verify in H as [email [password [u [Hp [Hs Ha]]]]].
+  exists email, now, email, password, body, u.
+  repeat split; assumption.
+Qed.
+
+(* Recovering the signed message from the dot-joined form: the header segment
+   is pinned, so the payload is determined. *)
+Lemma signing_input_inj : forall h p q,
+  Jwt.signing_input h p = Jwt.signing_input h q -> p = q.
+Proof.
+  intros h p q H. unfold Jwt.signing_input in H.
+  apply bytes_append_inj_l in H. injection H as H. exact H.
+Qed.
+
+(* What [verify] establishes before it will return claims.  The header
+   comparison is what makes [Jwt.header_b64] appear here rather than a
+   variable: a token with any other header never reaches the signature check.
+
+   The honest limit is in the last three conjuncts.  The payload is known to
+   decode and to parse to something [Claims.of_json] reads as [c] -- not to be
+   [Json.print (Claims.to_json c)].  The parser accepts extra fields and
+   whitespace, so distinct payloads can yield the same claims, and this lemma
+   cannot pretend otherwise.  Pinning the payload needs the signing oracle
+   below, which says those other payloads were never signed. *)
+Lemma verify_accepts_only_signed : forall ops pk token c,
+  Jwt.verify ops pk token = Some c ->
+  exists p sg pb j,
+    ed25519_verify ops pk (Jwt.signing_input Jwt.header_b64 p) sg = Some true /\
+    Base64.decode p = Some pb /\
+    Json.parse pb = Some j /\
+    Claims.of_json j = Some c.
+Proof.
+  intros ops pk token c H.
+  unfold Jwt.verify in H.
+  destruct (split_on dot token) as [| h [| p [| s [| extra rest]]]];
+    try discriminate.
+  destruct (bytes_eqb h Jwt.header_b64) eqn:Hh; [| discriminate].
+  apply bytes_eqb_eq in Hh. subst h.
+  destruct (Base64.decode s) as [sg |]; [| discriminate].
+  destruct (ed25519_verify ops pk (Jwt.signing_input Jwt.header_b64 p) sg)
+    as [[|] |] eqn:Hv; try discriminate.
+  destruct (Base64.decode p) as [pb |] eqn:Hp; [| discriminate].
+  destruct (Json.parse pb) as [j |] eqn:Hj; [| discriminate].
+  exists p, sg, pb, j. repeat split; assumption.
+Qed.
+
+(* A [Validity true] answer came from a token that verified.  [validate] reads
+   no store and takes no other path to a true answer. *)
+Lemma validate_verifies : forall ops kv mail cfg now body c,
+  handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+  exists token, Jwt.verify ops (cfg_pubkey cfg) token = Some c.
+Proof.
+  intros ops kv mail cfg now body c.
+  unfold handle.
+  destruct (parse_request RtValidate body)
+    as [email password | token | | email password] eqn:Hp.
+  - destruct (Store.stored kv email) as [u | |]; intros H; try discriminate;
+      exfalso; eapply login_check_not_validity, H.
+  - destruct (Jwt.verify ops (cfg_pubkey cfg) token) as [c' |] eqn:Hv.
+    + destruct (andb (Claims.fresh now c') (bytes_eqb (c_iss c') (cfg_iss cfg)));
+        intros H; inversion H; subst.
+      exists token. exact Hv.
+    + intros H; discriminate.
+  - intros H; discriminate.
+  - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
+    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (Store.enrollment_record email v) as [record |];
+      try (intros H; discriminate).
+    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (send_email mail (cfg_email_from cfg) email
+      (lit ("Welcome to Authentikate"%string))
+      (lit ("Your Authentikate account has been created."%string))) as [[|] |];
+      intros H; discriminate.
+Qed.
+
+(* The oracle, applied at the level of [handle]: an accepted token's payload
+   was signed.  Still parametric in [signed], so what it buys depends entirely
+   on the predicate; the theorem after this one is the instance that says
+   something. *)
+Theorem accepted_was_signed :
+  forall ops kv mail cfg now body c (signed : bytes -> Prop),
+    signing_oracle ops (cfg_pubkey cfg) signed ->
+    handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+    exists p pb j,
+      signed (Jwt.signing_input Jwt.header_b64 p) /\
+      Base64.decode p = Some pb /\
+      Json.parse pb = Some j /\
+      Claims.of_json j = Some c.
+Proof.
+  intros ops kv mail cfg now body c signed [Horacle] H.
+  apply validate_verifies in H as [token Hv].
+  apply verify_accepts_only_signed in Hv
+    as [p [sg [pb [j [Hver [Hdp [Hj Hoj]]]]]]].
+  exists p, pb, j.
+  split; [ eapply Horacle, Hver | repeat split; assumption ].
+Qed.
+
+(* The security statement.  An accepted token means some login happened: the
+   email in the claims was looked up, a record was found, and Argon2 accepted
+   the password supplied with it.  The claims are pinned exactly -- subject,
+   issuer, and an [exp] that is [iat + ttl] -- which is where the signing
+   oracle does its work, by ruling out the other payloads that
+   [verify_accepts_only_signed] could not.
+
+   Two hypotheses, and both are the point:
+     - the oracle, instantiated at [minted ops kv cfg].  Ed25519's
+       unforgeability is doing the work, and it is assumed, not proved.
+     - [ok_string (cfg_iss cfg)], the same printable-ASCII obligation
+       [login_then_validate] carries, for the same reason.
+
+   What it does not say.  Nothing about replay: a token is a bearer token and
+   this says it was issued, not that it is being presented by whoever it was
+   issued to.  Nothing about revocation, which [validate] cannot express.
+   Nothing about which login: [issued] and [login_body] are existential, so
+   two sessions for one email are indistinguishable in this statement.  And
+   nothing about the store's honesty, as ever. *)
+Theorem accepted_implies_authenticated :
+  forall ops kv mail cfg now body c,
+    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    ok_string (cfg_iss cfg) ->
+    handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+    exists email password u login_body issued,
+      parse_request RtLogin login_body = Login email password /\
+      Store.stored kv email = Found u /\
+      argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true /\
+      c = MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N /\
+      c_sub c = email /\
+      Claims.fresh now c = true.
+Proof.
+  intros ops kv mail cfg now body c Horacle Hiss H.
+  pose proof (valid_implies_fresh_and_ours _ _ _ _ _ _ _ H) as [Hfresh _].
+  apply (accepted_was_signed _ _ _ _ _ _ _ _ Horacle) in H
+    as [p [pb [j [Hsigned [Hdp [Hj Hoj]]]]]].
+  destruct Hsigned
+    as [issued [email [password [lbody [u [Hp [Hs [Ha [Hb Hmsg]]]]]]]]].
+  apply signing_input_inj in Hmsg. subst p.
+  rewrite base64_round_trip in Hdp.
+  (* [injection] here would normalize [Json.print] into its byte chain and
+     bury the goal; [congruence] keeps the terms as written. *)
+  assert (Hpb : Json.print (Claims.to_json
+      (MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N)) = pb)
+    by congruence.
+  rewrite <- Hpb in Hj.
+  rewrite claims_round_trip in Hj;
+    [ | cbn [c_sub]; eapply login_email_ok, Hp
+      | cbn [c_iss]; exact Hiss
+      | cbn [c_iat]; lia
+      | cbn [c_exp]; exact Hb ].
+  assert (Hj' : Claims.to_json
+      (MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N) = j)
+    by congruence.
+  rewrite <- Hj', of_json_to_json in Hoj.
+  assert (Hc : MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N = c)
+    by congruence.
+  exists email, password, u, lbody, issued.
+  repeat split;
+    [ exact Hp | exact Hs | exact Ha | now rewrite <- Hc
+    | now rewrite <- Hc | exact Hfresh ].
+Qed.
+
+(* Again, no axioms: the cryptographic assumption travels in [signing_oracle]
+   and the clock bound inside [minted], both as hypotheses. *)
+Print Assumptions accepted_implies_authenticated.

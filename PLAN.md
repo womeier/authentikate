@@ -26,7 +26,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
 | Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
-| Verification | Structural proofs and tests exist; `login_then_validate` is proved and `Print Assumptions` reports it closed; no whole-service unforgeability or timing proof |
+| Verification | Structural proofs and tests exist; `login_then_validate` and `accepted_implies_authenticated` are proved and `Print Assumptions` reports both closed; unforgeability is assumed in `signing_oracle`, not proved; no timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
 Commands from the repository root:
@@ -619,10 +619,19 @@ provider correctness, storage consistency or deployment security:
    proves absent raw key, successful enrollment/record construction and
    `kv_set` returning `Some true`. It proves neither durability nor uniqueness.
 
-Not established: forgery rejection or unforgeability. Merely assuming a
+8. **Accepted implies authenticated.** `accepted_implies_authenticated`
+   proves that a `valid: true` answer means some login was parsed, a record
+   was found and Argon2 accepted the password supplied with it, and pins the
+   claims to `MkClaims email iss iat (iat + ttl)`. It rests on an assumed
+   signing oracle; see below.
+
+Not established without an assumption: forgery rejection. Merely assuming a
 verifier is a function says nothing about which signatures it accepts.
 `crypto_spec` below states sign/verify correctness, not security; tests with
-tampered tokens are useful evidence, not a cryptographic theorem.
+tampered tokens are useful evidence, not a cryptographic theorem. The
+unforgeability-shaped assumption is isolated in `signing_oracle`
+(`Proofs.v#L684`) and used only by the security-direction theorems. Nothing
+here establishes replay or revocation properties.
 
 Needs a hypothesis from a `crypto_spec` bundle: that `ed25519_verify` accepts
 what `ed25519_sign` produced under the matching key. A JWT sign/verify round
@@ -666,9 +675,56 @@ inside the JSON object `validate` takes, and `claims_round_trip`, which
 discharges `parse_print_obj`'s four side conditions for a claim set.
 
 This is correctness, not security. It says tokens this service mints are
-accepted; it says nothing about what is rejected. The converse — accepted
-implies minted implies authenticated — needs a second `crypto_spec` field
-saying that only signed messages verify, and is the next proof worth having.
+accepted; it says nothing about what is rejected.
+
+### The security direction
+
+The converse — accepted implies minted implies authenticated — is proved, and
+needs an assumption `login_then_validate` does not:
+
+```coq
+Record signing_oracle (ops : crypto_ops) (pk : bytes) (signed : bytes -> Prop) :=
+  MkOracle { verify_only_signed : forall msg sg,
+    ed25519_verify ops pk msg sg = Some true -> signed msg }.
+
+Theorem accepted_implies_authenticated :
+  forall ops kv mail cfg now body c,
+    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    ok_string (cfg_iss cfg) ->
+    handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
+    exists email password u login_body issued,
+      parse_request RtLogin login_body = Login email password /\
+      Store.stored kv email = Found u /\
+      argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true /\
+      c = MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N /\
+      c_sub c = email /\
+      Claims.fresh now c = true.
+```
+
+`signing_oracle` is a record of its own, not a second `crypto_spec` field:
+adding it there would give `crypto_spec` a `signed` index and make
+`login_then_validate` — correctness, which needs no unforgeability — carry an
+assumption it does not use. `Print Assumptions` reports the theorem closed
+under the global context.
+
+`minted` (`Proofs.v#L706`) is the predicate the oracle is instantiated at: the
+messages this service signs, described as a parsed login, a lookup that found
+a record, an accepting Argon2 check, and the exact bytes `Jwt.sign` hands the
+signer. `login_mints` proves it is inhabited by real logins, so the
+assumption is not about an empty set of tokens. The clock bound lives inside
+`minted` because the issuing time is existential in a token's claims.
+
+The intermediate results are worth reading for what they cannot say.
+`verify_accepts_only_signed` extracts, from an accepting `Jwt.verify`, only
+that the payload decodes and parses to something `Claims.of_json` reads as
+`c` — not that the payload is `print (to_json c)`, since the parser accepts
+extra fields and whitespace. The oracle is what rules out those other
+payloads and pins the claims.
+
+Not covered: replay (a bearer token is proved issued, not proved presented by
+its subject), revocation (which `validate` cannot express, since it reads no
+store), which login issued the token (`issued` and `login_body` are
+existential), and store honesty.
 
 `Print Assumptions login_then_validate` already runs in the proof file. That
 turns "what are we actually trusting" into output rather than a comment, and
@@ -756,11 +812,12 @@ Completed foundations:
 
 Remaining work, in priority order:
 
-1. Prove the security direction: add a `verify_only_signed` field to
-   `crypto_spec` and establish that an accepted token was minted by this
-   service, and hence that some login verified a credential for its subject.
-   `login_then_validate` is proved, but it is correctness only.
-   Keep `Print Assumptions`; do not conflate correctness with unforgeability.
+1. Decide the operational questions the proofs cannot settle: the Host/Origin
+   policy's final shape, and backoff keying (step 4 below). Both outweigh
+   further proof work for actual security. The security direction is now
+   proved (`accepted_implies_authenticated`); what it does not cover — replay,
+   revocation, timing — is either a protocol decision or needs measurement,
+   not another theorem of this shape.
 2. Define production storage/effect semantics and atomic create-if-absent;
    test concurrent writers beyond the synchronous demo. Decide whether account
    existence disclosure is acceptable or needs a confirmation-mail flow.

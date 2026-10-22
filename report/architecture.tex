@@ -67,10 +67,14 @@
   \textbf{Blue:} functional / ABI tests, not formal verification.\par
   \textbf{Orange:} external capabilities or provider behavior.\par
   \textbf{Dashed:} optional deployment or disconnected code.\par\smallskip
-  \source{components/service/theories/Proofs.v\#L612}{\code{login_then_validate}} is proved,
-  and is correctness rather than unforgeability.\par
-  No whole-service security, constant-time, durable-storage, atomic-creation
-  or actual-email-delivery theorem is established.
+  \source{components/service/theories/Proofs.v\#L612}{\code{login_then_validate}} is proved
+  (correctness), as is
+  \source{components/service/theories/Proofs.v\#L846}{\code{accepted_implies_authenticated}}
+  (an accepted token implies a credential check), under an assumed
+  \source{components/service/theories/Proofs.v\#L684}{\code{signing_oracle}}:
+  unforgeability is assumed, not proved.\par
+  No whole-service constant-time, replay, revocation, durable-storage,
+  atomic-creation or actual-email-delivery theorem is established.
 };
 
 % Source-level functionality inside the extracted service.

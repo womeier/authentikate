@@ -33,6 +33,16 @@ Lemma bytes_append_eq_empty (a b : bytes) :
   BS.append a b = BS.EmptyString -> a = BS.EmptyString /\ b = BS.EmptyString.
 Proof. destruct a; cbn; intros H; [auto | discriminate]. Qed.
 
+(* Appending a known prefix loses nothing: reading a signing input back out
+   of a signature's message is exactly this, one byte at a time. *)
+Lemma bytes_append_inj_l (a x y : bytes) :
+  BS.append a x = BS.append a y -> x = y.
+Proof.
+  revert x y.
+  induction a as [| b a IH]; intros x y H; [exact H |].
+  cbn in H. injection H as H. now apply IH.
+Qed.
+
 Lemma bytes_rev_acc (s acc : bytes) :
   BS.rev acc s = BS.append (bytes_rev s) acc.
 Proof.
@@ -214,6 +224,18 @@ Lemma bytes_eqb_refl (s : bytes) : bytes_eqb s s = true.
 Proof.
   induction s as [| b s IH]; [ reflexivity |].
   cbn. now rewrite (byte_dec_lb (@Logic.eq_refl byte b)), IH.
+Qed.
+
+(* And the converse, which is the direction a proof needs when the decision
+   has already been made by the code under study: a header that compared
+   equal to the pinned one *is* the pinned one. *)
+Lemma bytes_eqb_eq (a b : bytes) : bytes_eqb a b = true -> a = b.
+Proof.
+  revert b.
+  induction a as [| x a IH]; intros [| y b] H; try discriminate;
+    [ reflexivity |].
+  cbn in H. destruct (Byte.eqb x y) eqn:E; [| discriminate].
+  apply byte_dec_bl in E. subst. f_equal. now apply IH.
 Qed.
 
 (* Splitting at a separator that occurs nowhere else.  [split_on] is the only
