@@ -1,13 +1,22 @@
-package authentikate:service@0.1.0;
+package authentikate:host@0.1.0;
 
-// The host implements only keyvalue. WASI supplies clock, entropy and stdout.
+// What the host owes the composed artifact, and what it gets back.
+//
+// One export: an HTTP handler.  Routing, the Host/Origin policy, the static
+// assets and the response headers are inside the component now, so the host
+// has no request-shaped surface left -- it moves bytes between a socket and
+// `wasi:http`, answers keyvalue calls, and supplies configuration.
+//
 // Both keyvalue interfaces: the service creates accounts through the atomic
 // compare-and-swap, not through bucket.set, so a host that implements only
-// `store` cannot run it.
+// `store` cannot run it.  The crypto interfaces are deliberately *not*
+// re-exported any more: nothing outside the composition needs them, because
+// the front-end derives the public key and the dummy parameters from the same
+// instances the service uses.
 world web-host {
     import wasi:keyvalue/store@0.2.0-draft2;
     import wasi:keyvalue/atomics@0.2.0-draft2;
-    export api;
-    export authentikate:crypto/argon2@0.1.0;
-    export authentikate:crypto/ed25519@0.1.0;
+    // A narrow, typed substitute for granting wasi:cli/environment.
+    import authentikate:frontend/settings@0.1.0;
+    export wasi:http/incoming-handler@0.2.4;
 }

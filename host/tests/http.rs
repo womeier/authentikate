@@ -64,7 +64,31 @@ impl Server {
                 .to_lowercase()
                 .contains("access-control-allow-origin")
         );
-        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+        serde_json::from_str(&payload(&response)).unwrap()
+    }
+}
+
+/// Take the body out of a raw response.
+///
+/// The component writes its body as a stream, so hyper frames these responses
+/// with `Transfer-Encoding: chunked` rather than a `Content-Length` -- the old
+/// Axum host knew the length up front and this one does not.
+fn payload(response: &str) -> String {
+    let (head, rest) = response.split_once("\r\n\r\n").unwrap();
+    if !head.to_lowercase().contains("transfer-encoding: chunked") {
+        return rest.to_owned();
+    }
+    let mut body = String::new();
+    let mut rest = rest;
+    loop {
+        let (size, tail) = rest.split_once("\r\n").expect("chunk size line");
+        let size = usize::from_str_radix(size.trim().split(';').next().unwrap(), 16)
+            .expect("hexadecimal chunk size");
+        if size == 0 {
+            return body;
+        }
+        body.push_str(&tail[..size]);
+        rest = &tail[size + 2..];
     }
 }
 
@@ -84,17 +108,30 @@ fn real_http_and_stdout_email() {
     ));
     assert_eq!(status, 200);
     assert!(page.contains("Identity Workbench"));
-    for target in ["//rebound.test/", "http://rebound.test/"] {
-        assert_eq!(
-            server
-                .raw(&format!(
-                    "GET {target} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                    server.address
-                ))
-                .0,
-            400
-        );
-    }
+    // A protocol-relative target still reaches the front-end as a path and is
+    // refused as not origin-form.  Absolute-form is different now: wasi-http
+    // takes the authority from the URI in preference to the Host header, so
+    // `http://rebound.test/` arrives as authority `rebound.test` and the
+    // Host/Origin policy refuses it.  Both are refusals; the status differs
+    // because the check that fires differs.
+    assert_eq!(
+        server
+            .raw(&format!(
+                "GET //rebound.test/ HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.address
+            ))
+            .0,
+        400
+    );
+    assert_eq!(
+        server
+            .raw(&format!(
+                "GET http://rebound.test/ HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                server.address
+            ))
+            .0,
+        403
+    );
     assert_eq!(
         server
             .raw("GET / HTTP/1.1\r\nHost: rebound.test\r\nConnection: close\r\n\r\n")

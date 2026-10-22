@@ -1,0 +1,28 @@
+// WASI Keyvalue 0.2.0-draft2, Apache-2.0 WITH LLVM-exception.  Upstream's
+// interface with its doc comments trimmed; nothing else is changed.
+//
+// https://github.com/WebAssembly/wasi-keyvalue/blob/aa972c86e4294b97908b8d24d5950cc525ace7a6/wit/atomic.wit
+//
+// `cas` is what create-if-absent is built from: `new` takes a handle on the
+// key, `current` reads the value that handle was opened at, and `swap`
+// succeeds only if nothing has changed since.  A failed swap is not an error
+// here but a `cas-failed` carrying a fresh handle for a retry -- which this
+// service does not take: for a create, a failed swap means somebody else
+// created the key, and that is the answer.
+interface atomics {
+    use store.{bucket, error};
+
+    variant cas-error {
+        store-error(error),
+        cas-failed(cas),
+    }
+
+    resource cas {
+        new: static func(bucket: borrow<bucket>, key: string) -> result<cas, error>;
+        current: func() -> result<option<list<u8>>, error>;
+    }
+
+    increment: func(bucket: borrow<bucket>, key: string, delta: s64) -> result<s64, error>;
+
+    swap: func(cas: cas, value: list<u8>) -> result<_, cas-error>;
+}

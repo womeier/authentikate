@@ -18,6 +18,7 @@ fn main() {
         "../components/service/wit",
         "../components/crypto/wit",
         "../components/email/wit",
+        "../components/frontend/wit",
         "world.wit",
     ] {
         println!("cargo:rerun-if-changed={path}");
@@ -28,24 +29,52 @@ fn main() {
     if wit.exists() {
         fs::remove_dir_all(&wit).unwrap();
     }
-    copy_wit(Path::new("../components/service/wit"), &wit);
-    copy_wit(
-        Path::new("../components/crypto/wit"),
-        &wit.join("deps/crypto"),
-    );
-    copy_wit(
-        Path::new("../components/crypto/wit/deps"),
-        &wit.join("deps"),
-    );
-    copy_wit(
-        Path::new("../components/email/wit"),
-        &wit.join("deps/email"),
-    );
+    let deps = wit.join("deps");
+    // The front-end's tree carries the pinned wasi:http, wasi:io, wasi:clocks
+    // (both 0.2.4 and, version-qualified, the service's 0.2.0) and wasi:cli
+    // copies that the exported handler resolves against.
+    copy_wit(Path::new("../components/frontend/wit/deps"), &deps);
+    fs::create_dir_all(deps.join("frontend")).unwrap();
+    fs::copy(
+        "../components/frontend/wit/frontend.wit",
+        deps.join("frontend/frontend.wit"),
+    )
+    .unwrap();
+    // Authoritative sources win over the front-end's vendored copies, so the
+    // host is never built against a stale interface.  `make check-wit` fails
+    // when the two have drifted.
+    copy_wit(Path::new("../components/service/wit"), &deps.join("service"));
+    copy_wit(Path::new("../components/crypto/wit"), &deps.join("crypto"));
+    copy_wit(Path::new("../components/email/wit"), &deps.join("email"));
+    // service/wit carries its own deps/ (keyvalue, clocks 0.2.0); flatten them
+    // up a level and keep the service's clock version-qualified.
+    for name in ["keyvalue", "clocks", "store"] {
+        let nested = deps.join("service/deps").join(name);
+        if nested.exists() {
+            let target = if name == "clocks" {
+                deps.join("clocks@0.2.0")
+            } else {
+                deps.join(name)
+            };
+            copy_wit(&nested, &target);
+        }
+    }
+    fs::remove_dir_all(deps.join("service/deps")).ok();
     fs::copy("world.wit", wit.join("host.wit")).unwrap();
     fs::write(
         out.join("bindings.rs"),
         format!(
-            "wasmtime::component::bindgen!({{path: {:?}, world: \"web-host\", imports: {{ default: trappable }}, with: {{ \"wasi:keyvalue/store.bucket\": super::Bucket, \"wasi:keyvalue/atomics.cas\": super::Cas }} }});",
+            "wasmtime::component::bindgen!({{\
+               path: {:?}, \
+               world: \"web-host\", \
+               imports: {{ default: trappable }}, \
+               with: {{ \
+                 \"wasi:http\": wasmtime_wasi_http::p2::bindings::http, \
+                 \"wasi:io\": wasmtime_wasi::p2::bindings::sync::io, \
+                 \"wasi:keyvalue/store.bucket\": super::Bucket, \
+                 \"wasi:keyvalue/atomics.cas\": super::Cas, \
+               }} \
+             }});",
             wit
         ),
     )

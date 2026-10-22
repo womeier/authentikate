@@ -1,5 +1,5 @@
 [workspace]
-members = ["host", "components/crypto/argon2", "components/crypto/ed25519", "components/email"]
+members = ["host", "components/crypto/argon2", "components/crypto/ed25519", "components/email", "components/frontend"]
 default-members = ["host"]
 resolver = "3"
 
@@ -12,6 +12,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[profile.release.package.authentikate-email]
-opt-level = "s"

@@ -248,6 +248,7 @@
           ./host
           ./components/crypto
           ./components/email
+          ./components/frontend
           ./components/service/wit
         ];
       };
@@ -266,7 +267,7 @@
           runHook preBuild
           mkdir -p build
           cp ${authentikate-wasm}/authentikate.component.wasm build/
-          make crypto-components email-stdout-component compose-host
+          make check-wit crypto-components email-stdout-component frontend-component compose-host
           runHook postBuild
         '';
         doCheck = false;

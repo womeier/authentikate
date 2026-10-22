@@ -1,0 +1,12 @@
+[package]
+name = "authentikate-frontend"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "WebAssembly HTTP front-end: routing, origin policy and static assets for the Rocq service"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"

@@ -1,0 +1,27 @@
+package authentikate:email@0.1.0;
+
+interface sender {
+    record message {
+        %from: string,
+        to: list<string>,
+        subject: string,
+        text: string,
+        /// Reuse the same key and message when retrying an uncertain send.
+        idempotency-key: option<string>,
+    }
+
+    variant error {
+        invalid-message(string),
+        configuration(string),
+        transport(string),
+        /// HTTP status from the provider. Response bodies are not exposed.
+        rejected(u16),
+    }
+
+    /// Success means accepted by the backend, not delivered to the recipient.
+    send: func(email: message) -> result<_, error>;
+}
+
+world email-provider {
+    export sender;
+}

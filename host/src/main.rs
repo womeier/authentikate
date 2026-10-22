@@ -1,16 +1,22 @@
-use anyhow::{Context, Result, bail, ensure};
-use axum::{
-    Router,
-    body::to_bytes,
-    extract::{Request, State},
-    http::{Method, StatusCode, header},
-    response::{IntoResponse, Response},
-};
+//! The host: an engine, a socket, a keyvalue provider, and configuration.
+//!
+//! Everything request-shaped moved into `components/frontend`.  What is left
+//! is the part that cannot be a per-request component instance: the Wasmtime
+//! engine and its limits, admission control, the account map that has to
+//! outlive a request, and the signing seed and origin policy the operator
+//! configured.  The host no longer routes, serves assets, sets response
+//! headers, decides a request's method or media type, or calls the service's
+//! `login`/`validate`/`signup` directly -- it hands the composed component an
+//! `incoming-request` and writes back whatever response it produces.
+
+use anyhow::{Context, Result, ensure};
+use http_body_util::BodyExt;
+use hyper::{server::conn::http1, service::service_fn};
+use hyper_util::rt::TokioIo;
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use tokio::sync::Semaphore;
 use wasmtime::{
@@ -18,6 +24,10 @@ use wasmtime::{
     component::{Component, Linker, Resource, ResourceTable},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_http::{
+    WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
+    p2::{bindings::http::types::Scheme, body::HyperOutgoingBody},
+};
 use zeroize::Zeroizing;
 
 mod bindings {
@@ -25,14 +35,10 @@ mod bindings {
 }
 use bindings::{
     WebHost,
-    exports::authentikate::{
-        crypto::argon2::Algorithm,
-        service::api::{Argon2Params, Config},
-    },
+    authentikate::frontend::settings,
     wasi::keyvalue::{atomics, store as kv},
 };
 
-const BODY_LIMIT: usize = 16 * 1024;
 const FUEL: u64 = 2_000_000_000;
 type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
 pub struct Bucket;
@@ -46,10 +52,54 @@ pub struct Cas {
     seen: Option<Vec<u8>>,
 }
 
+/// No outbound HTTP.  `wasmtime-wasi-http` is built without
+/// `default-send-request`, so there is no `send_request` to override and no
+/// code path that could issue one; the composed artifact imports no
+/// `wasi:http/outgoing-handler` either, and `Runtime::new` rejects one that
+/// does.  Every hook here is upstream's default.
+struct NoOutboundHttp;
+
+impl WasiHttpHooks for NoOutboundHttp {
+    /// Refuse, rather than inherit a sending implementation.  Nothing in the
+    /// composed artifact can reach this -- it imports no
+    /// `wasi:http/outgoing-handler`, and `Runtime::new` rejects one that does
+    /// -- so this is the statement that the refusal is deliberate and not an
+    /// unbuilt default.
+    fn send_request(
+        &mut self,
+        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _options: Option<wasmtime_wasi_http::RequestOptions>,
+        _between_bytes_timeout: Box<
+            dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send,
+        >,
+    ) -> Box<
+        dyn std::future::Future<
+                Output = Result<
+                    (
+                        hyper::Response<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Result<(), wasmtime_wasi_http::Error>,
+                                > + Send,
+                        >,
+                    ),
+                    wasmtime_wasi_http::Error,
+                >,
+            > + Send,
+    > {
+        Box::new(std::future::ready(Err(
+            wasmtime_wasi_http::Error::HttpRequestDenied,
+        )))
+    }
+}
+
 struct GuestState {
     wasi: WasiCtx,
+    http: WasiHttpCtx,
+    hooks: NoOutboundHttp,
     table: ResourceTable,
     records: Records,
+    settings: settings::Config,
     limits: StoreLimits,
 }
 
@@ -59,6 +109,25 @@ impl WasiView for GuestState {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
+    }
+}
+
+impl WasiHttpView for GuestState {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            hooks: &mut self.hooks,
+            ctx: &mut self.http,
+            table: &mut self.table,
+        }
+    }
+}
+
+/// The configuration the front-end asks for, once per request.  A typed
+/// interface rather than `wasi:cli/environment`: the component gets these six
+/// values and no capability to read anything else in the process.
+impl settings::Host for GuestState {
+    fn get(&mut self) -> wasmtime::Result<settings::Config> {
+        Ok(self.settings.clone())
     }
 }
 
@@ -208,97 +277,69 @@ struct Runtime {
     component: Component,
     linker: Linker<GuestState>,
     records: Records,
-    seed: Zeroizing<[u8; 32]>,
-    config: Config,
+    settings: settings::Config,
 }
 
 impl Runtime {
-    fn new(path: &str, email_from: String) -> Result<Self> {
+    fn new(path: &str, settings: settings::Config) -> Result<Self> {
         let mut options = wasmtime::Config::new();
         options.consume_fuel(true);
         let engine = Engine::new(&options)?;
         let component = Component::from_file(&engine, path)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Load {path}; build it with make host-component (or make compose-host for existing artifacts)"))?;
-        // Refuse artifacts that ask the host to provide crypto or extra capabilities.
+        // Refuse artifacts that ask the host for capabilities it does not mean
+        // to grant.  The list is deliberately exhaustive: a composed artifact
+        // that wants the filesystem, the network or the environment is not the
+        // one this host was written for, whatever else it does correctly.
         for (name, _) in component.component_type().imports(&engine) {
             let (interface, version) = name.split_once('@').unwrap_or((name, ""));
             let wasi = [
                 "wasi:clocks/wall-clock",
+                "wasi:clocks/monotonic-clock",
                 "wasi:random/random",
                 "wasi:cli/stdout",
                 "wasi:io/error",
+                "wasi:io/poll",
                 "wasi:io/streams",
+                "wasi:http/types",
             ]
             .contains(&interface)
                 && ["0.2.0", "0.2.4"].contains(&version);
             ensure!(
-                ["wasi:keyvalue/store@0.2.0-draft2", "wasi:keyvalue/atomics@0.2.0-draft2"]
-                    .contains(&name)
+                [
+                    "wasi:keyvalue/store@0.2.0-draft2",
+                    "wasi:keyvalue/atomics@0.2.0-draft2",
+                    "authentikate:frontend/settings@0.1.0",
+                ]
+                .contains(&name)
                     || wasi,
                 "Unexpected composed-component import: {name}"
             );
         }
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)?;
         kv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         atomics::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
-        let mut seed = Zeroizing::new([0; 32]);
-        getrandom::fill(seed.as_mut()).context("Generate signing seed")?;
-        let mut runtime = Self {
+        settings::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
+        Ok(Self {
             engine,
             component,
             linker,
             records: Records::default(),
-            seed,
-            config: Config {
-                key: 0,
-                pubkey: vec![],
-                iss: b"demo".to_vec(),
-                ttl: 600,
-                dummy_salt: vec![0; 16],
-                dummy_tag: vec![],
-                dummy_params: Argon2Params {
-                    algorithm: 2,
-                    memory_kib: 0,
-                    iterations: 0,
-                    parallelism: 0,
-                    tag_length: 0,
-                },
-                email_from: email_from.into_bytes(),
-            },
-        };
-        let (mut store, guest) = runtime.instantiate()?;
-        let signer = guest.authentikate_crypto_ed25519();
-        let key = signer.call_import_key(&mut store, runtime.seed.as_ref())??;
-        runtime.config.pubkey = signer.call_public_key(&mut store, key)??;
-        let argon = guest.authentikate_crypto_argon2();
-        let params = argon.call_recommended_params(&mut store)?;
-        getrandom::fill(&mut runtime.config.dummy_salt).context("Generate dummy salt")?;
-        let mut password = Zeroizing::new([0; 32]);
-        getrandom::fill(password.as_mut()).context("Generate dummy password")?;
-        runtime.config.dummy_tag = argon.call_derive(
-            &mut store,
-            password.as_ref(),
-            &runtime.config.dummy_salt,
-            Algorithm::Argon2id,
-            params,
-        )??;
-        runtime.config.dummy_params = Argon2Params {
-            algorithm: 2,
-            memory_kib: params.memory_kib,
-            iterations: params.iterations,
-            parallelism: params.parallelism,
-            tag_length: params.tag_length,
-        };
-        Ok(runtime)
+            settings,
+        })
     }
 
     fn instantiate(&self) -> Result<(Store<GuestState>, WebHost)> {
         let state = GuestState {
             wasi: WasiCtxBuilder::new().inherit_stdout().build(),
+            http: WasiHttpCtx::new(),
+            hooks: NoOutboundHttp,
             table: ResourceTable::new(),
             records: self.records.clone(),
+            settings: self.settings.clone(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(128 * 1024 * 1024)
                 .memories(8)
@@ -313,255 +354,155 @@ impl Runtime {
         Ok((store, guest))
     }
 
-    fn request(&self, operation: &str, body: &[u8]) -> Result<Response> {
+    /// Start one request on a fresh instance.
+    ///
+    /// This returns only once the guest has finished, which is *after* the
+    /// response has gone out: the guest writes its body into a bounded
+    /// channel, so `serve` has to take the response from `receiver` and let
+    /// hyper drain that channel while this is still running.  Draining it
+    /// afterwards would deadlock -- the guest blocks on the first chunk that
+    /// does not fit.  Dropping the instance here is what reclaims the Rocq
+    /// bump heap, and it happens only once the body is fully written.
+    fn run<B>(
+        &self,
+        request: hyper::Request<B>,
+        sender: tokio::sync::oneshot::Sender<
+            Result<hyper::Response<HyperOutgoingBody>, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode>,
+        >,
+    ) -> Result<()>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
+        B::Error: Into<wasmtime_wasi_http::Error>,
+    {
         let (mut store, guest) = self.instantiate()?;
-        let mut config = self.config.clone();
-        // Provision exactly the signer instance connected to the service by WAC.
-        config.key = guest
-            .authentikate_crypto_ed25519()
-            .call_import_key(&mut store, self.seed.as_ref())??;
-        let api = guest.authentikate_service_api();
-        let result = match operation {
-            "signup" => api.call_signup(&mut store, &config, body)?,
-            "login" => api.call_login(&mut store, &config, body)?,
-            "validate" => api.call_validate(&mut store, &config, body)?,
-            _ => bail!("Unknown service operation"),
-        };
-        let status = StatusCode::from_u16(result.status.try_into()?)?;
-        Ok((
-            status,
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            result.body,
-        )
-            .into_response())
-    }
-}
-
-struct Policy {
-    port: u16,
-    public_origin: Option<url::Url>,
-}
-
-impl Policy {
-    fn new(port: u16, public_origin: Option<&str>) -> Result<Self> {
-        let public_origin = public_origin.map(url::Url::parse).transpose()?;
-        if let Some(origin) = &public_origin {
-            ensure!(
-                matches!(origin.scheme(), "http" | "https")
-                    && origin.host_str().is_some()
-                    && origin.username().is_empty()
-                    && origin.password().is_none()
-                    && origin.path() == "/"
-                    && origin.query().is_none()
-                    && origin.fragment().is_none(),
-                "PUBLIC_ORIGIN must be an http(s) origin without credentials, path, query or fragment"
-            );
-        }
-        Ok(Self {
-            port,
-            public_origin,
-        })
-    }
-
-    fn permits(&self, request: &Request) -> bool {
-        let hosts = request
-            .headers()
-            .get_all(header::HOST)
-            .iter()
-            .collect::<Vec<_>>();
-        let [host] = hosts.as_slice() else {
-            return false;
-        };
-        let Ok(host) = host.to_str() else {
-            return false;
-        };
-        let expected_origin = if let Some(origin) = &self.public_origin {
-            let authority = &origin[url::Position::BeforeHost..url::Position::AfterPort];
-            if !host.eq_ignore_ascii_case(authority) {
-                return false;
-            }
-            origin.origin().ascii_serialization()
-        } else {
-            let allowed = ["127.0.0.1", "localhost", "[::1]"].map(|name| {
-                if self.port == 80 {
-                    name.to_string()
-                } else {
-                    format!("{name}:{}", self.port)
-                }
-            });
-            if !allowed.iter().any(|value| host.eq_ignore_ascii_case(value)) {
-                return false;
-            }
-            format!("http://{}", host.to_ascii_lowercase())
-        };
-        let origins = request
-            .headers()
-            .get_all(header::ORIGIN)
-            .iter()
-            .collect::<Vec<_>>();
-        origins.is_empty()
-            || (origins.len() == 1 && origins[0].as_bytes() == expected_origin.as_bytes())
+        let incoming = store
+            .data_mut()
+            .http()
+            .new_incoming_request(Scheme::Http, request)?;
+        let outparam = store.data_mut().http().new_response_outparam(sender)?;
+        guest
+            .wasi_http_incoming_handler()
+            .call_handle(&mut store, incoming, outparam)?;
+        Ok(())
     }
 }
 
 struct App {
     runtime: Runtime,
-    policy: Policy,
     gate: Arc<Semaphore>,
     slots: Arc<Semaphore>,
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
-    (status, axum::Json(serde_json::json!({"error": message}))).into_response()
+fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<HyperOutgoingBody> {
+    let body = format!("{{\"error\":\"{message}\"}}");
+    hyper::Response::builder()
+        .status(status)
+        .header(hyper::header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(hyper::header::CACHE_CONTROL, "no-store")
+        .body(
+            http_body_util::Full::new(body.into())
+                .map_err(|never| match never {})
+                .boxed_unsync(),
+        )
+        .unwrap()
 }
 
-async fn handle(State(app): State<Arc<App>>, request: Request) -> Response {
-    let mut response = dispatch(app, request).await;
-    let headers = response.headers_mut();
-    for (name, value) in [
-        ("cache-control", "no-store"),
-        ("x-content-type-options", "nosniff"),
-        ("referrer-policy", "no-referrer"),
-        (
-            "content-security-policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-        ),
-    ] {
-        headers.insert(
-            header::HeaderName::from_static(name),
-            header::HeaderValue::from_static(value),
-        );
-    }
-    response
-}
-
-async fn dispatch(app: Arc<App>, request: Request) -> Response {
-    if request.uri().scheme().is_some()
-        || request.uri().authority().is_some()
-        || request.uri().path().starts_with("//")
-    {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "Use an origin-form relative request target",
-        );
-    }
-    if !app.policy.permits(&request) {
-        return error(StatusCode::FORBIDDEN, "Host or Origin is not allowed");
-    }
-    let path = request.uri().path();
-    let operation = match path {
-        "/api/signup" => "signup",
-        "/api/login" => "login",
-        "/api/validate" => "validate",
-        _ => {
-            let asset = match path {
-                "/" => Some((
-                    "text/html; charset=utf-8",
-                    include_str!("../assets/index.html"),
-                )),
-                "/style.css" => Some((
-                    "text/css; charset=utf-8",
-                    include_str!("../assets/style.css"),
-                )),
-                "/app.js" => Some((
-                    "text/javascript; charset=utf-8",
-                    include_str!("../assets/app.js"),
-                )),
-                _ => None,
-            };
-            return match asset {
-                Some((kind, body)) if matches!(*request.method(), Method::GET | Method::HEAD) => (
-                    [(header::CONTENT_TYPE, kind)],
-                    if request.method() == Method::HEAD {
-                        ""
-                    } else {
-                        body
-                    },
-                )
-                    .into_response(),
-                _ => error(StatusCode::NOT_FOUND, "Not found"),
-            };
-        }
-    };
-    if request.method() != Method::POST {
-        let mut response = error(StatusCode::METHOD_NOT_ALLOWED, "Use POST");
-        response
-            .headers_mut()
-            .insert(header::ALLOW, header::HeaderValue::from_static("POST"));
-        return response;
-    }
-    if !request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|s| s.to_str().ok())
-        .is_some_and(|s| {
-            s.split(';')
-                .next()
-                .unwrap()
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        })
-    {
-        return error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Use application/json");
-    }
-    if request
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|s| s.to_str().ok()?.parse::<u64>().ok())
-        .is_some_and(|length| length > BODY_LIMIT as u64)
-    {
-        return error(StatusCode::PAYLOAD_TOO_LARGE, "Request body exceeds 16 KiB");
-    }
-    let body = match tokio::time::timeout(
-        Duration::from_secs(15),
-        to_bytes(request.into_body(), BODY_LIMIT),
-    )
-    .await
-    {
-        Ok(Ok(body)) => body,
-        Ok(Err(err)) => {
-            use std::error::Error;
-            let oversized = err
-                .source()
-                .is_some_and(|s| s.is::<http_body_util::LengthLimitError>());
-            let status = if oversized {
-                StatusCode::PAYLOAD_TOO_LARGE
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            return error(
-                status,
-                if status == StatusCode::PAYLOAD_TOO_LARGE {
-                    "Request body exceeds 16 KiB"
-                } else {
-                    "Request interrupted"
-                },
-            );
-        }
-        Err(_) => return error(StatusCode::REQUEST_TIMEOUT, "Request body timed out"),
-    };
+/// Admission, then one request at a time inside the engine.
+///
+/// The two responses this host still writes itself are both refusals to run
+/// the component at all, which is why they are here and not in the front-end.
+async fn serve<B>(
+    app: Arc<App>,
+    request: hyper::Request<B>,
+) -> Result<hyper::Response<HyperOutgoingBody>>
+where
+    B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
+    B::Error: Into<wasmtime_wasi_http::Error>,
+{
     // Reject excess work instead of building an unbounded queue of password hashes.
     let Ok(slot) = app.slots.clone().try_acquire_owned() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "Service busy; retry later");
+        return Ok(unavailable(
+            hyper::StatusCode::SERVICE_UNAVAILABLE,
+            "Service busy; retry later",
+        ));
     };
     let permit = app.gate.clone().acquire_owned().await.unwrap();
-    match tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let _slot = slot;
-        app.runtime.request(operation, &body)
-    })
-    .await
-    {
-        Ok(Ok(response)) => response,
-        _ => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Component request failed",
-        ),
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // The permit and the slot are released when the guest finishes, not when
+    // the response is returned, so a streaming body still counts as work in
+    // flight.  Dropping this handle does not cancel the task.
+    let guest = {
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _slot = slot;
+            app.runtime.run(request, sender)
+        })
+    };
+    match receiver.await {
+        Ok(Ok(response)) => Ok(response),
+        // The guest set the outparam to an error, or returned without setting
+        // it at all -- the WIT forbids the latter, so both are broken guests.
+        Ok(Err(_)) | Err(_) => {
+            let _ = guest.await;
+            Ok(unavailable(
+                hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                "Component request failed",
+            ))
+        }
     }
 }
 
-fn router(app: Arc<App>) -> Router {
-    Router::new().fallback(handle).with_state(app)
+/// Validate and normalize an approved origin: scheme plus authority, nothing
+/// else.  The front-end compares against the result rather than parsing it
+/// again, so this is the only place the shape is checked.
+fn approved_origin(value: &str) -> Result<String> {
+    let origin = url::Url::parse(value)?;
+    ensure!(
+        matches!(origin.scheme(), "http" | "https")
+            && origin.host_str().is_some()
+            && origin.username().is_empty()
+            && origin.password().is_none()
+            && origin.path() == "/"
+            && origin.query().is_none()
+            && origin.fragment().is_none(),
+        "PUBLIC_ORIGIN must be an http(s) origin without credentials, path, query or fragment"
+    );
+    Ok(origin.origin().ascii_serialization())
+}
+
+/// The loopback authorities a browser may name when no origin is configured.
+/// The port is known only after binding, which is why this is the host's job.
+fn loopback_authorities(port: u16) -> Vec<String> {
+    ["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .map(|name| {
+            if port == 80 {
+                name.to_string()
+            } else {
+                format!("{name}:{port}")
+            }
+        })
+        .collect()
+}
+
+fn configuration(port: u16, public_origin: Option<&str>) -> Result<settings::Config> {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::fill(seed.as_mut()).context("Generate signing seed")?;
+    let approved_origin = public_origin.map(approved_origin).transpose()?;
+    Ok(settings::Config {
+        signing_seed: seed.to_vec(),
+        issuer: "demo".into(),
+        ttl: 600,
+        email_from: std::env::var("SIGNUP_EMAIL_FROM")
+            .unwrap_or_else(|_| "Authentikate <hello@example.test>".into()),
+        approved_authorities: if approved_origin.is_some() {
+            vec![]
+        } else {
+            loopback_authorities(port)
+        },
+        approved_origin,
+    })
 }
 
 #[tokio::main]
@@ -577,12 +518,10 @@ async fn main() -> Result<()> {
     );
     let path =
         std::env::var("HOST_COMPONENT").unwrap_or_else(|_| "build/host.component.wasm".into());
-    let sender = std::env::var("SIGNUP_EMAIL_FROM")
-        .unwrap_or_else(|_| "Authentikate <hello@example.test>".into());
-    let runtime = Runtime::new(&path, sender)?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let address = listener.local_addr()?;
-    let policy = Policy::new(address.port(), public_origin.as_deref())?;
+    let settings = configuration(address.port(), public_origin.as_deref())?;
+    let runtime = Runtime::new(&path, settings)?;
     eprintln!(
         "Authentikate demo: {}",
         public_origin.unwrap_or_else(|| format!("http://{address}"))
@@ -592,227 +531,161 @@ async fn main() -> Result<()> {
     );
     let app = Arc::new(App {
         runtime,
-        policy,
         gate: Arc::new(Semaphore::new(1)),
         slots: Arc::new(Semaphore::new(8)),
     });
-    axum::serve(listener, router(app))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    loop {
+        let (connection, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            _ = tokio::signal::ctrl_c() => break,
+        };
+        let app = app.clone();
+        tokio::spawn(async move {
+            let _ = http1::Builder::new()
+                .keep_alive(true)
+                .serve_connection(
+                    TokioIo::new(connection),
+                    service_fn(move |request| serve(app.clone(), request)),
+                )
+                .await;
+        });
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
+    use http_body_util::Full;
+    use hyper::{Method, StatusCode, body::Bytes, header};
     use serde_json::{Value, json};
-    use tower::ServiceExt;
 
-    fn request(method: Method, path: &str, body: impl Into<Body>) -> Request {
-        Request::builder()
-            .method(method)
-            .uri(path)
-            .header(header::HOST, "127.0.0.1:3000")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body.into())
-            .unwrap()
+    const COMPOSED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm");
+
+    fn app(settings: settings::Config) -> Arc<App> {
+        Arc::new(App {
+            runtime: Runtime::new(COMPOSED, settings).unwrap(),
+            gate: Arc::new(Semaphore::new(1)),
+            slots: Arc::new(Semaphore::new(8)),
+        })
     }
 
-    async fn post(app: &Router, path: &str, body: Value, expected: StatusCode) -> Value {
-        let response = app
-            .clone()
-            .oneshot(request(Method::POST, path, body.to_string()))
-            .await
+    fn demo() -> settings::Config {
+        configuration(3000, None).unwrap()
+    }
+
+    /// Drive one request through the real `serve` path -- admission, a fresh
+    /// instance, and the composed component -- without a socket.
+    async fn request(
+        app: &Arc<App>,
+        method: Method,
+        path: &str,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Vec<u8>) {
+        let mut builder = hyper::Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, "127.0.0.1:3000");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = builder
+            .body(Full::new(Bytes::from(body.to_owned())))
             .unwrap();
+        let response = serve(app.clone(), request).await.unwrap();
         let status = response.status();
         assert!(
             !response
                 .headers()
-                .contains_key("access-control-allow-origin")
+                .contains_key("access-control-allow-origin"),
+            "no permissive CORS header is ever emitted"
         );
-        let body = to_bytes(response.into_body(), BODY_LIMIT).await.unwrap();
-        assert_eq!(status, expected, "{}", String::from_utf8_lossy(&body));
-        serde_json::from_slice(&body).unwrap()
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, body.to_vec())
     }
 
-    #[test]
-    fn host_and_origin_policy() {
-        let policy = Policy::new(3000, None).unwrap();
-        for (host, origin, expected) in [
-            ("127.0.0.1:3000", None, true),
-            ("localhost:3000", Some("http://localhost:3000"), true),
-            ("[::1]:3000", Some("http://[::1]:3000"), true),
-            ("rebound.test:3000", Some("http://rebound.test:3000"), false),
-            ("127.0.0.1:1", None, false),
-            ("127.0.0.1:3000", Some("https://untrusted.test"), false),
-            ("127.0.0.1:3000", Some("null"), false),
-        ] {
-            let mut req = request(Method::GET, "/", "");
-            req.headers_mut()
-                .insert(header::HOST, host.parse().unwrap());
-            if let Some(origin) = origin {
-                req.headers_mut()
-                    .insert(header::ORIGIN, origin.parse().unwrap());
-            }
-            assert_eq!(policy.permits(&req), expected, "{host} {origin:?}");
-        }
-        let policy = Policy::new(3000, Some("https://demo.example.test")).unwrap();
-        let mut req = request(Method::GET, "/", "");
-        assert!(!policy.permits(&req));
-        req.headers_mut()
-            .insert(header::HOST, "demo.example.test".parse().unwrap());
-        req.headers_mut()
-            .insert(header::ORIGIN, "https://demo.example.test".parse().unwrap());
-        assert!(policy.permits(&req));
-        req.headers_mut()
-            .append(header::ORIGIN, "https://demo.example.test".parse().unwrap());
-        assert!(!policy.permits(&req));
-        for origin in [
-            "ftp://example.test",
-            "https://user@example.test",
-            "https://example.test/path",
-            "https://example.test?x",
-            "https://example.test#x",
-        ] {
-            assert!(Policy::new(3000, Some(origin)).is_err(), "{origin}");
-        }
+    async fn post(app: &Arc<App>, path: &str, body: Value, expected: StatusCode) -> Value {
+        let (status, body) = request(
+            app,
+            Method::POST,
+            path,
+            &body.to_string(),
+            &[(header::CONTENT_TYPE.as_str(), "application/json")],
+        )
+        .await;
+        assert_eq!(status, expected, "{}", String::from_utf8_lossy(&body));
+        serde_json::from_slice(&body).unwrap()
     }
 
     // Intentionally fails when the composed artifact is missing or stale.
     #[tokio::test(flavor = "multi_thread")]
     async fn composed_authentication_and_http_boundaries() {
-        let runtime = Runtime::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm"),
-            "Authentikate <hello@example.test>".into(),
-        )
-        .unwrap();
-        assert_eq!(runtime.config.pubkey.len(), 32);
-        assert_eq!(runtime.config.dummy_tag.len(), 32);
-        assert_eq!(runtime.config.dummy_params.memory_kib, 19456);
-        let records = runtime.records.clone();
-        let gate = Arc::new(Semaphore::new(1));
-        let slots = Arc::new(Semaphore::new(8));
-        let app = router(Arc::new(App {
-            runtime,
-            policy: Policy::new(3000, None).unwrap(),
-            gate: gate.clone(),
-            slots: slots.clone(),
-        }));
+        let app = app(demo());
+        let records = app.runtime.records.clone();
+
         for path in ["/", "/style.css", "/app.js"] {
-            let response = app
-                .clone()
-                .oneshot(request(Method::GET, path, ""))
-                .await
+            let request = hyper::Request::builder()
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:3000")
+                .body(Full::new(Bytes::new()))
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
+            let response = serve(app.clone(), request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
             assert!(
                 response.headers()["content-security-policy"]
                     .to_str()
                     .unwrap()
-                    .contains("default-src 'self'")
+                    .contains("default-src 'self'"),
+                "{path}"
             );
             assert!(
-                !to_bytes(response.into_body(), 1024 * 1024)
+                !response
+                    .into_body()
+                    .collect()
                     .await
                     .unwrap()
-                    .is_empty()
-            );
-        }
-        for (method, path, body, expected) in [
-            (
-                Method::GET,
-                "/api/login",
-                "".into(),
-                StatusCode::METHOD_NOT_ALLOWED,
-            ),
-            (Method::GET, "/Cargo.toml", "".into(), StatusCode::NOT_FOUND),
-            (
-                Method::POST,
-                "/api/no-route",
-                "{}".into(),
-                StatusCode::NOT_FOUND,
-            ),
-            (
-                Method::POST,
-                "/api/login",
-                "x".repeat(BODY_LIMIT + 1),
-                StatusCode::PAYLOAD_TOO_LARGE,
-            ),
-            (
-                Method::GET,
-                "//rebound.test/",
-                "".into(),
-                StatusCode::BAD_REQUEST,
-            ),
-            (
-                Method::GET,
-                "http://rebound.test/",
-                "".into(),
-                StatusCode::BAD_REQUEST,
-            ),
-        ] {
-            assert_eq!(
-                app.clone()
-                    .oneshot(request(method, path, body))
-                    .await
-                    .unwrap()
-                    .status(),
-                expected,
+                    .to_bytes()
+                    .is_empty(),
                 "{path}"
             );
         }
-        let mut req = request(Method::POST, "/api/login", "{}");
-        req.headers_mut().remove(header::CONTENT_TYPE);
-        assert_eq!(
-            app.clone().oneshot(req).await.unwrap().status(),
-            StatusCode::UNSUPPORTED_MEDIA_TYPE
-        );
-        let mut req = request(Method::POST, "/api/login", "{}");
-        req.headers_mut()
-            .insert(header::ORIGIN, "https://untrusted.test".parse().unwrap());
-        assert_eq!(
-            app.clone().oneshot(req).await.unwrap().status(),
-            StatusCode::FORBIDDEN
-        );
-        let mut req = request(Method::GET, "/", "");
-        req.headers_mut()
-            .insert(header::HOST, "rebound.test:3000".parse().unwrap());
-        assert_eq!(
-            app.clone().oneshot(req).await.unwrap().status(),
-            StatusCode::FORBIDDEN
-        );
+
+        let json = [(header::CONTENT_TYPE.as_str(), "application/json")];
+        for (method, path, body, headers, expected) in [
+            (Method::GET, "/api/login", "", &json[..], StatusCode::METHOD_NOT_ALLOWED),
+            (Method::GET, "/Cargo.toml", "", &[][..], StatusCode::NOT_FOUND),
+            (Method::POST, "/api/no-route", "{}", &json[..], StatusCode::NOT_FOUND),
+            (Method::POST, "/api/login", "{}", &[][..], StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                Method::POST,
+                "/api/login",
+                "{}",
+                &[
+                    (header::CONTENT_TYPE.as_str(), "application/json"),
+                    (header::ORIGIN.as_str(), "https://untrusted.test"),
+                ][..],
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let (status, _) = request(&app, method, path, body, headers).await;
+            assert_eq!(status, expected, "{path}");
+        }
+        // Counted rather than trusted: no Content-Length is set here.
+        let oversized = "x".repeat(16 * 1024 + 1);
+        let (status, _) = request(&app, Method::POST, "/api/login", &oversized, &json).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 
         let credentials =
             json!({"email":"workbench@example.test", "password":"a-local-demo-password"});
         assert_eq!(
-            post(
-                &app,
-                "/api/signup",
-                credentials.clone(),
-                StatusCode::CREATED
-            )
-            .await,
+            post(&app, "/api/signup", credentials.clone(), StatusCode::CREATED).await,
             json!({})
         );
-        post(
-            &app,
-            "/api/signup",
-            credentials.clone(),
-            StatusCode::CONFLICT,
-        )
-        .await;
+        post(&app, "/api/signup", credentials.clone(), StatusCode::CONFLICT).await;
         let login = post(&app, "/api/login", credentials.clone(), StatusCode::OK).await;
-        let token = login["token"].as_str().unwrap();
-        let validation = post(
-            &app,
-            "/api/validate",
-            json!({"token": token}),
-            StatusCode::OK,
-        )
-        .await;
+        let token = login["token"].as_str().unwrap().to_owned();
+        let validation = post(&app, "/api/validate", json!({"token": token}), StatusCode::OK).await;
         assert_eq!(validation["valid"], true);
         assert_eq!(validation["claims"]["sub"], credentials["email"]);
         assert_eq!(validation["claims"]["iss"], "demo");
@@ -835,60 +708,43 @@ mod tests {
             StatusCode::UNAUTHORIZED,
         )
         .await;
-        let mut tampered = token.as_bytes().to_vec();
-        let signature = token.rfind('.').unwrap() + 1;
-        tampered[signature] = if tampered[signature] == b'A' {
-            b'B'
-        } else {
-            b'A'
-        };
+
+        let mut tampered = token.into_bytes();
+        let signature = tampered.iter().rposition(|b| *b == b'.').unwrap() + 1;
+        tampered[signature] = if tampered[signature] == b'A' { b'B' } else { b'A' };
         assert_eq!(
             post(
                 &app,
                 "/api/validate",
-                json!({"token":String::from_utf8(tampered).unwrap()}),
+                json!({"token": String::from_utf8(tampered).unwrap()}),
                 StatusCode::OK
             )
             .await,
-            json!({"valid":false})
+            json!({"valid": false})
         );
         assert_eq!(
-            post(
-                &app,
-                "/api/validate",
-                json!({"token":"not.a.token"}),
-                StatusCode::OK
-            )
-            .await,
-            json!({"valid":false})
+            post(&app, "/api/validate", json!({"token":"not.a.token"}), StatusCode::OK).await,
+            json!({"valid": false})
         );
         for endpoint in ["signup", "login", "validate"] {
             let path = format!("/api/{endpoint}");
             post(&app, &path, json!({}), StatusCode::BAD_REQUEST).await;
-            assert_eq!(
-                app.clone()
-                    .oneshot(request(Method::POST, &path, "{"))
-                    .await
-                    .unwrap()
-                    .status(),
-                StatusCode::BAD_REQUEST
-            );
+            let (status, _) = request(&app, Method::POST, &path, "{", &json).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
         }
+
+        // Two signups for one email race through the CAS; exactly one creates.
         let concurrent =
             json!({"email":"concurrent@example.test", "password":"a-local-demo-password"})
                 .to_string();
         let (first, second) = tokio::join!(
-            app.clone()
-                .oneshot(request(Method::POST, "/api/signup", concurrent.clone())),
-            app.clone()
-                .oneshot(request(Method::POST, "/api/signup", concurrent))
+            request(&app, Method::POST, "/api/signup", &concurrent, &json),
+            request(&app, Method::POST, "/api/signup", &concurrent, &json)
         );
-        let mut statuses = [
-            first.unwrap().status().as_u16(),
-            second.unwrap().status().as_u16(),
-        ];
+        let mut statuses = [first.0.as_u16(), second.0.as_u16()];
         statuses.sort();
         assert_eq!(statuses, [201, 409]);
+
         {
             let records = records.lock().unwrap();
             assert_eq!(records.len(), 2);
@@ -899,14 +755,25 @@ mod tests {
                 assert!(record["salt"].as_str().is_some());
             }
         }
-        let _full = slots.acquire_many(8).await.unwrap();
-        assert_eq!(
-            app.oneshot(request(Method::POST, "/api/login", "{}"))
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
+
+        let _full = app.slots.clone().acquire_many_owned(8).await.unwrap();
+        let (status, _) = request(&app, Method::POST, "/api/login", "{}", &json).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// A configured origin is enforced end to end, not just in `configuration`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn configured_origin_refuses_loopback() {
+        let app = app(configuration(3000, Some("https://demo.example.test")).unwrap());
+        let (status, _) = request(&app, Method::GET, "/", "", &[]).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let request = hyper::Request::builder()
+            .uri("/")
+            .header(header::HOST, "demo.example.test")
+            .header(header::ORIGIN, "https://demo.example.test")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        assert_eq!(serve(app, request).await.unwrap().status(), StatusCode::OK);
     }
 
     // Argon2 has to run even when the account does not exist.  [login_check]
@@ -920,40 +787,32 @@ mod tests {
     // here would fail if a toolchain bump started doing it.  Hence a
     // measurement, with a generous threshold: eliminating the hash drops the
     // absent path by orders of magnitude, not by a factor.
-    #[test]
-    fn absent_account_still_pays_for_argon2() {
-        let runtime = Runtime::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm"),
-            "Authentikate <hello@example.test>".into(),
-        )
-        .unwrap();
-        let enrolled = br#"{"email":"timing@example.test","password":"a-local-demo-password"}"#;
-        assert_eq!(
-            runtime.request("signup", enrolled).unwrap().status(),
-            StatusCode::CREATED
-        );
-        let known = br#"{"email":"timing@example.test","password":"wrong"}"#;
-        let absent = br#"{"email":"absent@example.test","password":"wrong"}"#;
-        let sample = |body: &[u8]| {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn absent_account_still_pays_for_argon2() {
+        let app = app(demo());
+        let json = [(header::CONTENT_TYPE.as_str(), "application/json")];
+        let enrolled = json!({"email":"timing@example.test","password":"a-local-demo-password"});
+        post(&app, "/api/signup", enrolled, StatusCode::CREATED).await;
+        let known = json!({"email":"timing@example.test","password":"wrong"}).to_string();
+        let absent = json!({"email":"absent@example.test","password":"wrong"}).to_string();
+        let sample = async |body: &str| {
             let start = std::time::Instant::now();
-            assert_eq!(
-                runtime.request("login", body).unwrap().status(),
-                StatusCode::UNAUTHORIZED
-            );
+            let (status, _) = request(&app, Method::POST, "/api/login", body, &json).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
             start.elapsed()
         };
         // Interleaved and taken at the median, so that machine load drifting
         // under the test hits both paths alike.
         let (mut found, mut missing) = (Vec::new(), Vec::new());
         for _ in 0..5 {
-            found.push(sample(known));
-            missing.push(sample(absent));
+            found.push(sample(&known).await);
+            missing.push(sample(&absent).await);
         }
         found.sort();
         missing.sort();
         let (found, missing) = (found[2], missing[2]);
         assert!(
-            found >= Duration::from_millis(1),
+            found >= std::time::Duration::from_millis(1),
             "a wrong password against a stored record took {found:?}: the \
              comparison below has nothing to compare against, so the cost \
              parameters or the Argon2 provider are not doing the work"
@@ -964,5 +823,50 @@ mod tests {
              a wrong password on a stored one: the dummy hash is not running, so \
              a login's duration discloses whether an account exists"
         );
+    }
+
+
+    #[test]
+    fn approved_origins_must_be_origins() {
+        assert_eq!(
+            approved_origin("https://demo.example.test").unwrap(),
+            "https://demo.example.test"
+        );
+        assert_eq!(
+            approved_origin("https://Demo.Example.Test/").unwrap(),
+            "https://demo.example.test"
+        );
+        for value in [
+            "ftp://example.test",
+            "https://user@example.test",
+            "https://example.test/path",
+            "https://example.test?x",
+            "https://example.test#x",
+            "example.test",
+        ] {
+            assert!(approved_origin(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn loopback_authorities_follow_the_bound_port() {
+        assert_eq!(
+            loopback_authorities(3000),
+            ["127.0.0.1:3000", "localhost:3000", "[::1]:3000"]
+        );
+        assert_eq!(loopback_authorities(80), ["127.0.0.1", "localhost", "[::1]"]);
+    }
+
+    /// An approved origin and the loopback allow-list are alternatives: with
+    /// one configured, the front-end must not also accept `127.0.0.1`.
+    #[test]
+    fn configured_origin_replaces_the_loopback_list() {
+        let settings = configuration(3000, Some("https://demo.example.test")).unwrap();
+        assert_eq!(settings.approved_origin.as_deref(), Some("https://demo.example.test"));
+        assert!(settings.approved_authorities.is_empty());
+        let settings = configuration(3000, None).unwrap();
+        assert!(settings.approved_origin.is_none());
+        assert_eq!(settings.approved_authorities.len(), 3);
+        assert_eq!(settings.signing_seed.len(), 32);
     }
 }
