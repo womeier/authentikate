@@ -495,9 +495,13 @@ Two things that bite, both non-obvious:
   base64url-encoded, so Rocq only handles public text.  That keeps the seal
   rather than carving an exception into it.
 - **Registration leaks existence by construction.**  "Email taken" is an
-  enumeration oracle. The current `409` deliberately discloses existence,
-  including the presence of corrupt keys. A future confirmation-mail flow
-  could always return 202 and tell the truth only by email; it is not built.
+  enumeration oracle. The `409` deliberately discloses existence, including
+  the presence of corrupt keys, and that is now a decision rather than an open
+  question: enumeration is accepted. The alternative -- always answer 202 and
+  tell the truth only by email -- is therefore not planned, and the welcome
+  email is a notification rather than the channel the answer travels on. Note
+  what the decision does not cover: login still must not disclose existence,
+  which is what `cfg_dummy_tag` and the shared `login_check` path are for.
 
 ## Constant time
 
@@ -868,7 +872,8 @@ proof.
 - ~~Where do users live?~~ Answered: standard `wasi:keyvalue`, get/set by
   email; the demo supplies an ephemeral Map. Store lookup timing is provider
   behavior, not proved independent of key presence. Signup explicitly
-  discloses existence; login dummy hashing does not eliminate all channels.
+  discloses existence, which is accepted; login dummy hashing does not
+  eliminate all channels.
 - **Does the bucket need a name?**  `components/service/adapters/store.wat` opens the default
   bucket with the empty identifier, because a named one needs its name as a
   pointer into linear memory and a `data` segment in the adapter would write
@@ -909,8 +914,8 @@ Remaining work, in priority order:
    test concurrent writers beyond the synchronous demo. `store_commits` states
    the read-back promise the lifecycle theorem needs and nothing more — a
    provider still has to satisfy it, and atomicity and durability are not in
-   it. Decide whether account existence disclosure is acceptable or needs a
-   confirmation-mail flow.
+   it. Account existence disclosure at signup is accepted, so no
+   confirmation-mail flow is planned.
 3. Define the threat/leakage model, choose Argon2 policy, implement timing
    measurements (`dudect`-style) and re-hash-on-login migration. No timing
    guarantee should precede evidence and a precise scope.
