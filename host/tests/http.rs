@@ -17,6 +17,7 @@ impl Server {
         let mut child = Command::new(env!("CARGO_BIN_EXE_authentikate-host"))
             .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
             .env("LISTEN", "127.0.0.1:0")
+            .env_remove("PUBLIC_ORIGIN")
             .env_remove("HOST_COMPONENT")
             .env("SIGNUP_EMAIL_FROM", "Authentikate <test@example.test>")
             .stdout(stdout)
@@ -98,9 +99,9 @@ fn real_http_and_stdout_email() {
         server
             .raw("GET / HTTP/1.1\r\nHost: rebound.test\r\nConnection: close\r\n\r\n")
             .0,
-        200
+        403
     );
-    assert_eq!(server.raw(&format!("GET / HTTP/1.1\r\nHost: {}\r\nOrigin: https://untrusted.test\r\nConnection: close\r\n\r\n", server.address)).0, 200);
+    assert_eq!(server.raw(&format!("POST /api/login HTTP/1.1\r\nHost: {}\r\nOrigin: https://untrusted.test\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}", server.address)).0, 403);
     // No Content-Length: verify that the limit also applies to chunked bodies.
     let oversized = "x".repeat(16385);
     assert_eq!(server.raw(&format!("POST /api/login HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: 16385\r\nConnection: close\r\n\r\n", server.address)).0, 413);
