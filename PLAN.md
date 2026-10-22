@@ -20,7 +20,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | --- | --- |
 | Rocq service | Signup, login and validate compile through `components/service/theories/extraction.v`, included in `components/service/_RocqProject` |
 | Default Nix build | Checks proofs and adapter/runtime tests; installs core and component Wasm artifacts |
-| Bytes/base64 | MetaRocq bytestrings; local upstream instance and strict unpadded rocq-base64 `ByteString` wrapper, pinned at `b0f629e5` |
+| Bytes/base64 | MetaRocq bytestrings; local upstream instance and strict unpadded rocq-base64 `ByteString` wrapper, pinned at `28019c5c` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
 | Component | Custom service WIT export; custom crypto and standard WASI keyvalue imports remain unresolved providers |
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
@@ -128,7 +128,7 @@ boundary; this is not a proof that the whole service is constant-time.
   encoding arithmetic. This is not the earlier `list byte` API.
 - `Base64.v` — the MetaRocq bytestring instance, strict unpadded wrappers over
   rocq-base64's `ByteString.encode/decode url_unpadded`, and correctness proofs.
-  The flake pins rocq-base64 `b0f629e5`, which no longer depends on MetaRocq.
+  The flake pins rocq-base64 `28019c5c`, which no longer depends on MetaRocq.
 - `Json.v` — enough JSON to read a two-field request object and write a
   response (including nested claims). A parser on bytes, total, returning an option. Only a
   canonical printer, so the round-trip proof does not need a general one.
