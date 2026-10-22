@@ -59,32 +59,47 @@ Record store_ops := MkStore {
 
 Definition fits_u32 (n : N) : bool := N.ltb n 4294967296.
 
-Definition of_json (j : json) : option user :=
-  match Json.get_str (lit ("email"%string)) j,
-        Json.get_str (lit ("salt"%string)) j,
+(* The public half of an enrollment: what the Argon2 component returns, and
+   nothing besides.  Split out of [of_json] because the component does not
+   know the email, and because [enrollment_record] below builds the record it
+   writes out of these fields rather than out of the component's own JSON.
+   Salt and tag stay base64 here -- this is the record as read, before any
+   decoding. *)
+Record public_record := MkPublic {
+  pr_salt64 : bytes;
+  pr_tag64 : bytes;
+  pr_params : argon2_params
+}.
+
+Definition public_of_json (j : json) : option public_record :=
+  match Json.get_str (lit ("salt"%string)) j,
         Json.get_str (lit ("tag"%string)) j,
         Json.get_num (lit ("algorithm"%string)) j,
         Json.get_num (lit ("memory_kib"%string)) j,
         Json.get_num (lit ("iterations"%string)) j,
         Json.get_num (lit ("parallelism"%string)) j,
         Json.get_num (lit ("tag_length"%string)) j with
-  | Some email, Some salt64, Some tag64,
-    Some alg, Some mem, Some iter, Some par, Some len =>
+  | Some salt64, Some tag64, Some alg, Some mem, Some iter, Some par, Some len =>
       (* The five knobs are [u32] in the WIT, so a record naming a wider one
          would be truncated on the way through the canonical ABI.  Reject it
          rather than hash with parameters nobody wrote down. *)
       if andb (andb (andb (fits_u32 alg) (fits_u32 mem))
                     (andb (fits_u32 iter) (fits_u32 par)))
               (fits_u32 len)
-      then
-        match Base64.decode salt64, Base64.decode tag64 with
-        | Some salt, Some tag =>
-            Some (MkUser email salt (MkParams alg mem iter par len)
-                         (Secret.of_bytes tag))
-        | _, _ => None
-        end
+      then Some (MkPublic salt64 tag64 (MkParams alg mem iter par len))
       else None
-  | _, _, _, _, _, _, _, _ => None
+  | _, _, _, _, _, _, _ => None
+  end.
+
+Definition of_json (j : json) : option user :=
+  match Json.get_str (lit ("email"%string)) j, public_of_json j with
+  | Some email, Some p =>
+      match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
+      | Some salt, Some tag =>
+          Some (MkUser email salt (pr_params p) (Secret.of_bytes tag))
+      | _, _ => None
+      end
+  | _, _ => None
   end.
 
 Definition decode (v : bytes) : option user :=
@@ -94,17 +109,45 @@ Definition decode (v : bytes) : option user :=
   end.
 
 (* Enrollment supplies salt, tag and all five cost fields, but does not know
-   the email.  Add it here and decode the final JSON before allowing a write;
-   a component-supplied email is rejected as a duplicate by Json.parse. *)
+   the email.  The record is printed here, from the fields this module read
+   out of the component's JSON -- not the component's JSON with an email
+   prepended, which is what this used to be.  The difference is what a
+   provider can put into storage: nothing but these eight fields, no nested
+   objects and no numbers wider than a [u32].  It is also what makes the
+   record's shape something this module can reason about, which the signup
+   lifecycle proof in Proofs.v needs: a record with a field the printer and
+   parser do not round trip cannot be read back in a proof.
+
+   A provider that names an email at all is refused rather than overridden.
+   That used to happen by accident -- the prepended key collided with the
+   provider's and [Json.parse] rejects duplicates -- and is now a test the
+   code makes. *)
+Definition record_json (email : bytes) (p : public_record) : json :=
+  JObj [ (lit ("email"%string), JStr email);
+         (lit ("salt"%string), JStr (pr_salt64 p));
+         (lit ("tag"%string), JStr (pr_tag64 p));
+         (lit ("algorithm"%string), JNum (ap_algorithm (pr_params p)));
+         (lit ("memory_kib"%string), JNum (ap_memory_kib (pr_params p)));
+         (lit ("iterations"%string), JNum (ap_iterations (pr_params p)));
+         (lit ("parallelism"%string), JNum (ap_parallelism (pr_params p)));
+         (lit ("tag_length"%string), JNum (ap_tag_length (pr_params p))) ].
+
 Definition enrollment_record (email public_json : bytes) : option bytes :=
   match Json.parse public_json with
-  | Some (JObj fields) =>
-      let v := Json.print (JObj ((lit ("email"%string), JStr email) :: fields)) in
-      match decode v with
-      | Some _ => Some v
-      | None => None
+  | Some j =>
+      match Json.get (lit ("email"%string)) j, public_of_json j with
+      | None, Some p =>
+          let v := Json.print (record_json email p) in
+          (* Written only if it reads back: the write path does not store what
+             the read path would refuse.  The base64 fields are decoded for
+             the first time here. *)
+          match decode v with
+          | Some _ => Some v
+          | None => None
+          end
+      | _, _ => None
       end
-  | _ => None
+  | None => None
   end.
 
 (* ---- a lookup, and what can come of one --------------------------------- *)
