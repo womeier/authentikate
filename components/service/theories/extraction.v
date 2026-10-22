@@ -36,8 +36,9 @@ Axiom ffi_hmac_verify : Key.t -> bytes -> bytes -> option bool.
 Axiom ffi_kv_get : bytes -> option (option bytes).
 Axiom ffi_kv_create : bytes -> bytes -> option bool.
 
-(* Acceptance is required after persistence; a refusal does not undo the write. *)
-Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> option bool.
+(* Inspect acceptance after persistence to retain the effect: true is accepted,
+   false is any refusal, which does not undo the write. *)
+Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> bool.
 
 (* CertiRocq 6d34b50b's consts_to_values/implement_lazy_force passes apply
    constants to a dummy box before their Rocq arguments.  Explicit arities count

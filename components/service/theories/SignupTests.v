@@ -21,7 +21,7 @@ Definition mock_store (read : option (option bytes))
                       (create : option bool) : store_ops :=
   MkStore (fun _ => read) (fun _ _ => create).
 
-Definition mock_mail (result : option bool) : email_ops :=
+Definition mock_mail (result : bool) : email_ops :=
   MkEmail (fun _ _ _ _ => result).
 
 Example signup_schema :
@@ -134,7 +134,7 @@ Example signup_created_only_after_matching_write :
   let kv := MkStore (fun _ => Some None)
     (fun key value => Some (andb (bytes_eqb key email)
                                 (bytes_eqb value stored_record))) in
-  handle (mock_crypto (Some public_enrollment)) kv (mock_mail (Some true))
+  handle (mock_crypto (Some public_enrollment)) kv (mock_mail true)
     cfg 0 RtSignup signup_body = Created.
 Proof. vm_compute. reflexivity. Qed.
 
@@ -150,36 +150,33 @@ Example signup_create_refusals :
     [None; Some false] = [Internal; Conflict].
 Proof. intros. vm_compute. reflexivity. Qed.
 
-Example signup_send_refusals_after_acknowledged_write :
-  map (fun result => handle (mock_crypto (Some public_enrollment))
-    (mock_store (Some None) (Some true)) (mock_mail result)
-    cfg 0 RtSignup signup_body)
-    [None; Some false] = [Internal; Internal].
+Example signup_send_refusal_after_acknowledged_write :
+  handle (mock_crypto (Some public_enrollment))
+    (mock_store (Some None) (Some true)) (mock_mail false)
+    cfg 0 RtSignup signup_body = Internal.
 Proof. vm_compute. reflexivity. Qed.
 
 (* The second store models a later read of the persisted record, not an
    atomicity or read-after-write guarantee of the pure operations. *)
 Example signup_send_failure_then_retry_conflicts :
-  map (fun result =>
-    (status (handle (mock_crypto (Some public_enrollment))
-      (mock_store (Some None) (Some true)) (mock_mail result)
-      cfg 0 RtSignup signup_body),
-     status (handle (mock_crypto (Some public_enrollment))
-      (mock_store (Some (Some stored_record)) (Some true)) (mock_mail result)
-      cfg 0 RtSignup signup_body)))
-    [None; Some false] = [(500, 409); (500, 409)].
+  (status (handle (mock_crypto (Some public_enrollment))
+     (mock_store (Some None) (Some true)) (mock_mail false)
+     cfg 0 RtSignup signup_body),
+   status (handle (mock_crypto (Some public_enrollment))
+     (mock_store (Some (Some stored_record)) (Some true)) (mock_mail false)
+     cfg 0 RtSignup signup_body)) = (500, 409).
 Proof. vm_compute. reflexivity. Qed.
 
 Example signup_enrollment_refusals :
   map (fun enrolled => handle (mock_crypto enrolled)
-    (mock_store (Some None) (Some true)) (mock_mail (Some true))
+    (mock_store (Some None) (Some true)) (mock_mail true)
     cfg 0 RtSignup signup_body)
     [None; Some (lit "{}"%string)] = [Internal; Internal].
 Proof. vm_compute. reflexivity. Qed.
 
 Example signup_store_unavailable :
   handle (mock_crypto (Some public_enrollment))
-    (mock_store None (Some true)) (mock_mail (Some true))
+    (mock_store None (Some true)) (mock_mail true)
     cfg 0 RtSignup signup_body = Internal.
 Proof. vm_compute. reflexivity. Qed.
 
@@ -187,7 +184,7 @@ Proof. vm_compute. reflexivity. Qed.
    account into a 500: neither result is needed on the conflict path. *)
 Example signup_existing_account :
   handle (mock_crypto None)
-    (mock_store (Some (Some stored_record)) None) (mock_mail None)
+    (mock_store (Some (Some stored_record)) None) (mock_mail false)
     cfg 0 RtSignup signup_body = Conflict.
 Proof. vm_compute. reflexivity. Qed.
 
@@ -215,7 +212,7 @@ Example signup_existing_mismatched_record :
 Proof. intros. vm_compute. reflexivity. Qed.
 
 Example signup_malformed :
-  handle (mock_crypto None) (mock_store None None) (mock_mail None) cfg 0 RtSignup
+  handle (mock_crypto None) (mock_store None None) (mock_mail false) cfg 0 RtSignup
     (lit "{}"%string) = BadRequest.
 Proof. vm_compute. reflexivity. Qed.
 
@@ -230,11 +227,11 @@ Example signup_sends_configured_welcome :
       (Secret.of_bytes (lit "dummy-tag"%string)) (MkParams 2 19456 2 1 3)
       sender in
     let mail := MkEmail (fun from recipient subject text =>
-      Some (andb (bytes_eqb from sender)
+      andb (bytes_eqb from sender)
         (andb (bytes_eqb recipient email)
           (andb (bytes_eqb subject (lit "Welcome to Authentikate"%string))
             (bytes_eqb text
-              (lit "Your Authentikate account has been created."%string)))))) in
+              (lit "Your Authentikate account has been created."%string))))) in
     handle (mock_crypto (Some public_enrollment))
       (mock_store (Some None) (Some true)) mail cfg 0 RtSignup signup_body)
     [lit "welcome@example.test"%string; lit "accounts@example.test"%string] =

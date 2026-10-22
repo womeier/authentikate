@@ -14,7 +14,7 @@
       (param i32 i32 i32)   ;; idempotency-key: option<string>
       (param i32)))         ;; result<_, error>: 16-byte return area
   (global $buf_len (mut i32) (i32.const 0))
-  ;; @COMMON alloc list_len lower some utf8_ok@
+  ;; @COMMON alloc list_len lower utf8_ok@
 
   (func $email-send (param $from i32) (param $to i32)
                     (param $subject i32) (param $text i32) (result i32)
@@ -47,7 +47,7 @@
       (local.get $sp) (local.get $sn) (local.get $bp) (local.get $bn)
       (i32.const 0) (i32.const 0) (i32.const 0) (local.get $ret))
     (if (i32.load8_u (local.get $ret)) (then (return (i32.const 1))))
-    (call $some (i32.const 3)))
+    (i32.const 3)) ;; Immediate true (accepted); every refusal above is false (1).
 
   ;; Force argument plus four Rocq byte strings. The inspected result keeps the
   ;; foreign effect live through extraction and optimization.

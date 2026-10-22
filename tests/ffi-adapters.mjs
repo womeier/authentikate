@@ -319,9 +319,9 @@ try {
       },
     });
     let args = fields.map(h.bytes);
-    assert.equal(h.some(h.call(e.ffi_email_send, ...args)), 3, 'acceptance returns Some true');
+    assert.equal(h.call(e.ffi_email_send, ...args), 3, 'acceptance returns immediate true');
     for (error of [0, 1, 2, 3]) {
-      assert.equal(h.call(e.ffi_email_send, ...args), 1, 'every host error returns None');
+      assert.equal(h.call(e.ffi_email_send, ...args), 1, 'every host error returns immediate false');
     }
     assert.equal(calls, 5);
     const before = calls;
@@ -329,7 +329,7 @@ try {
       for (let field = 0; field < 4; field++) {
         const bad = [...args];
         bad[field] = h.bytes(invalid);
-        assert.equal(h.call(e.ffi_email_send, ...bad), 1, `invalid UTF-8 in field ${field} returns None`);
+        assert.equal(h.call(e.ffi_email_send, ...bad), 1, `invalid UTF-8 in field ${field} returns false`);
         assert.equal(calls, before, 'invalid UTF-8 in any field must not reach the host');
       }
     }
@@ -338,12 +338,12 @@ try {
     args = fields.map(h.bytes);
     h.rocq.mem_ptr.value = h.rocq.memory.buffer.byteLength - 4;
     const beforeGrowth = h.rocq.memory.buffer.byteLength;
-    assert.equal(h.some(h.call(e.ffi_email_send, ...args)), 3);
+    assert.equal(h.call(e.ffi_email_send, ...args), 3);
     assert.ok(h.rocq.memory.buffer.byteLength > beforeGrowth, 'lowering must grow shared memory safely');
     fields = [[], [], [], []];
-    assert.equal(h.some(h.call(e.ffi_email_send, ...fields.map(h.bytes))), 3, 'empty UTF-8 fields are left to host validation');
+    assert.equal(h.call(e.ffi_email_send, ...fields.map(h.bytes)), 3, 'empty UTF-8 fields are left to host validation');
     assert.equal(calls, before + 2);
-    console.log('email: void/global ABI, exact flat message, Some true/None, full 16-byte error area, UTF-8 rejection in every field, Unicode/empty bytes, memory growth');
+    console.log('email: void/global ABI, exact flat message, immediate true/false, full 16-byte error area, UTF-8 rejection in every field, Unicode/empty bytes, memory growth');
   }
   console.log('All FFI adapter tests passed; all four modules validated with wasm-tools.');
 } finally {

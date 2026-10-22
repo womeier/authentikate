@@ -87,12 +87,12 @@ const out = resolve(process.argv[2] ?? 'build');
         },
       },
     }).exports;
-    let boundaryArgs, boundaryResidue;
+    let boundaryArgs, boundaryResidue, boundaryResult;
     const adapter = (...args) => {
       assert.ok(boundaryArgs, 'Synthetic closure test must not call adapters');
       assert.deepEqual(args, boundaryArgs, 'FFI boundary must forward every argument, including force');
       rocq.mem_ptr.value = 65532 + boundaryResidue;
-      rocq.result.value = 1;
+      rocq.result.value = boundaryResult;
     };
     const service = new WebAssembly.Module(readFileSync(`${out}/service.wasm`));
     assert.deepEqual(WebAssembly.Module.imports(service).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
@@ -173,10 +173,12 @@ const out = resolve(process.argv[2] ?? 'build');
       ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
       assert.equal(wrapper[name].length, arity);
       boundaryArgs = Array.from({ length: arity }, (_, i) => i + 10);
-      for (boundaryResidue of [1, 2, 3]) {
-        assert.equal(wrapper[name](...boundaryArgs), undefined);
-        assert.equal(rocq.mem_ptr.value, 65536, `${name} must restore four-byte alignment`);
-        assert.equal(rocq.result.value, 1, `${name} must preserve immediate None`);
+      for (boundaryResult of name === 'ffi_email_send' ? [1, 3] : [1]) {
+        for (boundaryResidue of [1, 2, 3]) {
+          assert.equal(wrapper[name](...boundaryArgs), undefined);
+          assert.equal(rocq.mem_ptr.value, 65536, `${name} must restore four-byte alignment`);
+          assert.equal(rocq.result.value, boundaryResult, `${name} must preserve the immediate result`);
+        }
       }
     }
     console.log('wrapper: config read from imports, full u64 clock snapshots, bytes, curried closures, response lowering, initialize-once/reuse');

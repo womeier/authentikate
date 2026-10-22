@@ -63,8 +63,9 @@ Record config := MkConfig {
 }.
 
 Record email_ops := MkEmail {
-  (* Sender, recipient, subject, text; acceptance is not a delivery guarantee. *)
-  send_email : bytes -> bytes -> bytes -> bytes -> option bool
+  (* Sender, recipient, subject, text; true means accepted, false any refusal.
+     Acceptance is not a delivery guarantee. *)
+  send_email : bytes -> bytes -> bytes -> bytes -> bool
 }.
 
 Definition parse_request (r : route) (body : bytes) : request :=
@@ -157,8 +158,8 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
                       match send_email mail (cfg_email_from cfg) email
                         (lit ("Welcome to Authentikate"%string))
                         (lit ("Your Authentikate account has been created."%string)) with
-                      | Some true => Created
-                      | _ => Internal
+                      | true => Created
+                      | false => Internal
                       end
                   | Some false => Conflict
                   | None => Internal
