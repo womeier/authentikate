@@ -890,3 +890,323 @@ Qed.
 (* Again, no axioms: the cryptographic assumption travels in [signing_oracle]
    and the clock bound inside [minted], both as hypotheses. *)
 Print Assumptions accepted_implies_authenticated.
+
+(* ---- the account lifecycle ---------------------------------------------- *)
+
+(* [created_requires_persistence] says a 201 means a write was acknowledged.
+   It does not say the account can then be used, which is the property a
+   caller of [signup] actually wants, and the one piece of the service that
+   had no theorem.  Three things stand between the two statements, and each
+   is dealt with differently below: what Argon2 promises about an enrollment
+   (assumed), what the store does with a write (assumed, and this is the
+   interesting one), and whether the record this module writes can be read
+   back (proved). *)
+
+(* The stored record, read back.  [enrollment_record] prints an object of its
+   own rather than the component's JSON with an email prepended, and this is
+   the lemma that spends the difference: the eight fields are literal keys
+   over leaf values the parser accepts, so [parse_print_obj] applies.  The
+   old shape could not be read back in a proof at all -- a provider field
+   holding a nested object is printable and reparsable, but not by a theorem
+   this development has. *)
+Lemma record_json_round_trip : forall email p,
+  ok_string email -> ok_string (pr_salt64 p) -> ok_string (pr_tag64 p) ->
+  (ap_algorithm (pr_params p) < 10 ^ 32)%N ->
+  (ap_memory_kib (pr_params p) < 10 ^ 32)%N ->
+  (ap_iterations (pr_params p) < 10 ^ 32)%N ->
+  (ap_parallelism (pr_params p) < 10 ^ 32)%N ->
+  (ap_tag_length (pr_params p) < 10 ^ 32)%N ->
+  Json.parse (Json.print (Store.record_json email p))
+    = Some (Store.record_json email p).
+Proof.
+  intros email p He Hs Ht H1 H2 H3 H4 H5.
+  unfold Store.record_json.
+  apply parse_print_obj.
+  - cbn [Datatypes.length]. lia.
+  - apply Forall_cons; [ split; [ ok_literal | exact He ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact Hs ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact Ht ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact H1 ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact H2 ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact H3 ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact H4 ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact H5 ] |].
+    apply Forall_nil.
+  - cbn. repeat split; (reflexivity || exact I).
+Qed.
+
+(* And the conditions it asks for, discharged from the component's JSON: the
+   two base64 strings came out of the parser, and the five cost fields passed
+   [fits_u32], which is a far tighter bound than the printer needs. *)
+Lemma public_of_json_facts : forall j p,
+  json_ok j -> Store.public_of_json j = Some p ->
+  ok_string (pr_salt64 p) /\ ok_string (pr_tag64 p) /\
+  (ap_algorithm (pr_params p) < 10 ^ 32)%N /\
+  (ap_memory_kib (pr_params p) < 10 ^ 32)%N /\
+  (ap_iterations (pr_params p) < 10 ^ 32)%N /\
+  (ap_parallelism (pr_params p) < 10 ^ 32)%N /\
+  (ap_tag_length (pr_params p) < 10 ^ 32)%N.
+Proof.
+  intros j p Hok H. unfold Store.public_of_json in H.
+  destruct (Json.get_str (lit ("salt"%string)) j) as [salt64 |] eqn:Esalt;
+    [| discriminate].
+  destruct (Json.get_str (lit ("tag"%string)) j) as [tag64 |] eqn:Etag;
+    [| discriminate].
+  destruct (Json.get_num (lit ("algorithm"%string)) j) as [alg |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("memory_kib"%string)) j) as [mem |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("iterations"%string)) j) as [iter |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("parallelism"%string)) j) as [par |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("tag_length"%string)) j) as [len |];
+    [| discriminate].
+  destruct (andb (andb (andb (Store.fits_u32 alg) (Store.fits_u32 mem))
+                       (andb (Store.fits_u32 iter) (Store.fits_u32 par)))
+                 (Store.fits_u32 len)) eqn:Hfit; [| discriminate].
+  injection H as E. subst p.
+  unfold Store.fits_u32 in Hfit.
+  repeat (apply andb_prop in Hfit as [Hfit ?]).
+  cbn [pr_salt64 pr_tag64 pr_params ap_algorithm ap_memory_kib ap_iterations
+       ap_parallelism ap_tag_length].
+  apply andb_prop in H0 as [H2 H3].
+  apply N.ltb_lt in Hfit, H1, H2, H3, H.
+  split; [ eapply get_str_ok; [ exact Hok | exact Esalt ] |].
+  split; [ eapply get_str_ok; [ exact Hok | exact Etag ] |].
+  repeat split; lia.
+Qed.
+
+(* What [of_json] makes of a record this module printed.  The eight lookups
+   are decided by conversion; [fits_u32] is kept folded through the reduction
+   because the hypothesis is the only thing that can discharge it -- the
+   parameters are variables, and the test is run a second time on the way
+   back in. *)
+Lemma of_json_record_json : forall j email p,
+  Store.public_of_json j = Some p ->
+  Store.of_json (Store.record_json email p)
+    = match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
+      | Some salt, Some tag =>
+          Some (MkUser email salt (pr_params p) (Secret.of_bytes tag))
+      | _, _ => None
+      end.
+Proof.
+  intros j email p Hp.
+  unfold Store.public_of_json in Hp.
+  destruct (Json.get_str (lit ("salt"%string)) j) as [salt64 |];
+    [| discriminate].
+  destruct (Json.get_str (lit ("tag"%string)) j) as [tag64 |]; [| discriminate].
+  destruct (Json.get_num (lit ("algorithm"%string)) j) as [alg |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("memory_kib"%string)) j) as [mem |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("iterations"%string)) j) as [iter |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("parallelism"%string)) j) as [par |];
+    [| discriminate].
+  destruct (Json.get_num (lit ("tag_length"%string)) j) as [len |];
+    [| discriminate].
+  destruct (andb (andb (andb (Store.fits_u32 alg) (Store.fits_u32 mem))
+                       (andb (Store.fits_u32 iter) (Store.fits_u32 par)))
+                 (Store.fits_u32 len)) eqn:Hfit; [| discriminate].
+  injection Hp as Ep. subst p.
+  unfold Store.of_json, Store.record_json, Store.public_of_json.
+  cbn -[Store.fits_u32 Base64.decode].
+  rewrite Hfit.
+  cbn -[Base64.decode].
+  reflexivity.
+Qed.
+
+(* The whole of it: what signup wrote is a record naming the email signup was
+   asked for, carrying the salt, parameters and tag the component returned.
+   The email is the part that matters -- [Store.stored] answers [Absent] for
+   a record belonging to someone else, so without this a created account
+   would be indistinguishable from one that was never created. *)
+Lemma enrollment_record_decode : forall email pj v,
+  ok_string email ->
+  Store.enrollment_record email pj = Some v ->
+  exists j p salt tag,
+    Json.parse pj = Some j /\
+    Store.public_of_json j = Some p /\
+    Base64.decode (pr_salt64 p) = Some salt /\
+    Base64.decode (pr_tag64 p) = Some tag /\
+    Store.decode v = Some (MkUser email salt (pr_params p) (Secret.of_bytes tag)).
+Proof.
+  intros email pj v He H. unfold Store.enrollment_record in H.
+  destruct (Json.parse pj) as [j |] eqn:Ej; [| discriminate].
+  destruct (Json.get (lit ("email"%string)) j) as [x |]; [discriminate |].
+  destruct (Store.public_of_json j) as [p |] eqn:Ep; [| discriminate].
+  cbv zeta in H.
+  pose proof (parse_json_ok _ _ Ej) as Hj.
+  pose proof (public_of_json_facts _ _ Hj Ep) as [Hs [Ht [B1 [B2 [B3 [B4 B5]]]]]].
+  assert (Hdec : Store.decode (Json.print (Store.record_json email p))
+                 = Store.of_json (Store.record_json email p)).
+  { unfold Store.decode. now rewrite record_json_round_trip. }
+  rewrite Hdec, (of_json_record_json _ _ _ Ep) in H.
+  destruct (Base64.decode (pr_salt64 p)) as [salt |] eqn:Esalt; [| discriminate].
+  destruct (Base64.decode (pr_tag64 p)) as [tag |] eqn:Etag; [| discriminate].
+  (* [subst v] would normalise [print] into its byte chain and leave a goal
+     no rewrite can reach; the equation is kept folded instead. *)
+  assert (Hv : Json.print (Store.record_json email p) = v) by congruence.
+  exists j, p, salt, tag.
+  split; [ reflexivity |].
+  split; [ exact Ep |].
+  split; [ exact Esalt |].
+  split; [ exact Etag |].
+  rewrite <- Hv, Hdec, (of_json_record_json _ _ _ Ep), Esalt, Etag.
+  reflexivity.
+Qed.
+
+(* Signup and login read the same two fields out of the same body; only the
+   route decides which constructor comes back.  So a body that signed an
+   account up is a body that can log it in, which is what lets the lifecycle
+   theorem below quantify over one body rather than two. *)
+Lemma signup_is_login : forall body email password,
+  parse_request RtSignup body = Signup email password ->
+  parse_request RtLogin body = Login email password.
+Proof.
+  intros body email password H. unfold parse_request in H |- *.
+  destruct (Json.parse body) as [j |]; [| discriminate].
+  destruct (Json.get_str (lit ("email"%string)) j) as [e |]; [| discriminate].
+  destruct (Json.get_str (lit ("password"%string)) j) as [pw |];
+    [| discriminate].
+  injection H as E1 E2. now subst.
+Qed.
+
+(* The second trust boundary, and the counterpart of [crypto_spec]: what the
+   Argon2 component promises about itself.  Stated over [public_of_json] --
+   the component's own output, with no serialization of this module's in
+   between -- so that a bug in [enrollment_record] cannot hide inside the
+   assumption.  Like [crypto_spec] this is correctness and not security: it
+   says an enrollment verifies against the password it was made from, and
+   says nothing about what else verifies. *)
+Record argon2_spec (ops : crypto_ops) : Prop :=
+  MkArgon2Spec {
+    enroll_verifies : forall password pj j p salt tag,
+      argon2_enroll ops password = Some pj ->
+      Json.parse pj = Some j ->
+      Store.public_of_json j = Some p ->
+      Base64.decode (pr_salt64 p) = Some salt ->
+      Base64.decode (pr_tag64 p) = Some tag ->
+      argon2_verify ops password salt (pr_params p) (Secret.of_bytes tag)
+        = Some true
+  }.
+
+(* And the storage assumption, which is the one worth arguing about.  There
+   is no state in this model -- [store_ops] is a record of functions -- so
+   "the account is there afterwards" cannot be said of one store.  It is said
+   of two: the store signup ran against, and the store the later login runs
+   against, related by the only promise this service needs.
+
+   What it does not say is the whole of the production storage question.  It
+   does not say the write is durable, that no other writer touched the key in
+   between, that [kv_get] and [kv_set] are atomic, or that a second signup
+   for the same email loses.  A store that satisfies this and still loses
+   accounts under concurrency is entirely possible; see PLAN.md. *)
+Record store_commits (kv kv' : store_ops) : Prop :=
+  MkCommits {
+    set_then_get : forall key v,
+      kv_set kv key v = Some true -> kv_get kv' key = Some (Some v)
+  }.
+
+(* An account that was created can log in.  The signing hypothesis is not
+   decoration: [Jwt.sign] returning [None] is a 500, so without it the
+   honest conclusion would be "a token or an internal error", which is not
+   worth stating.  Note that no credential appears in the hypotheses beyond
+   the body itself -- the password that signed up is the password that logs
+   in because it is the same [body]. *)
+Theorem signup_then_login :
+  forall ops kv kv' mail cfg now now' email password body,
+    argon2_spec ops ->
+    store_commits kv kv' ->
+    (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
+    parse_request RtSignup body = Signup email password ->
+    handle ops kv mail cfg now RtSignup body = Created ->
+    exists token, handle ops kv' mail cfg now' RtLogin body = Token token.
+Proof.
+  intros ops kv kv' mail cfg now now' email password body
+    [Hargon] [Hcommit] Hsign Hp Hcreated.
+  pose proof (login_email_ok _ _ _ (signup_is_login _ _ _ Hp)) as He.
+  unfold handle in Hcreated. rewrite Hp in Hcreated.
+  destruct (kv_get kv email) as [[existing |] |]; try discriminate.
+  destruct (argon2_enroll ops password) as [pj |] eqn:Epj; [| discriminate].
+  destruct (Store.enrollment_record email pj) as [v |] eqn:Ev; [| discriminate].
+  destruct (kv_set kv email v) as [[|] |] eqn:Eset; try discriminate.
+  apply enrollment_record_decode in Ev as
+    [j [p [salt [tag [Ej [Ep [Esalt [Etag Edec]]]]]]]]; [| exact He].
+  unfold handle. rewrite (signup_is_login _ _ _ Hp).
+  unfold Store.stored. rewrite (Hcommit _ _ Eset), Edec.
+  cbn [u_email]. rewrite bytes_eqb_refl.
+  unfold login_check. cbn [u_salt u_params u_tag].
+  rewrite (Hargon _ _ _ _ _ _ Epj Ej Ep Esalt Etag).
+  unfold Jwt.sign. cbv zeta.
+  destruct (ed25519_sign ops (cfg_key cfg) (Jwt.signing_input Jwt.header_b64
+    (Base64.encode (Json.print (Claims.to_json
+      (MkClaims email (cfg_iss cfg) now' (now' + cfg_ttl cfg)%N))))))
+    as [sg |] eqn:Es; [| now exfalso; eapply Hsign, Es].
+  eexists. reflexivity.
+Qed.
+
+(* [login_then_validate] over the bytes the host actually sends back.  The
+   object it builds by hand *is* [render (Token token)]; saying so costs one
+   [unfold] and removes the question of whether the theorem is about the
+   response or about something that resembles it. *)
+Corollary login_then_validate_wire :
+  forall ops kv mail cfg now d email password body token,
+    crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    ok_string (cfg_iss cfg) ->
+    (now + cfg_ttl cfg < 10 ^ 32)%N ->
+    parse_request RtLogin body = Login email password ->
+    handle ops kv mail cfg now RtLogin body = Token token ->
+    (d < cfg_ttl cfg)%N ->
+    exists c,
+      handle ops kv mail cfg (now + d) RtValidate (render (Token token))
+        = Validity true (Some c)
+      /\ c_sub c = email.
+Proof.
+  intros ops kv mail cfg now d email password body token Hspec Hiss Hb Hp Ht Hd.
+  unfold render.
+  eapply login_then_validate; eassumption.
+Qed.
+
+(* Signup, login, validate: the three endpoints in sequence, over one request
+   body and one token, with every cryptographic and storage promise a
+   hypothesis.  This is the service's functional claim stated once.
+
+   What it is not: a liveness or availability result (every hypothesis is an
+   implication, and a store that refuses everything satisfies none of them
+   vacuously but also answers 500 honestly), a uniqueness result (two
+   concurrent signups can both reach [Created] against stores that each
+   satisfy [store_commits]), or a security result -- for the converse
+   direction see [accepted_implies_authenticated]. *)
+Corollary signup_then_validate :
+  forall ops kv kv' mail cfg now now' d email password body,
+    argon2_spec ops ->
+    store_commits kv kv' ->
+    crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
+    ok_string (cfg_iss cfg) ->
+    (now' + cfg_ttl cfg < 10 ^ 32)%N ->
+    (d < cfg_ttl cfg)%N ->
+    parse_request RtSignup body = Signup email password ->
+    handle ops kv mail cfg now RtSignup body = Created ->
+    exists token c,
+      handle ops kv' mail cfg now' RtLogin body = Token token /\
+      handle ops kv' mail cfg (now' + d) RtValidate (render (Token token))
+        = Validity true (Some c) /\
+      c_sub c = email.
+Proof.
+  intros ops kv kv' mail cfg now now' d email password body
+    Hargon Hcommit Hspec Hsign Hiss Hb Hd Hp Hcreated.
+  destruct (signup_then_login ops kv kv' mail cfg now now' email password body
+    Hargon Hcommit Hsign Hp Hcreated) as [token Htoken].
+  destruct (login_then_validate_wire ops kv' mail cfg now' d email password body
+    token Hspec Hiss Hb (signup_is_login _ _ _ Hp) Htoken Hd)
+    as [c [Hvalid Hsub]].
+  exists token, c. repeat split; assumption.
+Qed.
+
+(* Five hypotheses and no axioms: Argon2, Ed25519 and the store all travel in
+   the statement. *)
+Print Assumptions signup_then_validate.
+
