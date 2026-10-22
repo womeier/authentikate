@@ -36,7 +36,14 @@
   nowhere to put the record, so its claim is separable by construction.
   Note that key-to-path encoding becomes attacker-facing surface -- email
   addresses contain `/`, `.` and case, and path length is bounded -- so the
-  path should be a hash of the key rather than the key. Doing this plus folding
+  path should be a hash of the key rather than the key.
+  `wasi:filesystem` is not in the `wasi:http/proxy` world, so the question was
+  whether `wasmtime serve` can supply it at all. It can: wasmtime 50's
+  `serve.rs` repurposes `-S cli` as "enable all WASI interfaces instead of
+  just those in the proxy world" (`add_wasmtime_wasi_to_linker`, then only the
+  HTTP interfaces on top), and `serve` shares `RunCommon::configure_wasip2`,
+  so `--dir` preopens apply. `wasmtime serve -S cli --dir ...` is the target
+  invocation. Doing this plus folding
   `authentikate:frontend/settings` into a config component (with the signing
   seed generated into that same directory from `wasi:random` on first run,
   rather than baked in at build time) would leave `wasi:filesystem` as the only
