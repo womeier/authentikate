@@ -26,7 +26,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
 | Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
-| Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store write-read coherence in `store_commits`, neither proved; no timing proof |
+| Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store write-read coherence in `store_commits`, neither proved, though forgery rejection (`no_valid_token_without_a_password`) follows from the oracle and nothing else; login's non-disclosure of existence and validation's independence of the store are proved assumption-free; no timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
 Commands from the repository root:
@@ -647,14 +647,62 @@ provider correctness, storage consistency or deployment security:
    length while `decimal_of_N` has a 32-digit budget, so a claim set naming a
    timestamp at or above `10^32` would be printed wrong. No token this service
    mints is like that, so under `signing_oracle` the bounds are discharged.
+11. **Forgery rejection.** `no_valid_token_without_a_password` proves that
+   with no password the Argon2 provider accepts for any record the store
+   returns, no request body makes `validate` answer `true`. Its only other
+   hypothesis is the signing oracle, which is the point: see below.
+12. **Login does not disclose existence.** `login_hides_existence` proves
+   that a wrong password against an existing account and any password against
+   an absent one produce the *same response*: two store records, one answering
+   `Absent` and one `Found u`, give equal results from `handle`. Assumption-free.
+   It is a statement about the value, not the duration; the timing half is not
+   proved. A store that refuses is deliberately outside it, since `Internal`
+   is no evidence either way.
+13. **Validation ignores the store.** `validate_ignores_the_store` proves
+   `handle … RtValidate` is equal under any two stores. Assumption-free, and
+   it says two things at once: validation scales past the store because a
+   token carries its own claims and signature, and revocation is *excluded*
+   rather than merely unimplemented — no reachable store state makes a fresh,
+   well-signed token stop validating.
 
-Not established without an assumption: forgery rejection. Merely assuming a
-verifier is a function says nothing about which signatures it accepts.
-`crypto_spec` below states sign/verify correctness, not security; tests with
-tampered tokens are useful evidence, not a cryptographic theorem. The
-unforgeability-shaped assumption is isolated in `signing_oracle`
-(`Proofs.v#L684`) and used only by the security-direction theorems. Nothing
-here establishes replay or revocation properties.
+Forgery rejection cannot be established without an assumption. Merely
+assuming a verifier is a function says nothing about which signatures it
+accepts; `crypto_spec` below states sign/verify correctness, not security, and
+tests with tampered tokens are useful evidence rather than a cryptographic
+theorem. The unforgeability-shaped assumption is isolated in `signing_oracle`
+(`Proofs.v#L684`) and used only by the security-direction theorems.
+
+Given that assumption, forgery rejection is stated and proved, and stated so
+that it depends on the provider's assumption and on as little else as
+anything here can:
+
+```coq
+Corollary no_valid_token_without_a_password :
+  forall ops kv mail cfg now body c,
+    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    (forall email password u,
+       Store.stored kv email = Found u ->
+       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
+    handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
+```
+
+Two hypotheses, one of them the crypto provider's: the signing oracle, and
+the absence of a password the Argon2 provider accepts for any record the
+store will return. Nothing else — no `ok_string`, no clock bound, no
+well-formedness of the token, the body or the configuration, and nothing
+about the store beyond what it answers. `body` is arbitrary bytes: whatever
+an attacker sends, `validate` does not answer `true`. `Print Assumptions`
+reports it closed under the global context.
+
+The price of asking for so little is that the Argon2 hypothesis quantifies
+over every email, because without the claims round trip nothing ties `c` to
+the account it names. `no_valid_token_for_an_unauthenticated_account`
+(`Proofs.v#L938`) buys that back for a single account — a token whose subject
+cannot be authenticated does not validate, while other accounts log in
+normally — at the cost of one hypothesis that is not the provider's,
+`ok_string (cfg_iss cfg)`.
+
+Nothing here establishes replay or revocation properties.
 
 Needs a hypothesis from a `crypto_spec` bundle: that `ed25519_verify` accepts
 what `ed25519_sign` produced under the matching key. A JWT sign/verify round
@@ -748,6 +796,48 @@ Not covered: replay (a bearer token is proved issued, not proved presented by
 its subject), revocation (which `validate` cannot express, since it reads no
 store), which login issued the token (`issued` and `login_body` are
 existential), and store honesty.
+
+### What the service refuses to say
+
+Signup discloses existence by decision. Login must not, and that half is
+proved, with no assumptions at all:
+
+```coq
+Theorem login_hides_existence :
+  forall ops kv kv' mail cfg now body email password u,
+    parse_request RtLogin body = Login email password ->
+    Store.stored kv email = Absent ->
+    Store.stored kv' email = Found u ->
+    argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true ->
+    handle ops kv mail cfg now RtLogin body
+      = handle ops kv' mail cfg now RtLogin body.
+
+Theorem validate_ignores_the_store :
+  forall ops kv kv' mail cfg now body,
+    handle ops kv mail cfg now RtValidate body
+      = handle ops kv' mail cfg now RtValidate body.
+```
+
+Two stores rather than one changing state, as in `store_commits`, because the
+model has no state: one answers `Absent` for this email, the other `Found u`,
+and the responses are equal. The lemma under it is about `login_check`
+(`Proofs.v#L965`), where the choice is made — `found` picks the salt,
+parameters and tag, but it also sits in the second position of the match, so a
+failing hash is `Unauthorized` whichever way it went, with no hypothesis about
+the dummy credentials needed.
+
+What it is not: a timing statement. The response *value* is equal; how long
+each path takes is not visible in this model, which is the whole reason the
+trace model under consideration would be a new piece of work rather than
+another theorem of this shape. `Unavailable` is deliberately outside the
+statement — a store that refuses answers `Internal`, which is
+distinguishable, and a 500 is no evidence about whether the account exists.
+
+The second theorem is the revocation limit stated positively: validation is
+equal under *any* two stores, so no state a deployment can reach makes a
+fresh, well-signed token stop validating. Revocation is excluded by this
+equality, not merely absent from the implementation. The same equality is why
+validation scales past the store.
 
 ### The account lifecycle
 

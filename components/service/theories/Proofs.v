@@ -891,6 +891,155 @@ Qed.
    and the clock bound inside [minted], both as hypotheses. *)
 Print Assumptions accepted_implies_authenticated.
 
+(* ---- the forgery statement ---------------------------------------------- *)
+
+(* What the two theorems above say positively; this is the same content as a
+   rejection, which is the shape an attacker cares about.  Stated so that it
+   leans on the provider's assumption and on as little else as possible: the
+   only hypotheses are the signing oracle and the absence of a password that
+   the Argon2 provider accepts for any record the store will return.
+
+   In particular no [ok_string], no clock bound, no well-formedness of the
+   token, the body, or the configuration, and nothing about the store beyond
+   what it answers.  The token is an arbitrary request body: whatever bytes an
+   attacker sends, [validate] does not answer [true].
+
+   It follows from [accepted_was_signed], so the only thing standing between a
+   forged token and a [valid: true] is Ed25519's unforgeability as assumed in
+   [signing_oracle].  The price of asking for so little is that the Argon2
+   hypothesis is quantified over every email: without the claims round trip
+   there is nothing tying [c] to the account it names, which is what the next
+   corollary pays [ok_string] for. *)
+Corollary no_valid_token_without_a_password :
+  forall ops kv mail cfg now body c,
+    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    (forall email password u,
+       Store.stored kv email = Found u ->
+       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
+    handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
+Proof.
+  intros ops kv mail cfg now body c Horacle Hno H.
+  apply (accepted_was_signed _ _ _ _ _ _ _ _ Horacle) in H
+    as [p [pb [j [Hsigned _]]]].
+  destruct Hsigned as [issued [email [password [lbody [u [Hp [Hs [Ha _]]]]]]]].
+  exact (Hno email password u Hs Ha).
+Qed.
+
+(* No axioms: the forgery statement rests on the oracle and nothing else. *)
+Print Assumptions no_valid_token_without_a_password.
+
+(* The sharper reading, for one account rather than all of them: a token whose
+   subject is an account nobody can authenticate does not validate, even while
+   other accounts are being logged into normally.  This is the statement a
+   deployment wants about a single user, and it costs one hypothesis that is
+   not the provider's -- [ok_string (cfg_iss cfg)], the printable-ASCII
+   obligation on the issuer the host installs, which is what pins the claims
+   to the email they name. *)
+Corollary no_valid_token_for_an_unauthenticated_account :
+  forall ops kv mail cfg now body c,
+    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    ok_string (cfg_iss cfg) ->
+    (forall password u,
+       Store.stored kv (c_sub c) = Found u ->
+       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
+    handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
+Proof.
+  intros ops kv mail cfg now body c Horacle Hiss Hno H.
+  apply (accepted_implies_authenticated _ _ _ _ _ _ _ Horacle Hiss) in H
+    as [email [password [u [lbody [issued [Hp [Hs [Ha [Hc [Hsub _]]]]]]]]]].
+  rewrite Hsub in Hno. exact (Hno password u Hs Ha).
+Qed.
+
+(* ---- what the service refuses to say ------------------------------------ *)
+
+(* Signup discloses whether an email is taken; that is a decision, recorded in
+   PLAN.md.  Login must not, and the two statements below are the part of that
+   promise which lives in the logic rather than in a measurement.
+
+   This first one is about [login_check] because that is where the choice is
+   made: [found] selects the salt, parameters and tag, but it also sits in the
+   second position of the match, so a failing hash yields [Unauthorized]
+   whichever way it went.  No hypothesis about the dummy credentials is
+   needed -- not even that the dummy tag fails to verify -- because the
+   [None] case cannot produce a token at all. *)
+Lemma login_check_hides_existence : forall ops cfg now email password u,
+  argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true ->
+  login_check ops cfg (Some u) email now password
+    = login_check ops cfg None email now password.
+Proof.
+  intros ops cfg now email password u Hno.
+  unfold login_check. cbn.
+  destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+    as [[|] |]; [ congruence | | ];
+    destruct (argon2_verify ops password (cfg_dummy_salt cfg)
+                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+    reflexivity.
+Qed.
+
+(* And the same thing about the service: a wrong password against an account
+   that exists is the same response as any password against an account that
+   does not.  Two store records rather than one state, as in [store_commits],
+   because the model has no state: [kv] answers [Absent] for this email and
+   [kv'] answers [Found u], and the answers [handle] gives are equal.
+
+   What it is not.  It is a statement about the response *value*, so it says
+   nothing about how long either path takes -- the reason [login_check] runs
+   Argon2 either way is timing, and timing is not visible here.  It also says
+   nothing about [Unavailable]: a store that refuses answers [Internal], which
+   is distinguishable, and deliberately so, since a 500 is no evidence about
+   whether the account exists. *)
+Theorem login_hides_existence :
+  forall ops kv kv' mail cfg now body email password u,
+    parse_request RtLogin body = Login email password ->
+    Store.stored kv email = Absent ->
+    Store.stored kv' email = Found u ->
+    argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true ->
+    handle ops kv mail cfg now RtLogin body
+      = handle ops kv' mail cfg now RtLogin body.
+Proof.
+  intros ops kv kv' mail cfg now body email password u Hp Habs Hfound Hno.
+  unfold handle. rewrite Hp, Habs, Hfound.
+  symmetry. now apply login_check_hides_existence.
+Qed.
+
+(* [parse_request] on the validate route produces only the two things the
+   route can mean.  Stated because [handle] matches on a [request] rather than
+   on a route, so a proof about one route has to rule the others out. *)
+Lemma validate_request_shape : forall body,
+  parse_request RtValidate body = Malformed
+  \/ exists token, parse_request RtValidate body = Validate token.
+Proof.
+  intros body.
+  (* The blacklist keeps [get_str] and [lit] folded, so the destruct below
+     abstracts a term the goal still contains. *)
+  cbn -[Json.parse Json.get_str lit].
+  destruct (Json.parse body) as [j |]; [| now left ].
+  destruct (Json.get_str (lit ("token"%string)) j) as [t |]; [| now left ].
+  right. now exists t.
+Qed.
+
+(* Validation does not read the store, and this says so: any two stores give
+   the same answer.  Both halves of that are worth having.  It is the reason
+   validation scales past the store -- a token carries its claims and its
+   signature, so checking one is arithmetic -- and it is the exact shape of
+   the revocation limit: no state a deployment can reach makes a fresh,
+   well-signed token stop validating.  Revocation is not missing from
+   [validate] by omission, it is excluded by this equality. *)
+Theorem validate_ignores_the_store :
+  forall ops kv kv' mail cfg now body,
+    handle ops kv mail cfg now RtValidate body
+      = handle ops kv' mail cfg now RtValidate body.
+Proof.
+  intros ops kv kv' mail cfg now body.
+  destruct (validate_request_shape body) as [Hm | [token Ht]];
+    unfold handle; [ rewrite Hm | rewrite Ht ]; reflexivity.
+Qed.
+
+(* Neither of these rests on anything: no oracle, no [crypto_spec], no bound,
+   no well-formedness.  Worth printing for exactly that reason. *)
+Print Assumptions login_hides_existence.
+Print Assumptions validate_ignores_the_store.
+
 (* ---- the account lifecycle ---------------------------------------------- *)
 
 (* [created_requires_persistence] says a 201 means a write was acknowledged.
