@@ -130,7 +130,7 @@ Signup writes one JSON welcome email to stdout after the account write succeeds.
 Only sender, recipient and welcome text are logged, never passwords or hashes.
 An email-write failure returns 500 but leaves the account stored: retry returns
 409 and login still works. Success means stdout accepted the write, not delivery.
-Startup diagnostics go to stderr. The issuer is `demo`; token TTL is 600 seconds.
+Startup diagnostics go to stderr. The issuer is `authentikate`; token TTL is 600 seconds.
 
 ## Tests And Limits
 

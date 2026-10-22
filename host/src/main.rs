@@ -372,7 +372,7 @@ fn configuration(port: u16, public_origin: Option<&str>) -> Result<Settings> {
     Ok(Settings {
         service: service_config::Settings {
             signing_key: key.to_vec(),
-            iss: "demo".into(),
+            iss: "authentikate".into(),
             ttl: 600,
             email_from: std::env::var("SIGNUP_EMAIL_FROM")
                 .unwrap_or_else(|_| "Authentikate <hello@example.test>".into()),
@@ -628,7 +628,7 @@ mod tests {
         .await;
         assert_eq!(validation["valid"], true);
         assert_eq!(validation["claims"]["sub"], credentials["email"]);
-        assert_eq!(validation["claims"]["iss"], "demo");
+        assert_eq!(validation["claims"]["iss"], "authentikate");
         assert_eq!(
             validation["claims"]["exp"].as_u64().unwrap()
                 - validation["claims"]["iat"].as_u64().unwrap(),
