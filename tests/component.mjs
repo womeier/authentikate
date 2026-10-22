@@ -62,22 +62,21 @@ const out = resolve(process.argv[2] ?? 'build');
             return result;
           };
           // Config is assembled by the adapter now, not handed to it: the
-          // handle comes from `import-key`, the public half from
-          // `public-key`, the costs from `recommended-params`, and the issuer,
+          // shared-key handle comes from `import-key`, the costs from
+          // `recommended-params`, and the issuer,
           // TTL and sender from `authentikate:config/service`.
           assert.equal(N(get(cfg + 4)), 0xffffffffn);
-          assert.deepEqual(bytes(get(cfg + 8)), [0, 128, 255]);
-          assert.deepEqual(bytes(get(cfg + 12)), [65]);
-          assert.equal(N(get(cfg + 16)), 0x100000001n);
+          assert.deepEqual(bytes(get(cfg + 8)), [65]);
+          assert.equal(N(get(cfg + 12)), 0x100000001n);
           // The dummy salt is a constant in the adapter, 16 bytes, over the
           // 8-byte minimum `derive` enforces.
-          assert.deepEqual(bytes(get(cfg + 20)), [...Buffer.from('authentikate-abs')]);
+          assert.deepEqual(bytes(get(cfg + 16)), [...Buffer.from('authentikate-abs')]);
           // The dummy tag is `tag-length` zero bytes; 7 is deliberately odd
           // and not a multiple of four, so the zeroing loop is exercised.
-          assert.deepEqual(bytes(get(cfg + 24)), new Array(7).fill(0));
-          const costs = get(cfg + 28);
+          assert.deepEqual(bytes(get(cfg + 20)), new Array(7).fill(0));
+          const costs = get(cfg + 24);
           assert.deepEqual([4, 8, 12, 16, 20].map(i => N(get(costs + i))), [2n, 19456n, 2n, 1n, 7n]);
-          assert.deepEqual(bytes(get(cfg + 32)), [70, 0, 128, 255]);
+          assert.deepEqual(bytes(get(cfg + 28)), [70, 0, 128, 255]);
           assert.equal(N(now), clockSeconds);
           assert.deepEqual(bytes(body), [0, 255]);
           // Return a pair whose N status is 1 and whose body reuses the input.
@@ -100,18 +99,17 @@ const out = resolve(process.argv[2] ?? 'build');
       'rocq#memory:memory', 'rocq#table:table', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global',
       'rocq#result:global', 'rocq#main_function:function',
       'argon2#ffi_argon2_verify:function', 'argon2#ffi_argon2_enroll:function', 'argon2#ffi_secret_of_bytes:function',
-      'ed25519#ffi_ed25519_sign:function', 'ed25519#ffi_ed25519_verify:function',
+      'hmac#ffi_hmac_sign:function', 'hmac#ffi_hmac_verify:function',
       'store#ffi_kv_get:function', 'store#ffi_kv_create:function', 'email#ffi_email_send:function',
       'wasi:clocks/wall-clock@0.2.0#now:function',
       'authentikate:config/service@0.1.0#get:function',
-      'authentikate:crypto/ed25519@0.1.0#import-key:function',
-      'authentikate:crypto/ed25519@0.1.0#public-key:function',
+      'authentikate:crypto/hmac@0.1.0#import-key:function',
       'authentikate:crypto/argon2@0.1.0#recommended-params:function',
     ].sort());
     wrapper = new WebAssembly.Instance(service, {
       rocq,
       argon2: { ffi_argon2_verify: adapter, ffi_argon2_enroll: adapter, ffi_secret_of_bytes: adapter },
-      ed25519: { ffi_ed25519_sign: adapter, ffi_ed25519_verify: adapter },
+      hmac: { ffi_hmac_sign: adapter, ffi_hmac_verify: adapter },
       store: { ffi_kv_get: adapter, ffi_kv_create: adapter },
       email: { ffi_email_send: adapter },
       'wasi:clocks/wall-clock@0.2.0': {
@@ -134,18 +132,12 @@ const out = resolve(process.argv[2] ?? 'build');
           mem.setUint32(ret + 24, fromPtr, true); mem.setUint32(ret + 28, 4, true);
         },
       },
-      'authentikate:crypto/ed25519@0.1.0': {
+      'authentikate:crypto/hmac@0.1.0': {
         'import-key'(p, n, ret) {
           assert.equal(n, 32, 'the adapter forwards the seed it was given, whole');
           const mem = new DataView(rocq.memory.buffer);
           mem.setUint8(ret, 0);
           mem.setUint32(ret + 4, 0xffffffff, true);
-        },
-        'public-key'(key, ret) {
-          assert.equal(key >>> 0, 0xffffffff, 'the handle import-key returned, not another');
-          const mem = new DataView(rocq.memory.buffer);
-          mem.setUint8(ret, 0);
-          mem.setUint32(ret + 4, pubPtr, true); mem.setUint32(ret + 8, 3, true);
         },
       },
       'authentikate:crypto/argon2@0.1.0': {
@@ -162,7 +154,6 @@ const out = resolve(process.argv[2] ?? 'build');
     };
     const seedPtr = scratch(Buffer.alloc(32));
     const issPtr = scratch([65]);
-    const pubPtr = scratch([0, 128, 255]);
     const fromPtr = scratch([70, 0, 128, 255]);
     for (const endpoint of ['login', 'validate', 'signup']) {
       // Two flat values now: `body` fits in the direct parameter budget once
@@ -178,7 +169,7 @@ const out = resolve(process.argv[2] ?? 'build');
     }
     assert.equal(calls, 3);
     for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_enroll', 2],
-      ['ffi_secret_of_bytes', 2], ['ffi_ed25519_sign', 3], ['ffi_ed25519_verify', 4],
+      ['ffi_secret_of_bytes', 2], ['ffi_hmac_sign', 3], ['ffi_hmac_verify', 4],
       ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
       assert.equal(wrapper[name].length, arity);
       boundaryArgs = Array.from({ length: arity }, (_, i) => i + 10);
@@ -200,11 +191,11 @@ execFileSync('wasm-tools', ['validate', `${out}/authentikate.component.wasm`], {
 const wit = execFileSync('wasm-tools', ['component', 'wit', `${out}/authentikate.component.wasm`], { encoding: 'utf8' });
 for (const name of ['authentikate:storage/accounts@0.1.0',
   'authentikate:crypto/argon2@0.1.0',
-  'authentikate:crypto/ed25519@0.1.0', 'authentikate:email/sender@0.1.0',
+  'authentikate:crypto/hmac@0.1.0', 'authentikate:email/sender@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0']) assert.ok(wit.includes(`import ${name}`), name);
 assert.deepEqual([...wit.matchAll(/^\s*import ([^;]+);/gm)].map(m => m[1]).sort(), [
-  'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
+  'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/hmac@0.1.0',
   'authentikate:email/sender@0.1.0', 'authentikate:storage/accounts@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
@@ -224,14 +215,14 @@ console.log('component: validates; only custom service API exported; exact clock
 
 const core = new WebAssembly.Module(readFileSync(`${out}/authentikate.core.wasm`));
 assert.deepEqual([...new Set(WebAssembly.Module.imports(core).map(i => i.module))].sort(), [
-  'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
+  'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/hmac@0.1.0',
   'authentikate:email/sender@0.1.0', 'authentikate:storage/accounts@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
 assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
   'authentikate:crypto/argon2@0.1.0#enroll:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
-  'authentikate:crypto/ed25519@0.1.0#sign:function', 'authentikate:crypto/ed25519@0.1.0#verify:function',
+  'authentikate:crypto/hmac@0.1.0#sign:function', 'authentikate:crypto/hmac@0.1.0#verify:function',
   'authentikate:email/sender@0.1.0#send:function',
   'authentikate:storage/accounts@0.1.0#get:function',
   'authentikate:storage/accounts@0.1.0#create:function',
@@ -240,8 +231,7 @@ assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name
   // needs to do that. Only the service's adapter imports the shared key;
   // the gateway never touches it and no public-key derivation exists.
   'authentikate:config/service@0.1.0#get:function',
-  'authentikate:crypto/ed25519@0.1.0#import-key:function',
-  'authentikate:crypto/ed25519@0.1.0#public-key:function',
+  'authentikate:crypto/hmac@0.1.0#import-key:function',
   'authentikate:crypto/argon2@0.1.0#recommended-params:function',
 ].sort());
 assert.deepEqual(WebAssembly.Module.exports(core).map(e => e.name).sort(), [
@@ -348,15 +338,11 @@ const imports = {
       })));
     },
   },
-  'authentikate:crypto/ed25519@0.1.0': {
+  'authentikate:crypto/hmac@0.1.0': {
     'import-key'(p, n, ret) {
       assert.deepEqual(bytes(p, n), Buffer.alloc(32), 'the seed from config, whole');
       if (importKeyError) { failure(ret, 3); return; }
       put(ret, 0); put(ret + 4, 0xffffffff);
-    },
-    'public-key'(key, ret) {
-      assert.equal(key >>> 0, 0xffffffff);
-      put(ret, 0); list(ret, Buffer.alloc(32));
     },
     sign(key, p, n, ret) {
       assert.equal(key >>> 0, 0xffffffff);
@@ -366,11 +352,11 @@ const imports = {
       assert.equal(payload.iat, 100);
       assert.equal(payload.exp, 100 + 0x100000001);
       if (signError) { failure(ret, 3); return; }
-      put(ret, 0); list(ret, Buffer.alloc(64, 7));
+      put(ret, 0); list(ret, Buffer.alloc(32, 7));
     },
-    verify(kp, kn, mp, mn, sp, sn, ret) {
-      assert.deepEqual(bytes(kp, kn), Buffer.alloc(32));
-      assert.deepEqual(bytes(sp, sn), Buffer.alloc(64, 7));
+    verify(key, mp, mn, sp, sn, ret) {
+      assert.equal(key >>> 0, 0xffffffff, 'verification uses the same opaque key handle');
+      assert.deepEqual(bytes(sp, sn), Buffer.alloc(32, 7));
       assert.equal(bytes(mp, mn).toString().split('.').length, 2);
       if (signatureError) { failure(ret, 2); return; }
       put(ret, 0); put(ret + 4, 1);
@@ -520,7 +506,7 @@ assert.equal(writes, beforeRace[0] + 1, 'the create must have been attempted');
 assert.deepEqual([emails.length, events.length], beforeRace.slice(1),
   'a lost race must not send email or record a write');
 
-// A seed Ed25519 refuses.  The gateway used to catch this when it assembled
+// A seed HMAC-SHA-256 refuses.  The gateway used to catch this when it assembled
 // `config`; now the adapter imports the key, so the 500 and its body are
 // hand-written WebAssembly in components/service/adapters/service.wat -- and
 // this is the only configuration failure that can reach a client.

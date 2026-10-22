@@ -39,9 +39,10 @@ Module Secret : SECRET.
 End Secret.
 
 (* The signing key, as an opaque handle rather than as its bytes.  The key
-   lives in the ed25519 component; this side holds only a reference to it, so
+   lives in the hmac component; this side holds only a reference to it, so
    a disclosure bug in the Rocq module -- or the host reading its linear
-   memory, which it can trivially do -- cannot leak it.
+   memory, which it can trivially do -- cannot recover the key from that heap.
+   The provisioning host still retains its own copy; it is trusted.
 
    [of_handle] exists for the instantiation boundary alone.  Nothing in the
    service calls it. *)
@@ -83,7 +84,8 @@ Record crypto_ops := MkOps {
      Store.enrollment_record adds the email.  No secret eliminator is exposed. *)
   argon2_enroll : Secret.t -> option bytes;
   (* key handle, message *)
-  ed25519_sign : Key.t -> bytes -> option bytes;
-  (* public key, message, signature.  All three are public. *)
-  ed25519_verify : bytes -> bytes -> bytes -> option bool
+  hmac_sign : Key.t -> bytes -> option bytes;
+  (* The same opaque shared-key handle, message, and full authentication tag.
+     Verification, like generation, uses the secret inside the component. *)
+  hmac_verify : Key.t -> bytes -> bytes -> option bool
 }.

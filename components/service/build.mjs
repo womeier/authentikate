@@ -43,7 +43,7 @@ rocq = rocq.replace(/  \(export "([^"]+)"[^\n]+\n/g, (line, name) => keep.has(na
 rocq = rocq.replace(/\n\)\s*$/, '\n  (export "table" (table 0))\n)');
 const ffiNames = new Set([
   'ffi_argon2_verify', 'ffi_argon2_enroll', 'ffi_secret_of_bytes',
-  'ffi_ed25519_sign', 'ffi_ed25519_verify', 'ffi_kv_get', 'ffi_kv_create',
+  'ffi_hmac_sign', 'ffi_hmac_verify', 'ffi_kv_get', 'ffi_kv_create',
   'ffi_email_send',
 ]);
 // The service boundary restores heap alignment after the byte-oriented adapters.
@@ -70,7 +70,7 @@ const helpers = ['$alloc', '$list_len', '$read_N', '$lower', '$lift_bytes'].map(
   return form(argon, start);
 }).join('\n');
 parse('service', text(join(root, 'components/service/adapters/service.wat')).replace(';; @HEAP_HELPERS@', helpers));
-for (const name of ['argon2', 'ed25519', 'store', 'email']) {
+for (const name of ['argon2', 'hmac', 'store', 'email']) {
   // Only the wrapper allocator and public service functions survive the merge.
   let adapter = text(join(root, 'components/service/adapters', `${name}.wat`));
   if (name === 'email') {
@@ -84,7 +84,7 @@ for (const name of ['argon2', 'ed25519', 'store', 'email']) {
   adapter = adapter.replace(/\(export "([^"]+)"\)/g, (match, name) => name.startsWith('ffi_') ? match : '');
   parse(name, adapter);
 }
-run('wasm-merge', ['rocq', 'argon2', 'ed25519', 'store', 'email', 'service'].flatMap(name => [join(out, `${name}.wasm`), name])
+run('wasm-merge', ['rocq', 'argon2', 'hmac', 'store', 'email', 'service'].flatMap(name => [join(out, `${name}.wasm`), name])
   .concat(['--enable-multimemory', '--enable-tail-call', '--rename-export-conflicts', '-o', join(out, 'merged.wasm')]));
 run('wasm-tools', ['print', join(out, 'merged.wasm'), '-o', join(out, 'merged.wat')]);
 let merged = text(join(out, 'merged.wat'));
@@ -98,7 +98,7 @@ const module = new WebAssembly.Module(readFileSync(join(out, 'authentikate.core.
 const unexpected = WebAssembly.Module.imports(module).filter(i => ![
   'authentikate:storage/accounts@0.1.0',
   'authentikate:crypto/argon2@0.1.0',
-  'authentikate:crypto/ed25519@0.1.0',
+  'authentikate:crypto/hmac@0.1.0',
   'authentikate:email/sender@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
   'authentikate:config/service@0.1.0',

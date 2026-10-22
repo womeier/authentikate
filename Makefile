@@ -2,9 +2,9 @@ all: component
 
 crypto-components:
 	mkdir -p build
-	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-argon2 -p authentikate-ed25519
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-argon2 -p authentikate-hmac
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_argon2.wasm -o build/argon2.component.wasm
-	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_ed25519.wasm -o build/ed25519.component.wasm
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_hmac.wasm -o build/hmac.component.wasm
 
 email-stdout-component:
 	mkdir -p build
@@ -53,7 +53,7 @@ compose-host: gateway-component storage-component
 	wac compose host/composition.wac \
 		-d authentikate:service=build/authentikate.component.wasm \
 		-d authentikate:argon2=build/argon2.component.wasm \
-		-d authentikate:ed25519=build/ed25519.component.wasm \
+		-d authentikate:hmac=build/hmac.component.wasm \
 		-d authentikate:email-stdout=build/email-stdout.component.wasm \
 		-d authentikate:gateway=build/gateway.component.wasm \
 		-d authentikate:storage=build/storage.component.wasm \

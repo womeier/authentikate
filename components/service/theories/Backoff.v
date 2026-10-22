@@ -40,8 +40,8 @@
 (*                                                                            *)
 (*  And one that is mechanical rather than a judgement: the read-modify-write  *)
 (*  below has to be atomic or the bound is vacuous -- n concurrent requests    *)
-(*  all read the same count and all proceed.  [wasi:keyvalue/atomics] has      *)
-(*  [increment] and [cas], which is the tool; a plain get-then-set is not.     *)
+(*  all read the same count and all proceed. This needs a new atomic counter   *)
+(*  capability; the accounts interface deliberately exposes no such operation. *)
 (******************************************************************************)
 
 From Stdlib Require Import List NArith Lia ZArith.

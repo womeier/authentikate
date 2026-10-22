@@ -57,7 +57,7 @@ Record store_ops := MkStore {
 
      What this record cannot say is that the operation is atomic -- a record
      of functions has no notion of two callers.  The hypotheses in Proofs.v
-     say it instead, and the adapter earns them with a compare-and-swap. *)
+     say it instead, and the accounts provider must implement atomic creation. *)
   kv_create : bytes -> bytes -> option bool
 }.
 

@@ -1,0 +1,55 @@
+package authentikate:crypto@0.1.0;
+
+/// HMAC-SHA-256 authentication for HS256 tokens.
+///
+/// Shared secret keys stay in an instance-local component store. The adapter must
+/// provision the same component instance with `import-key` before service
+/// requests, then pass only the returned u32 handles in service configuration.
+/// A fresh instance (including one created per request) must be provisioned
+/// again: handles are not portable between instances and nothing is persisted.
+/// The component imports nothing and does not generate keys.
+/// Every verifier needs the secret and therefore also has the power to mint tokens.
+///
+/// This component accepts exactly 32 random key bytes (RFC 7518 requires at
+/// least 256 bits for HS256). Tags are always the full 32 bytes, never truncated.
+interface hmac {
+    variant error {
+        invalid-secret-key(string),
+        invalid-tag(string),
+        /// The handle does not name a key in this component instance.
+        invalid-key,
+        /// This instance has already imported its maximum of 1024 keys.
+        key-store-full,
+        /// The key store is unavailable after an internal failure.
+        key-store-unavailable,
+    }
+
+    /// Import a 32-byte shared secret and return an opaque, nonzero handle.
+    ///
+    /// At most 1024 imports succeed per instance, including duplicate keys.
+    /// Handles are never reused; keys live until the instance is destroyed.
+    /// The host remains responsible for wiping its own copy of the key.
+    import-key: func(secret-key: list<u8>) -> result<u32, error>;
+
+    /// Authenticate `message`, returning a 32-byte HMAC-SHA-256 tag.
+    ///
+    /// Deterministic: authenticating the same message with the same key gives
+    /// the same tag.
+    sign: func(
+        key: u32,
+        message: list<u8>,
+    ) -> result<list<u8>, error>;
+
+    /// Recompute and compare the full tag in constant time. An unknown key or
+    /// wrong-sized tag is an error; a correctly sized but unequal tag is false.
+    verify: func(
+        key: u32,
+        message: list<u8>,
+        tag: list<u8>,
+    ) -> result<bool, error>;
+}
+
+/// A component that exports HMAC-SHA-256 and imports nothing.
+world signing {
+    export hmac;
+}

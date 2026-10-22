@@ -146,7 +146,7 @@ End Service.
    subjects or bodies.  Both senders exercise the appended config field. *)
 Example signup_sends_configured_welcome :
   map (fun sender =>
-    let cfg := MkConfig (Key.of_handle 0) (lit "public-key"%string)
+    let cfg := MkConfig (Key.of_handle 0)
       (lit "authentikate"%string) 3600 (lit "dummy-salt"%string)
       (Secret.of_bytes (lit "dummy-tag"%string)) (MkParams 2 19456 2 1 3)
       sender in

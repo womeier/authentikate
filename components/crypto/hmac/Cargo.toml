@@ -1,0 +1,15 @@
+[package]
+name = "authentikate-hmac"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "HMAC-SHA-256 signatures, as a WebAssembly component"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libcrux-hmac = "=0.0.9"
+subtle = "2"
+wit-bindgen = "0.46"
+zeroize = "1"

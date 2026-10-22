@@ -1,9 +1,9 @@
-;; Adapter: Ed25519 as a CertiRocq registered primitive.
+;; Adapter: HMAC-SHA-256 as a CertiRocq registered primitive.
 ;;
 ;; Companion to argon2.wat. Both export `cabi_realloc` and carry the same
 ;; marshalling helpers; the service assembly retains only its public allocator.
 ;;
-;; Interface: components/crypto/wit/ed25519.wit (repository-relative).
+;; Interface: components/crypto/wit/hmac.wit (repository-relative).
 ;; Build with `make component`; components/service/build.mjs merges the core adapters.
 ;; `make host-component` composes the resulting service with Rust providers.
 ;;
@@ -11,7 +11,6 @@
 ;; their Rocq return value into the imported mutable `rocq.result` global.
 ;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
 ;; use actual arity + 1; registered wrappers accept and ignore that i32.
-;; The unregistered public-key auxiliary retains its direct i32 return.
 ;;
 ;; Value representation (probed from the backend's output):
 ;;
@@ -28,21 +27,17 @@
   (import "rocq" "out_of_mem" (global $out_of_mem (mut i32)))
   (import "rocq" "result" (global $result (mut i32)))
 
-  ;; ---- from the ed25519 component ------------------------------------------
-  ;; Canonical ABI lowerings of components/crypto/wit/ed25519.wit. Every result needs more
+  ;; ---- from the hmac component ------------------------------------------
+  ;; Canonical ABI lowerings of components/crypto/wit/hmac.wit. Every result needs more
   ;; than one flat value, so each call takes a trailing return area.
-  (import "authentikate:crypto/ed25519@0.1.0" "public-key"
-    (func $wit_public_key
-      (param i32)       ;; configured key handle: u32
-      (param i32)))     ;; return area
-  (import "authentikate:crypto/ed25519@0.1.0" "sign"
+  (import "authentikate:crypto/hmac@0.1.0" "sign"
     (func $wit_sign
       (param i32)       ;; configured key handle: u32
       (param i32 i32)   ;; message: ptr, len
       (param i32)))     ;; return area
-  (import "authentikate:crypto/ed25519@0.1.0" "verify"
+  (import "authentikate:crypto/hmac@0.1.0" "verify"
     (func $wit_verify
-      (param i32 i32)   ;; public-key: ptr, len
+      (param i32)       ;; configured shared-key handle: u32
       (param i32 i32)   ;; message: ptr, len
       (param i32 i32)   ;; signature: ptr, len
       (param i32)))     ;; return area
@@ -55,8 +50,8 @@
 
   ;; Bump-allocate $n bytes aligned to $align (a power of two), growing the
   ;; memory as needed.  Sets `out_of_mem` and returns 0 if it cannot.  The
-  ;; backend pre-grows only 52 bytes around an `Eprim` node, which a 64-byte
-  ;; signature turned into cons cells exhausts immediately, so this grows for
+  ;; backend pre-grows only 52 bytes around an `Eprim` node, which a 32-byte
+  ;; tag turned into cons cells exhausts immediately, so this grows for
   ;; itself.
   (func $alloc (param $n i32) (param $align i32) (result i32)
     (local $p i32) (local $end i32) (local $have i32) (local $pages i32)
@@ -185,20 +180,17 @@
   ;;
   ;; Export names must match the strings given to `CertiRocq Register`.
   ;;
-  ;; All three return `option`: an unknown handle, a signature of the wrong length, or a
-  ;; public key that is not a point on the curve, arrives in Rocq as `None`
+  ;; Both return `option`: an unknown handle or a tag of the wrong length
+  ;; arrives in Rocq as `None`
   ;; rather than as a plausible answer.  The component's error string stays in
   ;; linear memory and is discarded.
   ;;
-  ;; On constant time: signing is the secret-dependent operation here, and it
-  ;; stays inside the component, where curve25519-dalek's scalar
-  ;; multiplication is written to be data-independent.  Verification touches
-  ;; only public values -- a public key, a message, a signature off the wire.
-  ;; Only an opaque configured key handle crosses this boundary for signing;
-  ;; private key bytes stay inside the component.
+  ;; Both signing and verification depend on the shared secret. Only an opaque
+  ;; handle crosses this boundary; MAC computation and tag comparison stay inside
+  ;; the component. Source-level constant-time discipline is not a Wasm timing proof.
 
-  ;; ed25519_sign : Key.t -> bytes -> option bytes
-  (func $ed25519_sign
+  ;; hmac_sign : Key.t -> bytes -> option bytes
+  (func $hmac_sign
         (param $key i32) (param $message i32) (result i32)
     (local $handle i64)
     (local $mp i32) (local $ml i32)
@@ -227,23 +219,24 @@
             (i32.load offset=4 (local.get $ret))
             (i32.load offset=8 (local.get $ret)))))))
 
-  ;; ed25519_verify : bytes -> bytes -> bytes -> option bool
+  ;; hmac_verify : Key.t -> bytes -> bytes -> option bool
   ;;
   ;; `Some false` is an answer -- the signature does not match -- and is not
   ;; the same as `None`, which means an input was the wrong shape and no
-  ;; question was asked.  The strictness that decides the former lives in the
-  ;; component, in `verify_strict`.
-  (func $ed25519_verify
-        (param $public_key i32) (param $message i32) (param $signature i32)
+  ;; question was asked. Tag length and constant-time equality are checked inside
+  ;; the component.
+  (func $hmac_verify
+         (param $key i32) (param $message i32) (param $signature i32)
         (result i32)
-    (local $kp i32) (local $kl i32)
+    (local $handle i64)
     (local $mp i32) (local $ml i32)
     (local $sp i32) (local $sl i32)
     (local $ret i32)
 
+    (local.set $handle (call $read_key (local.get $key)))
+    (if (i64.eq (local.get $handle) (i64.const -1))
+      (then (return (i32.const 1))))
     (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
-    (local.set $kp (call $lower (local.get $public_key)))
-    (local.set $kl (global.get $buf_len))
     (local.set $mp (call $lower (local.get $message)))
     (local.set $ml (global.get $buf_len))
     (local.set $sp (call $lower (local.get $signature)))
@@ -251,7 +244,7 @@
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
 
     (call $wit_verify
-      (local.get $kp) (local.get $kl)
+      (i32.wrap_i64 (local.get $handle))
       (local.get $mp) (local.get $ml)
       (local.get $sp) (local.get $sl)
       (local.get $ret))
@@ -266,41 +259,16 @@
             (i32.shl (i32.load8_u offset=4 (local.get $ret)) (i32.const 1))
             (i32.const 1))))))
 
-  (func (export "ffi_ed25519_sign")
+  (func (export "ffi_hmac_sign")
         (param $force i32) (param $key i32) (param $message i32)
     (global.set $result
-      (call $ed25519_sign (local.get $key) (local.get $message))))
+      (call $hmac_sign (local.get $key) (local.get $message))))
 
-  (func (export "ffi_ed25519_verify")
+  (func (export "ffi_hmac_verify")
         (param $force i32)
         (param $key i32) (param $message i32) (param $signature i32)
     (global.set $result
-      (call $ed25519_verify (local.get $key) (local.get $message)
+      (call $hmac_verify (local.get $key) (local.get $message)
         (local.get $signature))))
 
-  ;; ed25519_public_key : Key.t -> option bytes
-  ;;
-  ;; For minting a key pair's public half once, at setup.  Nothing on the
-  ;; request path needs it.
-  (func (export "ffi_ed25519_public_key")
-        (param $key i32) (result i32)
-    (local $handle i64) (local $ret i32)
-
-    (local.set $handle (call $read_key (local.get $key)))
-    (if (i64.eq (local.get $handle) (i64.const -1))
-      (then (return (i32.const 1))))
-    (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
-    (if (global.get $out_of_mem) (then (return (i32.const 1))))
-
-    (call $wit_public_key
-      (i32.wrap_i64 (local.get $handle))
-      (local.get $ret))
-
-    (if (result i32) (i32.load8_u (local.get $ret))
-      (then (i32.const 1))  ;; err -> None
-      (else
-        (call $some
-          (call $lift_bytes
-            (i32.load offset=4 (local.get $ret))
-            (i32.load offset=8 (local.get $ret)))))))
 )

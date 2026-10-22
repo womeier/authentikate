@@ -371,7 +371,7 @@ fn configuration(port: u16, public_origin: Option<&str>) -> Result<Settings> {
     let approved_origin = public_origin.map(approved_origin).transpose()?;
     Ok(Settings {
         service: service_config::Settings {
-            signing_seed: key.to_vec(),
+            signing_key: key.to_vec(),
             iss: "demo".into(),
             ttl: 600,
             email_from: std::env::var("SIGNUP_EMAIL_FROM")
@@ -782,15 +782,15 @@ mod tests {
         );
     }
 
-    /// A seed Ed25519 will refuse. The gateway used to catch this when it
+    /// A seed HMAC-SHA-256 will refuse. The gateway used to catch this when it
     /// assembled `config`; now the service's adapter imports the key, so the
     /// 500 and its body are hand-written WebAssembly in
     /// `components/service/adapters/service.wat`. Nothing else exercises that
     /// branch, and it is the one place a bad configuration can reach.
     #[tokio::test]
-    async fn a_rejected_signing_seed_is_a_clean_500() {
+    async fn a_rejected_signing_key_is_a_clean_500() {
         let mut settings = demo();
-        settings.service.signing_seed = vec![0u8; 31];
+        settings.service.signing_key = vec![0u8; 31];
         let (app, _storage) = app(settings);
         let (status, body) = request(
             &app,
@@ -805,6 +805,88 @@ mod tests {
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"error": "Service is misconfigured"})
         );
+    }
+
+    /// Interoperate with a separate HMAC implementation, not just self-verify.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hs256_interoperates_and_rejects_other_algorithms_and_tag_lengths() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+
+        let key = [0x42; 32];
+        let mut settings = demo();
+        settings.service.signing_key = key.to_vec();
+        let (app, _storage) = app(settings);
+        let credentials = json!({"email":"hs256@example.test","password":"a-local-demo-password"});
+        post(
+            &app,
+            "/api/signup",
+            credentials.clone(),
+            StatusCode::CREATED,
+        )
+        .await;
+        let login = post(&app, "/api/login", credentials, StatusCode::OK).await;
+        let token = login["token"].as_str().unwrap();
+        let parts: Vec<_> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let header: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header, json!({"alg":"HS256","typ":"JWT"}));
+        let input = format!("{}.{}", parts[0], parts[1]);
+        let tag = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
+        assert_eq!(tag.len(), 32);
+        let mut reference = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+        reference.update(input.as_bytes());
+        reference.verify_slice(&tag).unwrap();
+
+        let make_token = |header: &str| {
+            let input = format!("{}.{}", URL_SAFE_NO_PAD.encode(header), parts[1]);
+            let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            mac.update(input.as_bytes());
+            format!(
+                "{input}.{}",
+                URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+            )
+        };
+        let external = make_token("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+        assert_eq!(
+            post(
+                &app,
+                "/api/validate",
+                json!({"token":external}),
+                StatusCode::OK
+            )
+            .await["valid"],
+            true
+        );
+        // Even a correct MAC cannot authorize an alternate algorithm/header.
+        for algorithm in ["none", "EdDSA", "HS384", "HS512"] {
+            let header = format!("{{\"alg\":\"{algorithm}\",\"typ\":\"JWT\"}}");
+            assert_eq!(
+                post(
+                    &app,
+                    "/api/validate",
+                    json!({"token":make_token(&header)}),
+                    StatusCode::OK
+                )
+                .await,
+                json!({"valid":false})
+            );
+        }
+        for length in [0, 16, 31, 33, 64] {
+            let invalid = format!("{input}.{}", URL_SAFE_NO_PAD.encode(vec![0; length]));
+            assert_eq!(
+                post(
+                    &app,
+                    "/api/validate",
+                    json!({"token":invalid}),
+                    StatusCode::OK
+                )
+                .await,
+                json!({"valid":false})
+            );
+        }
     }
 
     #[test]
@@ -854,6 +936,6 @@ mod tests {
         let settings = configuration(3000, None).unwrap();
         assert!(settings.policy.approved_origin.is_none());
         assert_eq!(settings.policy.approved_authorities.len(), 3);
-        assert_eq!(settings.service.signing_seed.len(), 32);
+        assert_eq!(settings.service.signing_key.len(), 32);
     }
 }

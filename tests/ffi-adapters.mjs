@@ -146,11 +146,11 @@ try {
 
   {
     const h = heap();
-    let outcome = 0, handle = 0, signCalls = 0, publicCalls = 0;
-    const message = [0, 255, 128], publicKey = Array.from({ length: 32 }, (_, i) => i);
-    const signature = Array.from({ length: 64 }, (_, i) => 255 - i);
-    const e = instantiate('components/service/adapters/ed25519.wat', h, {
-      'authentikate:crypto/ed25519@0.1.0': {
+    let outcome = 0, handle = 0, signCalls = 0, verifyCalls = 0;
+    const message = [0, 255, 128];
+    const signature = Array.from({ length: 32 }, (_, i) => 255 - i);
+    const e = instantiate('components/service/adapters/hmac.wat', h, {
+      'authentikate:crypto/hmac@0.1.0': {
         sign(key, mp, ml, ret) {
           signCalls++;
           assert.equal(key >>> 0, handle);
@@ -158,14 +158,9 @@ try {
           h.put(ret, outcome === 2 ? 1 : 0);
           if (outcome !== 2) listResult(h, e, ret, signature);
         },
-        'public-key'(key, ret) {
-          publicCalls++;
+        verify(key, mp, ml, sp, sl, ret) {
+          verifyCalls++;
           assert.equal(key >>> 0, handle);
-          h.put(ret, 0);
-          listResult(h, e, ret, publicKey);
-        },
-        verify(kp, kl, mp, ml, sp, sl, ret) {
-          assert.deepEqual(h.flat(kp, kl), publicKey);
           assert.deepEqual(h.flat(mp, ml), message);
           assert.deepEqual(h.flat(sp, sl), signature);
           h.put(ret, outcome === 2 ? 1 : 0);
@@ -175,30 +170,30 @@ try {
     });
     const msg = h.bytes(message);
     for (handle of [0, 1, 2, 17, 0x80000000, 0xffffffff]) {
-      assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_ed25519_sign, h.N(handle), msg))), signature);
-      assert.deepEqual(h.unbytes(h.some(e.ffi_ed25519_public_key(h.N(handle)))), publicKey);
+      assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_hmac_sign, h.N(handle), msg))), signature);
+      assert.equal(h.some(h.call(e.ffi_hmac_verify, h.N(handle), msg, h.bytes(signature))), 1);
     }
-    const beforeSign = signCalls, beforePublic = publicCalls;
+    const beforeSign = signCalls, beforeVerify = verifyCalls;
     for (const n of [0x100000000n, 0x100000001n, 1n << 80n]) {
-      assert.equal(h.call(e.ffi_ed25519_sign, h.N(n), msg), 1);
-      assert.equal(e.ffi_ed25519_public_key(h.N(n)), 1);
+      assert.equal(h.call(e.ffi_hmac_sign, h.N(n), msg), 1);
+      assert.equal(h.call(e.ffi_hmac_verify, h.N(n), msg, h.bytes(signature)), 1);
     }
     assert.equal(signCalls, beforeSign, 'overflow must not reach component');
-    assert.equal(publicCalls, beforePublic);
+    assert.equal(verifyCalls, beforeVerify, 'overflow must not reach verification either');
     outcome = 2;
-    assert.equal(h.call(e.ffi_ed25519_sign, h.N(handle = 42), msg), 1);
-    const args = [h.bytes(publicKey), msg, h.bytes(signature)];
+    assert.equal(h.call(e.ffi_hmac_sign, h.N(handle = 42), msg), 1);
+    const args = [h.N(handle), msg, h.bytes(signature)];
     for (outcome of [0, 1, 2]) {
-      const result = h.call(e.ffi_ed25519_verify, ...args);
+      const result = h.call(e.ffi_hmac_verify, ...args);
       if (outcome === 2) assert.equal(result, 1);
       else assert.equal(h.some(result), outcome === 1 ? 3 : 1);
     }
     // The Rocq heap and canonical allocations share memory even across growth.
     outcome = 0;
     h.rocq.mem_ptr.value = 65532;
-    assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_ed25519_sign, h.N(handle), msg))), signature);
+    assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_hmac_sign, h.N(handle), msg))), signature);
     assert.ok(h.rocq.memory.buffer.byteLength > 65536);
-    console.log('ed25519: checked N handles, signature round trip, refusal, false/true vs None, memory growth');
+    console.log('hmac: checked N handles, signature round trip, refusal, false/true vs None, memory growth');
   }
 
   {

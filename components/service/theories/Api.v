@@ -41,7 +41,6 @@ Inductive response :=
 (* Everything the host installs at instantiation. *)
 Record config := MkConfig {
   cfg_key : Key.t;          (* handle to the signing key, held by the component *)
-  cfg_pubkey : bytes;       (* its public half, for [validate] *)
   cfg_iss : bytes;
   cfg_ttl : N;
   (* A salt and tag to hash against when the email is unknown, so that a
@@ -181,7 +180,7 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
          so validating one is arithmetic.  Which is the property that lets the
          validate path scale past the store, and the reason revocation is not
          expressible here. *)
-      match Jwt.verify ops (cfg_pubkey cfg) token with
+      match Jwt.verify ops (cfg_key cfg) token with
       | Some c =>
           if andb (Claims.fresh now c) (bytes_eqb (c_iss c) (cfg_iss cfg))
           then Validity true (Some c)

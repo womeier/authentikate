@@ -1,21 +1,21 @@
 // The host-to-component configuration contract.
 //
 // Owned by neither component: the service reads `service` and the gateway
-// reads `policy`, and the split is the point.  The signing seed is in the
+// reads `policy`, and the split is the point. The shared HMAC key is in the
 // record only the service's adapter reads, so the gateway -- which terminates
 // HTTP and is the part an attacker talks to -- has no import through which a
-// private key could reach it.  Before this split the gateway received the seed
-// and called `ed25519.import-key` itself, purely to fill in a `config`
+// secret key could reach it. Before this split the gateway received the key
+// and called `hmac.import-key` itself, purely to fill in a `config`
 // argument the service wanted.
 package authentikate:config@0.1.0;
 
 /// What the service needs, read once per request by its adapter.
 interface service {
     record settings {
-        /// The 32-byte Ed25519 seed.  Handles are instance-local, so a fresh
+        /// The 32-byte random HMAC-SHA-256 key. Handles are instance-local, so a fresh
         /// instance imports it again; it must be stable for the process or
         /// tokens minted before a restart stop validating.
-        signing-seed: list<u8>,
+        signing-key: list<u8>,
         /// Token issuer, and lifetime in seconds.
         iss: string,
         ttl: u64,

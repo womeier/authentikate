@@ -55,7 +55,7 @@ jobs:
 
       - name: Test Rust crypto providers
         run: |
-          nix develop --command cargo test --locked -p authentikate-argon2 -p authentikate-ed25519
+          nix develop --command cargo test --locked -p authentikate-argon2 -p authentikate-hmac
 
       - name: Test stdout email component
         run: nix develop --command make test-email-stdout
@@ -76,7 +76,7 @@ jobs:
             build/authentikate.component.wit
             build/email-stdout.component.wasm
             build/argon2.component.wasm
-            build/ed25519.component.wasm
+            build/hmac.component.wasm
             build/host.component.wasm
             build/storage.component.wasm
           if-no-files-found: error

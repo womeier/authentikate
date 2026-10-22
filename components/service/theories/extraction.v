@@ -19,14 +19,14 @@ Import ListNotations.
 Axiom ffi_argon2_verify :
   Secret.t -> bytes -> argon2_params -> Secret.t -> option bool.
 Axiom ffi_argon2_enroll : Secret.t -> option bytes.
-Axiom ffi_ed25519_sign : Key.t -> bytes -> option bytes.
-Axiom ffi_ed25519_verify : bytes -> bytes -> bytes -> option bool.
+Axiom ffi_hmac_sign : Key.t -> bytes -> option bytes.
+Axiom ffi_hmac_verify : Key.t -> bytes -> bytes -> option bool.
 
 (* These signatures abstract effects, not temporal consistency.  Enrollment
    generates fresh randomness, get reads mutable state, and create persists
    it.  No theorem over the pure records establishes read-after-write
    behaviour or atomic uniqueness; the hypotheses in Proofs.v say what is
-   needed and the adapter earns it with wasi:keyvalue's compare-and-swap,
+   needed and the accounts provider must earn them with atomic create-if-absent,
    which is why there is no plain set here -- a set cannot implement create,
    and nothing in this service overwrites a record.
    In particular create must return an inspected result, never unit: Some
@@ -47,8 +47,8 @@ Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> option bool.
 CertiRocq Register [
   ffi_argon2_verify => "ffi_argon2_verify" 5 with tinfo,
   ffi_argon2_enroll => "ffi_argon2_enroll" 2 with tinfo,
-  ffi_ed25519_sign => "ffi_ed25519_sign" 3 with tinfo,
-  ffi_ed25519_verify => "ffi_ed25519_verify" 4 with tinfo,
+  ffi_hmac_sign => "ffi_hmac_sign" 3 with tinfo,
+  ffi_hmac_verify => "ffi_hmac_verify" 4 with tinfo,
   ffi_kv_get => "ffi_kv_get" 2 with tinfo,
   ffi_kv_create => "ffi_kv_create" 3 with tinfo,
   ffi_email_send => "ffi_email_send" 5 with tinfo,
@@ -57,7 +57,7 @@ CertiRocq Register [
 Include [ ].
 
 Definition ffi_ops : crypto_ops :=
-  MkOps ffi_argon2_verify ffi_argon2_enroll ffi_ed25519_sign ffi_ed25519_verify.
+  MkOps ffi_argon2_verify ffi_argon2_enroll ffi_hmac_sign ffi_hmac_verify.
 
 Definition ffi_kv : store_ops := MkStore ffi_kv_get ffi_kv_create.
 

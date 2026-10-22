@@ -9,7 +9,7 @@ world service {
     import wasi:clocks/wall-clock@0.2.0;
     import authentikate:storage/accounts@0.1.0;
     import authentikate:crypto/argon2@0.1.0;
-    import authentikate:crypto/ed25519@0.1.0;
+    import authentikate:crypto/hmac@0.1.0;
     import authentikate:email/sender@0.1.0;
     // The signing seed, issuer, TTL and sender address.  Read by the adapter
     // once per request, so no caller supplies them.
