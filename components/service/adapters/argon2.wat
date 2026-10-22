@@ -16,7 +16,6 @@
 ;; their Rocq return value into the imported mutable `rocq.result` global.
 ;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
 ;; use actual arity + 1; registered wrappers accept and ignore that i32.
-;; The unregistered derive auxiliary retains its direct i32 return.
 ;;
 ;; Value representation, as probed from the backend's output:
 ;;
@@ -51,18 +50,9 @@
   ;; four u32, so it flattens to four i32 in field order; `algorithm` is an
   ;; enum, so one i32.  The results need more than one flat value, so they
   ;; come back through a return area we supply.
-  (import "authentikate:crypto/argon2@0.1.0" "recommended-params"
-    (func $wit_recommended_params (param i32)))
   (import "authentikate:crypto/argon2@0.1.0" "enroll"
     (func $wit_enroll
       (param i32 i32)          ;; password: ptr, len
-      (param i32)))            ;; return area
-  (import "authentikate:crypto/argon2@0.1.0" "derive"
-    (func $wit_derive
-      (param i32 i32)          ;; password: ptr, len
-      (param i32 i32)          ;; salt: ptr, len
-      (param i32)              ;; algorithm
-      (param i32 i32 i32 i32)  ;; params
       (param i32)))            ;; return area
   (import "authentikate:crypto/argon2@0.1.0" "verify"
     (func $wit_verify
@@ -72,19 +62,6 @@
       (param i32 i32 i32 i32)  ;; params
       (param i32 i32)          ;; expected: ptr, len
       (param i32)))            ;; return area
-
-  ;; `ffi_argon2_derive` still mints tags under `recommended-params` and under
-  ;; argon2id, the third case of the `algorithm` enum.  `verify` no longer
-  ;; does: a tag is only verifiable under the parameters it was derived with,
-  ;; so those come up from the stored record instead.
-  ;;
-  ;; If the constant-time requirement is taken as unconditional, this becomes
-  ;; 1 (argon2i): argon2id's addressing is data-dependent after the first half
-  ;; pass, so its memory access pattern depends on the password.  That channel
-  ;; needs a local observer, which is why RFC 9106 still recommends argon2id;
-  ;; the cost of argon2i is weaker time-memory-tradeoff resistance, to be paid
-  ;; back with more iterations than `recommended-params` returns.
-  (global $algorithm i32 (i32.const 2))
 
   ;; `$lower` returns a pointer and leaves the length here: a Wasm 1.0
   ;; function returns at most one value.
@@ -242,7 +219,7 @@
   ;;
   ;; Export names must match the strings given to `CertiRocq Register`.
   ;;
-  ;; Derive uses recommended parameters; verify uses the stored Rocq record.
+  ;; Enrollment chooses parameters in the provider; verify uses the stored record.
   ;;
   ;; All return `option`, so a misuse of the interface (a short salt, an
   ;; over-long password, a tag of the wrong length) arrives in Rocq as `None`
@@ -344,45 +321,4 @@
   (func (export "ffi_argon2_enroll") (param $force i32) (param $password i32)
     (global.set $result (call $argon2_enroll (local.get $password))))
 
-  ;; argon2_derive : bytes -> bytes -> option bytes
-  ;;
-  ;; Here only to mint a stored tag when a user is created.  Nothing on the
-  ;; login path should call it: deriving in order to compare in Rocq is the
-  ;; mistake `verify` exists to prevent.
-  (func (export "ffi_argon2_derive")
-        (param $password i32) (param $salt i32) (result i32)
-    (local $pp i32) (local $pl i32)
-    (local $sp i32) (local $sl i32)
-    (local $par i32) (local $ret i32)
-
-    (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
-    (local.set $par (call $alloc (i32.const 16) (i32.const 4)))
-    (if (global.get $out_of_mem) (then (return (i32.const 1))))
-    (call $wit_recommended_params (local.get $par))
-
-    (local.set $pp (call $lower (local.get $password)))
-    (local.set $pl (global.get $buf_len))
-    (local.set $sp (call $lower (local.get $salt)))
-    (local.set $sl (global.get $buf_len))
-    (if (global.get $out_of_mem) (then (return (i32.const 1))))
-
-    (call $wit_derive
-      (local.get $pp) (local.get $pl)
-      (local.get $sp) (local.get $sl)
-      (global.get $algorithm)
-      (i32.load (local.get $par))
-      (i32.load offset=4 (local.get $par))
-      (i32.load offset=8 (local.get $par))
-      (i32.load offset=12 (local.get $par))
-      (local.get $ret))
-
-    ;; result<list<u8>, error>: discriminant at 0; on ok, pointer at 4 and
-    ;; length at 8, allocated in our memory through `cabi_realloc`.
-    (if (result i32) (i32.load8_u (local.get $ret))
-      (then (i32.const 1))  ;; err -> None
-      (else
-        (call $some
-          (call $lift_bytes
-            (i32.load offset=4 (local.get $ret))
-            (i32.load offset=8 (local.get $ret)))))))
 )

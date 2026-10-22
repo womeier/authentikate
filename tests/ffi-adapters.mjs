@@ -100,8 +100,6 @@ try {
     const costs = [2, 19456, 2, 1, 32];
     const e = instantiate('components/service/adapters/argon2.wat', h, {
       'authentikate:crypto/argon2@0.1.0': {
-        'recommended-params': () => assert.fail('verify must use stored parameters'),
-        derive: () => assert.fail('verify must not derive a tag'),
         enroll(pp, pl, ret) {
           enrollCalls++;
           assert.deepEqual(h.flat(pp, pl), enrollPassword);
