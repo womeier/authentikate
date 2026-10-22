@@ -1,5 +1,10 @@
 # Deferred Work
 
+- [ ] Implement rate limiting only after settling counter keying, enumeration,
+  account lockout, bounded storage, trustworthy time and atomic enforcement.
+  Commit `077c9be` removed the unwired `Backoff.v` policy and trace proofs;
+  its parent retains the model for reference. Any replacement must connect its
+  bounds to actual request handling, including concurrent requests and resets.
 - [ ] Preserve authentication-token validity across restarts by persisting the
   HMAC signing key, rather than generating a new one on every host startup.
   Create it atomically on first run with narrowly scoped filesystem access and
