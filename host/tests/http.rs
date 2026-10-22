@@ -109,7 +109,7 @@ fn real_http_and_stdout_email() {
         server.address
     ));
     assert_eq!(status, 200);
-    assert!(page.contains("Identity Workbench"));
+    assert!(page.contains("<title>Authentikate / Authentication Demo</title>"));
     // A protocol-relative target still reaches the gateway as a path and is
     // refused as not origin-form.  Absolute-form is different now: wasi-http
     // takes the authority from the URI in preference to the Host header, so
