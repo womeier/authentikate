@@ -17,6 +17,47 @@
   in-memory provider would require a separate, long-lived instance. Signup no
   longer depends on that serialization -- it creates through the atomic CAS --
   but a file-backed provider still has to implement `cas`/`swap` atomically.
+  `wasi:filesystem`'s `open-at` with `create | exclusive` is `O_CREAT|O_EXCL`,
+  which is create-if-absent atomically at the OS level, so it discharges
+  `store_creates`'s exclusivity across processes rather than within one host --
+  a stronger basis for `signup_happens_once` than the current mutex. The
+  service never overwrites a record, so only the `seen = None` case of `swap`
+  needs implementing; the rest can refuse. One correction to make before
+  writing it: `create | exclusive` on the final path claims the *name*
+  atomically but not the contents, since the bytes go in afterwards, which
+  reopens exactly the claim-then-write window that disqualifies the
+  `increment` route below. The fix is the standard one -- write the whole
+  record into a uniquely named temporary (`wasi:random` for the name), then
+  `link-at` it to the account path, which fails with `exist` if the address is
+  taken. `link-at` is the atomic claim *and* the content is already there when
+  it succeeds, so `create_then_get` and `create_is_exclusive` are discharged
+  by one syscall and a failed claim leaves no trace. That is also the
+  structural reason `increment` cannot be fixed the same way: a counter has
+  nowhere to put the record, so its claim is separable by construction.
+  Note that key-to-path encoding becomes attacker-facing surface -- email
+  addresses contain `/`, `.` and case, and path length is bounded -- so the
+  path should be a hash of the key rather than the key. Doing this plus folding
+  `authentikate:frontend/settings` into a config component (with the signing
+  seed generated into that same directory from `wasi:random` on first run,
+  rather than baked in at build time) would leave `wasi:filesystem` as the only
+  non-proxy import and delete the host rather than shrink it.
+  - Rejected alternative, recorded because it is non-obvious enough to be
+    reinvented: build create-if-absent out of `wasi:keyvalue/atomics.increment`
+    by incrementing a per-email claim key and treating a returned `1` as
+    winning the race. It is a correct atomic test-and-set and exactly one
+    caller ever sees `1`, so create-at-most-once survives. What does not is the
+    atomicity of claim and write: with `cas`/`swap` the record *is* what is
+    written atomically, while claim-then-`set` has a window in which the key is
+    taken and no account exists, so a crash or a refused write leaves the
+    address permanently unclaimable and unrecoverable without leases. Failed
+    attempts also increment, making the counter attacker-driven storage growth,
+    and wasmtime's draft is `delta: u64 -> result<u64>` against this repo's
+    `i64 -> i64`, so adopting it means editing `service.wit` and the
+    attacker-facing `store.wat`. This matters because it is the only route to
+    plain `wasmtime serve`: that subcommand does link `wasi-keyvalue` and
+    `wasi-config` providers behind `-S`, but its vendored `atomics` is an
+    earlier draft with `increment` alone and no `cas` resource at all, so the
+    composed artifact cannot link against it as written.
 - [ ] Consider extracting the JSON layer as a standalone Rocq library
   (`rocq-json`): the parser, canonical printer, accessors, `parse_print`,
   `parse_json_ok`, `get_str_ok` and the fuel measure, over a lower layer with
