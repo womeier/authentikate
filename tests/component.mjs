@@ -93,14 +93,14 @@ const out = resolve(process.argv[2] ?? 'build');
       'rocq#result:global', 'rocq#main_function:function',
       'argon2#ffi_argon2_verify:function', 'argon2#ffi_argon2_enroll:function', 'argon2#ffi_secret_of_bytes:function',
       'ed25519#ffi_ed25519_sign:function', 'ed25519#ffi_ed25519_verify:function',
-      'store#ffi_kv_get:function', 'store#ffi_kv_set:function', 'email#ffi_email_send:function',
+      'store#ffi_kv_get:function', 'store#ffi_kv_create:function', 'email#ffi_email_send:function',
       'wasi:clocks/wall-clock@0.2.0#now:function',
     ].sort());
     wrapper = new WebAssembly.Instance(service, {
       rocq,
       argon2: { ffi_argon2_verify: adapter, ffi_argon2_enroll: adapter, ffi_secret_of_bytes: adapter },
       ed25519: { ffi_ed25519_sign: adapter, ffi_ed25519_verify: adapter },
-      store: { ffi_kv_get: adapter, ffi_kv_set: adapter },
+      store: { ffi_kv_get: adapter, ffi_kv_create: adapter },
       email: { ffi_email_send: adapter },
       'wasi:clocks/wall-clock@0.2.0': {
         now(ret) {
@@ -137,7 +137,7 @@ const out = resolve(process.argv[2] ?? 'build');
     assert.equal(calls, 3);
     for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_enroll', 2],
       ['ffi_secret_of_bytes', 2], ['ffi_ed25519_sign', 3], ['ffi_ed25519_verify', 4],
-      ['ffi_kv_get', 2], ['ffi_kv_set', 3], ['ffi_email_send', 5]]) {
+      ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
       assert.equal(wrapper[name].length, arity);
       boundaryArgs = Array.from({ length: arity }, (_, i) => i + 10);
       for (boundaryResidue of [1, 2, 3]) {
@@ -156,12 +156,14 @@ if (!existsSync(`${out}/authentikate.component.wasm`)) {
 }
 execFileSync('wasm-tools', ['validate', `${out}/authentikate.component.wasm`], { stdio: 'inherit' });
 const wit = execFileSync('wasm-tools', ['component', 'wit', `${out}/authentikate.component.wasm`], { encoding: 'utf8' });
-for (const name of ['wasi:keyvalue/store@0.2.0-draft', 'authentikate:crypto/argon2@0.1.0',
+for (const name of ['wasi:keyvalue/store@0.2.0-draft2', 'wasi:keyvalue/atomics@0.2.0-draft2',
+  'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0', 'authentikate:email/sender@0.1.0',
   'wasi:clocks/wall-clock@0.2.0']) assert.ok(wit.includes(`import ${name}`), name);
 assert.deepEqual([...wit.matchAll(/^\s*import ([^;]+);/gm)].map(m => m[1]).sort(), [
   'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
-  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft',
+  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft2',
+  'wasi:keyvalue/atomics@0.2.0-draft2',
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
 assert.ok(wit.includes('export authentikate:service/api@0.1.0'));
@@ -174,15 +176,21 @@ console.log('component: validates; only custom service API exported; exact clock
 const core = new WebAssembly.Module(readFileSync(`${out}/authentikate.core.wasm`));
 assert.deepEqual([...new Set(WebAssembly.Module.imports(core).map(i => i.module))].sort(), [
   'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
-  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft',
+  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft2',
+  'wasi:keyvalue/atomics@0.2.0-draft2',
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
 assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
   'authentikate:crypto/argon2@0.1.0#enroll:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
   'authentikate:crypto/ed25519@0.1.0#sign:function', 'authentikate:crypto/ed25519@0.1.0#verify:function',
-  'authentikate:email/sender@0.1.0#send:function', 'wasi:keyvalue/store@0.2.0-draft#open:function',
-  'wasi:keyvalue/store@0.2.0-draft#[method]bucket.get:function',
-  'wasi:keyvalue/store@0.2.0-draft#[method]bucket.set:function',
+  'authentikate:email/sender@0.1.0#send:function', 'wasi:keyvalue/store@0.2.0-draft2#open:function',
+  'wasi:keyvalue/store@0.2.0-draft2#[method]bucket.get:function',
+  // No bucket.set: the service has no overwrite primitive at all, and
+  // creation goes through the CAS operations below.
+  'wasi:keyvalue/atomics@0.2.0-draft2#[static]cas.new:function',
+  'wasi:keyvalue/atomics@0.2.0-draft2#[method]cas.current:function',
+  'wasi:keyvalue/atomics@0.2.0-draft2#swap:function',
+  'wasi:keyvalue/atomics@0.2.0-draft2#[resource-drop]cas:function',
   'wasi:clocks/wall-clock@0.2.0#now:function',
 ].sort());
 assert.deepEqual(WebAssembly.Module.exports(core).map(e => e.name).sort(), [
@@ -196,6 +204,8 @@ let sendError = false, clockSeconds = 0n, clockCalls = 0;
 let opens = 0, gets = 0, hashes = 0, enrolls = 0, writes = 0;
 const emails = [], events = [];
 const store = new Map();
+const handles = new Map();
+let nextHandle = 20, interleave = null;
 const view = () => new DataView(e.memory.buffer);
 const put = (p, n) => view().setUint32(p, n, true);
 const get = p => view().getUint32(p, true);
@@ -221,7 +231,7 @@ const imports = {
       put(ret + 8, 999999999);
     },
   },
-  'wasi:keyvalue/store@0.2.0-draft': {
+  'wasi:keyvalue/store@0.2.0-draft2': {
     open(p, n, ret) { opens++; assert.equal(n, 0); put(ret, 0); put(ret + 4, 7); },
     '[method]bucket.get'(handle, p, n, ret) {
       gets++; assert.equal(handle, 7);
@@ -231,12 +241,42 @@ const imports = {
       put(ret + 4, Number(Boolean(value)));
       if (value) list(ret, value, 8);
     },
-    '[method]bucket.set'(handle, p, n, vp, vn, ret) {
-      writes++; assert.equal(handle, 7);
-      if (writeError) { failure(ret); return; }
-      store.set(bytes(p, n).toString(), bytes(vp, vn));
+  },
+  // A real compare-and-swap, not a stub: a handle remembers the value its key
+  // held when it was opened, and a swap is refused if the key has moved since.
+  // That is what lets `interleave` below put another writer in between.
+  'wasi:keyvalue/atomics@0.2.0-draft2': {
+    '[static]cas.new'(handle, p, n, ret) {
+      assert.equal(handle, 7);
+      if (mode === 'outage') { failure(ret); return; }
+      const key = bytes(p, n).toString();
+      handles.set(nextHandle, { key, seen: store.get(key) });
+      put(ret, 0); put(ret + 4, nextHandle++);
+      if (interleave) { store.set(key, Buffer.from(interleave)); interleave = null; }
+    },
+    '[method]cas.current'(id, ret) {
+      const open = handles.get(id);
+      assert.ok(open, 'current must run on a live handle');
+      put(ret, 0); put(ret + 4, Number(Boolean(open.seen)));
+      if (open.seen) list(ret, open.seen, 8);
+    },
+    swap(id, p, n, ret) {
+      writes++;
+      const open = handles.get(id);
+      assert.ok(open, 'swap must run on a live handle');
+      handles.delete(id);  // swap consumes it
+      if (writeError) { put(ret, 1); put(ret + 4, 0); put(ret + 8, 0); put(ret + 12, 0); return; }
+      if (store.get(open.key) !== open.seen) {
+        handles.set(nextHandle, { key: open.key, seen: store.get(open.key) });
+        put(ret, 1); put(ret + 4, 1); put(ret + 8, nextHandle++);
+        return;
+      }
+      store.set(open.key, bytes(p, n));
       events.push('write');
       put(ret, 0);
+    },
+    '[resource-drop]cas'(id) {
+      assert.ok(handles.delete(id), 'a handle must be dropped exactly once, and only while live');
     },
   },
   'authentikate:crypto/argon2@0.1.0': {
@@ -416,4 +456,20 @@ const beforeRetry = [enrolls, writes, emails.length];
 sendError = false;
 assert.equal(request('signup', credentials).status, 409);
 assert.deepEqual([enrolls, writes, emails.length], beforeRetry, 'retry after send failure must not enroll, write, or send again');
-console.log('core: real extracted closures, sequential requests, malformed input, dummy hashing, enrollment, persistence/refusals, validation isolation, post-write welcome email and send failure persistence');
+
+// The race itself.  `interleave` makes another writer take the key *after*
+// this request has read it as absent and opened its handle -- precisely the
+// window a get followed by a set cannot close.  The swap is refused, signup
+// answers 409, and the other writer's record is still there afterwards.
+store.delete('user@example.test');
+const winner = '{"email":"somebody-else"}';
+interleave = winner;
+const beforeRace = [writes, emails.length, events.length];
+assert.equal(request('signup', credentials).status, 409, 'a lost swap is a conflict, not a 500');
+assert.equal(store.get('user@example.test').toString(), winner,
+  'the loser of the race must not overwrite the winner');
+assert.equal(writes, beforeRace[0] + 1, 'the swap must have been attempted');
+assert.deepEqual([emails.length, events.length], beforeRace.slice(1),
+  'a lost race must not send email or record a write');
+assert.equal(handles.size, 0, 'every CAS handle must have been consumed or dropped');
+console.log('core: real extracted closures, sequential requests, malformed input, dummy hashing, enrollment, persistence/refusals, validation isolation, post-write welcome email and send failure persistence, create-if-absent losing a race');

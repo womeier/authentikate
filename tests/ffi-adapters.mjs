@@ -203,11 +203,13 @@ try {
 
   for (const openError of [false, true]) {
     const h = heap();
-    let mode = 'value', opens = 0, gets = 0, sets = 0, setError = false;
+    let mode = 'value', cas = 'absent';
+    let opens = 0, gets = 0, news = 0, currents = 0, swaps = 0, drops = [];
     const key = [...Buffer.from('user@example.test')], value = [0, 255, 128, 65];
     let setValue = [...Buffer.from('{"salt":"AAECAwQFBgcICQoLDA0ODw==","tag":"AP+A"}')];
+    const create = (k, v) => h.call(e.ffi_kv_create, k, h.bytes(v));
     const e = instantiate('components/service/adapters/store.wat', h, {
-      'wasi:keyvalue/store@0.2.0-draft': {
+      'wasi:keyvalue/store@0.2.0-draft2': {
         open(p, n, ret) {
           opens++;
           assert.equal(n, 0);
@@ -229,40 +231,83 @@ try {
           if (mode === 'value' || mode === 'empty') listResult(h, e, ret, mode === 'empty' ? [] : value, 8);
           else { h.put(ret + 8, 0); h.put(ret + 12, 0); }
         },
-        '[method]bucket.set'(bucket, kp, kl, vp, vl, ret) {
-          sets++;
+      },
+      // Create-if-absent is three calls, and every branch of the two variants
+      // is exercised below: the handle, the read that comes with it, and the
+      // swap that is the atomic step.
+      'wasi:keyvalue/atomics@0.2.0-draft2': {
+        '[static]cas.new'(bucket, kp, kl, ret) {
+          news++;
           assert.equal(bucket, 7);
           assert.deepEqual(h.flat(kp, kl), key);
-          assert.deepEqual(h.flat(vp, vl), setValue);
-          // Fill the entire result<_, error> return area, including the
-          // other(string) payload, without overwriting flattened arguments.
-          h.put(ret, Number(setError));
-          h.put(ret + 4, 2);
+          // result<_, cas-error> is twenty bytes, not sixteen.
+          assert.ok(h.rocq.mem_ptr.value >= ret + 20);
+          h.put(ret, Number(cas === 'new-error'));
+          h.put(ret + 4, cas === 'new-error' ? 2 : 11);
           h.put(ret + 8, 0);
           h.put(ret + 12, 0);
-          assert.deepEqual(h.flat(kp, kl), key);
+          h.put(ret + 16, 0);
+        },
+        '[method]cas.current'(self, ret) {
+          currents++;
+          assert.equal(self, 11, 'current must run on the handle cas.new returned');
+          h.put(ret, Number(cas === 'current-error'));
+          h.put(ret + 4, Number(cas === 'taken'));
+          if (cas === 'taken') listResult(h, e, ret, value, 8);
+          else { h.put(ret + 8, 0); h.put(ret + 12, 0); }
+        },
+        swap(self, vp, vl, ret) {
+          swaps++;
+          assert.equal(self, 11, 'swap consumes the handle cas.new returned');
+          assert.deepEqual(h.flat(vp, vl), setValue);
+          h.put(ret, Number(cas !== 'absent'));
+          h.put(ret + 4, Number(cas === 'lost'));
+          // cas-failed carries a fresh handle; store-error carries an error.
+          h.put(ret + 8, cas === 'lost' ? 12 : 2);
+          h.put(ret + 12, 0);
+          h.put(ret + 16, 0);
           assert.deepEqual(h.flat(vp, vl), setValue);
         },
+        '[resource-drop]cas'(self) { drops.push(self); },
       },
     });
     const k = h.bytes(key);
     if (openError) {
-      assert.equal(h.call(e.ffi_kv_set, k, h.bytes(setValue)), 1);
+      assert.equal(create(k, setValue), 1);
       assert.equal(h.call(e.ffi_kv_get, k), 1);
       assert.equal(h.call(e.ffi_kv_get, k), 1);
-      assert.equal(opens, 3, 'failed open must be retried across set/get');
+      assert.equal(opens, 3, 'failed open must be retried across create/get');
       assert.equal(gets, 0);
-      assert.equal(sets, 0);
+      assert.deepEqual([news, currents, swaps, drops], [0, 0, 0, []]);
     } else {
-      // Set opens the bucket; get and subsequent writes reuse the same handle.
-      assert.equal(h.some(h.call(e.ffi_kv_set, k, h.bytes(setValue))), 3);
-      setError = true;
-      assert.equal(h.call(e.ffi_kv_set, k, h.bytes(setValue)), 1);
-      setError = false;
-      for (setValue of [value, []]) {
-        assert.equal(h.some(h.call(e.ffi_kv_set, k, h.bytes(setValue))), 3);
+      // Create opens the bucket; get and subsequent creates reuse the handle.
+      assert.equal(h.some(create(k, setValue)), 3);
+      assert.deepEqual([news, currents, swaps, drops], [1, 1, 1, []],
+        'a successful create consumes its handle in the swap');
+      // The key is already there: a conflict, not a failure, and no swap.
+      cas = 'taken';
+      assert.equal(h.some(create(k, setValue)), 1);
+      assert.deepEqual([currents, swaps, drops], [2, 1, [11]],
+        'a handle that is not swapped must go back');
+      // Absent when the handle was opened, taken by the time it was used.
+      cas = 'lost';
+      assert.equal(h.some(create(k, setValue)), 1);
+      assert.deepEqual([swaps, drops], [2, [11, 12]],
+        'the retry handle cas-failed hands back must go back too');
+      // Store failures are None at every one of the three calls, and never a
+      // successful acknowledgment.
+      for (const [stage, expected] of
+           [['swap-error', [11, 12]], ['current-error', [11, 12, 11]],
+            ['new-error', [11, 12, 11]]]) {
+        cas = stage;
+        assert.equal(create(k, setValue), 1);
+        assert.deepEqual(drops, expected);
       }
-      assert.equal(sets, 4);
+      assert.deepEqual([news, currents, swaps], [6, 5, 3]);
+      cas = 'absent';
+      for (setValue of [value, []]) {
+        assert.equal(h.some(create(k, setValue)), 3);
+      }
       assert.deepEqual(h.unbytes(h.some(h.some(h.call(e.ffi_kv_get, k)))), value);
       mode = 'empty';
       assert.equal(h.some(h.some(h.call(e.ffi_kv_get, k))), 1);
@@ -272,14 +317,15 @@ try {
       assert.equal(h.call(e.ffi_kv_get, k), 1);
       assert.equal(opens, 1, 'successful bucket must be cached');
     }
-    const before = [opens, gets, sets];
+    const before = [opens, gets, news, currents, swaps];
     for (const invalid of [[255], [0xc0, 0xaf], [0xed, 0xa0, 0x80]]) {
       assert.equal(h.some(h.call(e.ffi_kv_get, h.bytes(invalid))), 1);
-      assert.equal(h.call(e.ffi_kv_set, h.bytes(invalid), h.bytes(setValue)), 1);
+      assert.equal(create(h.bytes(invalid), setValue), 1);
     }
-    assert.deepEqual([opens, gets, sets], before, 'invalid UTF-8 must not reach host');
+    assert.deepEqual([opens, gets, news, currents, swaps], before,
+      'invalid UTF-8 must not reach host');
   }
-  console.log('store: nested options, exact set JSON/binary/empty bytes, acknowledgment/refusal, shared bucket retry/cache, UTF-8 rejection');
+  console.log('store: nested options, create-if-absent over CAS (created/taken/lost/refused), handles returned, shared bucket retry/cache, UTF-8 rejection');
 
   {
     const h = heap();

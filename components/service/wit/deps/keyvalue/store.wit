@@ -1,6 +1,13 @@
-// WASI Keyvalue v0.2.0-draft, Apache-2.0 WITH LLVM-exception.
-// https://github.com/WebAssembly/wasi-keyvalue/blob/v0.2.0-draft/wit/store.wit
-package wasi:keyvalue@0.2.0-draft;
+// WASI Keyvalue 0.2.0-draft2, Apache-2.0 WITH LLVM-exception.  Upstream's
+// interface with its doc comments trimmed; nothing else is changed.
+//
+// Pinned at an untagged commit on main, because the CAS operations this
+// service needs for create-if-absent exist only there: the v0.2.0-draft tag
+// has `increment` and no `cas`.  The package version differs accordingly
+// (0.2.0-draft2), which is why every import string here says draft2.
+//
+// https://github.com/WebAssembly/wasi-keyvalue/blob/aa972c86e4294b97908b8d24d5950cc525ace7a6/wit/store.wit
+package wasi:keyvalue@0.2.0-draft2;
 
 interface store {
     variant error {
@@ -11,7 +18,7 @@ interface store {
 
     record key-response {
         keys: list<string>,
-        cursor: option<u64>,
+        cursor: option<string>,
     }
 
     open: func(identifier: string) -> result<bucket, error>;
@@ -21,6 +28,6 @@ interface store {
         set: func(key: string, value: list<u8>) -> result<_, error>;
         delete: func(key: string) -> result<_, error>;
         exists: func(key: string) -> result<bool, error>;
-        list-keys: func(cursor: option<u64>) -> result<key-response, error>;
+        list-keys: func(cursor: option<string>) -> result<key-response, error>;
     }
 }

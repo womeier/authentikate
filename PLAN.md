@@ -26,7 +26,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
 | Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
-| Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store write-read coherence in `store_commits`, neither proved, though forgery rejection (`no_valid_token_without_a_password`) follows from the oracle and nothing else; login's non-disclosure of existence and validation's independence of the store are proved assumption-free; no timing proof |
+| Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store create-read coherence and exclusivity in `store_creates`, neither proved, though forgery rejection (`no_valid_token_without_a_password`) follows from the oracle and nothing else, and account uniqueness (`signup_happens_once`) from the exclusivity alone; login's non-disclosure of existence and validation's independence of the store are proved assumption-free; no timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
 Commands from the repository root:
@@ -189,7 +189,7 @@ boundary; this is not a proof that the whole service is constant-time.
 - `Store.v` — the stored record and the lookup.  See
   [Persistence](#persistence); the shape is a `store_ops` record carrying
   `kv_get : bytes -> option (option bytes)` and
-  `kv_set : bytes -> bytes -> option bool`, a `user` record, a `decode` for
+  `kv_create : bytes -> bytes -> option bool`, a `user` record, a `decode` for
   the stored JSON, and `stored : store_ops -> bytes -> lookup_result` with
   `lookup_result` = `Found`/`Absent`/`Unavailable`. `enrollment_record` adds
   the email to public enrollment JSON and decodes the result before writing.
@@ -216,7 +216,7 @@ unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
 The mechanism is `CertiRocq Register`, not unregistered axioms. The earlier
 upstream backend gap is resolved by the fork pinned at `6d34b50b` in
 `flake.nix`; the real service now compiles. Seven registrations cover Argon2
-verify/enroll, Ed25519 sign/verify, keyvalue get/set and `Secret.of_bytes`.
+verify/enroll, Ed25519 sign/verify, keyvalue get/create and `Secret.of_bytes`.
 
 These imports return **void**, publishing the Rocq result through the shared
 mutable `result` global, with shared memory/allocation globals. The pinned
@@ -236,7 +236,7 @@ with `wasm-merge`, removes link-only exports and unused builtins (checking
 they are unreferenced), prunes with `wasm-opt`, embeds authoritative WIT and
 runs `wasm-tools component new` and validation. The output still imports
 custom `authentikate:crypto/{argon2,ed25519}@0.1.0` and standard
-`wasi:keyvalue/store@0.2.0-draft`. `make host-component` then uses the explicit
+`wasi:keyvalue/{store,atomics}@0.2.0-draft2`. `make host-component` then uses the explicit
 `host/composition.wac` graph to connect the Rust crypto and stdout email components.
 The default `make`/Nix artifact remains the independently reusable service.
 
@@ -289,8 +289,9 @@ Bindings stage the authoritative WIT sources instead of copying crypto types.
 Each request gets a fresh composition to reclaim all Wasm heaps. An ephemeral
 host seed survives requests and is reimported into each signer; the host map
 preserves account records. One blocking worker executes component requests at
-a time, with bounded admission (eight including the active request). This
-serializes get-then-set in one process only. Fuel and Wasm memory limits bound
+a time, with bounded admission (eight including the active request). Signup
+no longer needs that serialization -- it creates through the host's CAS, which
+compares and writes under one mutex. Fuel and Wasm memory limits bound
 guest execution; they are not a production resource policy or timing theorem.
 
 The host provides WASI clock/random/stdout and keyvalue resources, but no guest
@@ -350,7 +351,9 @@ feature it models is one this lookup does not use.  `wasi:sql` is a
 non-starter for a different reason: it is phase-one draft with no wasmtime
 implementation.
 
-So: a `get` by primary key for login, and `get` followed by `set` for signup.
+So: a `get` by primary key for login, and a create-if-absent for signup —
+`cas.new`, `cas.current`, `swap` from `wasi:keyvalue/atomics`, not
+`bucket.set`, which cannot be create-only.
 
 ```
 key    the email, verbatim, as a UTF-8 string
@@ -384,13 +387,20 @@ Decisions worth recording:
 - **Enrollment writes public JSON, not a serialized `Secret.t`.** The seal
   is one-way; the provider explicitly returns public salt/tag text and
   `Store.enrollment_record` adds the email and validates the final record.
-  `ffi_kv_set` now exists and returns an inspected `option bool`, not `unit`:
-  a unit-valued write risks erasure as definitionally `tt`. The acknowledgment
-  keeps this call live, but does not establish atomicity or temporal semantics.
+  `ffi_kv_create` returns an inspected `option bool`, not `unit`:
+  a unit-valued write risks erasure as definitionally `tt`. The three answers
+  are distinct — created, taken, refused — but the acknowledgment still says
+  nothing about durability or temporal semantics.
+- **`store_ops` has no overwrite operation.** `kv_create` is the only writer,
+  and `bucket.set` is not imported, so "the service never overwrites a record"
+  is structural rather than a property of the control flow. The adapter builds
+  the create out of `cas.new`/`cas.current`/`swap`: a lost swap means somebody
+  else created the key, which is exactly the `409` answer, so the retry handle
+  WASI offers is dropped unused.
 - **Signup checks the raw key**, not `Store.stored`: even corrupt or foreign
-  existing values conflict with `409` and must not be overwritten sequentially.
-  Get-then-set still races with concurrent writers; standard `bucket.set` is
-  not create-only. A transactional store or external serialization is needed.
+  existing values conflict with `409`. That read is now only an optimization —
+  it avoids paying for an Argon2 enrollment that cannot be used — and
+  uniqueness rests on the create, not on it.
 - **`validate` reads no key at all**, since a token carries its own claims
   and signature.  Validation therefore keeps working while the store is down
   — and revocation is, for the same reason, not expressible.
@@ -416,7 +426,7 @@ It therefore validates per RFC 3629 — rejecting overlongs, surrogates and
 anything above U+10FFFF — and answers `Some None` for a key that fails, which
 is honest: every key this service writes went through the same path, so a
 non-UTF-8 key names no account. The current default adapter suite exercises
-invalid UTF-8 get/set behavior; the existing `tests/run.sh` helper also checks
+invalid UTF-8 get/create behavior; the existing `tests/run.sh` helper also checks
 the validator against Node's decoder, but is not the default Nix test driver.
 
 ## Rate limiting
@@ -461,28 +471,33 @@ already proved:
 
 And one mechanical blocker: the read-modify-write must be atomic or the bound
 is vacuous — n concurrent requests all read the same count.
-`wasi:keyvalue/atomics` has `increment` and `cas`; a plain get-then-set does not.
+`wasi:keyvalue/atomics` has `increment` and `cas`; a plain get-then-set does
+not. That interface is now imported for account creation, so the counter is a
+matter of using what is already wired in rather than of adding a capability.
 
 ## Account creation
 
 Built as `RtSignup`, exported through WIT and `/api/signup`. The implementation
-chooses an inspected `ffi_kv_set` acknowledgment instead of the earlier
+chooses an inspected `ffi_kv_create` acknowledgment instead of the earlier
 write-at-edge proposal. The pure `store_ops` abstraction keeps structural
 proofs quantified over operations; only extraction registers the effects.
 This does not give those effects a temporal or transactional proof.
 
 The sequence is raw `kv_get`, reject any existing value, enroll, validate and
-add email in Rocq, then set. Only `Some true` acknowledges creation (`201 {}`);
+add email in Rocq, then create. Only `Some true` acknowledges creation (`201 {}`);
 `None` and `Some false` are `500`, as are enrollment or record validation
 failure. `created_requires_persistence` proves this structural implication,
 not future durability or uniqueness. `components/service/theories/SignupTests.v`
 covers refusals and
 corrupt/mismatched existing records as well as success.
 
-Atomic create-if-absent remains unimplemented. The synchronous single-process
-demo serializes calls and tests concurrent duplicates as 201/409, but that
-does not fix the get-then-set race for asynchronous or multi-process stores.
-The earlier write-intent/threaded-state design remains an alternative if a
+Atomic create-if-absent is implemented, through `wasi:keyvalue/atomics`
+rather than an effect model: `cas.new` on the key, then `swap`, which the
+provider must refuse if the key moved in between. `store_ops` lost `kv_set`
+entirely, so overwriting is not expressible, and `signup_happens_once` proves
+uniqueness from the swap's exclusivity. What is not fixed is deployment: an
+asynchronous or multi-process store is only as exclusive as its CAS. The
+earlier write-intent/threaded-state design remains an alternative if a
 stronger effect model is needed. Generic `Store.encode` of an opaque user and
 a corresponding decode/encode theorem have not been added.
 
@@ -626,7 +641,8 @@ provider correctness, storage consistency or deployment security:
    These are policy trace theorems, not bounds on this running service.
 7. **Creation requires acknowledgment.** `created_requires_persistence`
    proves absent raw key, successful enrollment/record construction and
-   `kv_set` returning `Some true`. It proves neither durability nor uniqueness.
+   `kv_create` returning `Some true`. It proves durability nowhere; for
+   uniqueness see 14 below.
 
 8. **Accepted implies authenticated.** `accepted_implies_authenticated`
    proves that a `valid: true` answer means some login was parsed, a record
@@ -664,6 +680,11 @@ provider correctness, storage consistency or deployment security:
    token carries its own claims and signature, and revocation is *excluded*
    rather than merely unimplemented — no reachable store state makes a fresh,
    well-signed token stop validating.
+14. **An email is created at most once.** `signup_happens_once` proves that
+   of two signups for the same email, at most one answers `Created`. It rests
+   on `create_is_exclusive` — the atomicity of the store's compare-and-swap —
+   and on nothing else: no Argon2 or signing spec, no bounds, and the two
+   requests may carry different passwords and different clocks.
 
 Forgery rejection cannot be established without an assumption. Merely
 assuming a verifier is a function says nothing about which signatures it
@@ -818,7 +839,7 @@ Theorem validate_ignores_the_store :
       = handle ops kv' mail cfg now RtValidate body.
 ```
 
-Two stores rather than one changing state, as in `store_commits`, because the
+Two stores rather than one changing state, as in `store_creates`, because the
 model has no state: one answers `Absent` for this email, the other `Found u`,
 and the responses are equal. The lemma under it is about `login_check`
 (`Proofs.v#L965`), where the choice is made — `found` picks the salt,
@@ -850,7 +871,7 @@ proved:
 Corollary signup_then_validate :
   forall ops kv kv' mail cfg now now' d email password body,
     argon2_spec ops ->
-    store_commits kv kv' ->
+    store_creates kv kv' ->
     crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
     (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
     ok_string (cfg_iss cfg) ->
@@ -874,15 +895,26 @@ security, and is stated over `Store.public_of_json` — the component's own
 output, with no serialization of this module's in between — so that a bug in
 `enrollment_record` cannot hide inside the assumption.
 
-`store_commits` is assumed, and is the interesting one. There is no state in
+`store_creates` is assumed, and is the interesting one. There is no state in
 the model, so "the account is there afterwards" cannot be said of one store;
 it is said of two, the store signup ran against and the store the later login
-runs against, related by `kv_set kv key v = Some true -> kv_get kv' key =
-Some (Some v)`. That is the production storage question written down rather
-than answered. It does not say the write is durable, that no other writer
-touched the key in between, that get-then-set is atomic, or that a second
-signup for the same email loses: two concurrent signups can both reach
-`Created` against stores that each satisfy it.
+runs against:
+
+```coq
+Record store_creates (kv kv' : store_ops) : Prop :=
+  MkCreates {
+    create_then_get : forall key v,
+      kv_create kv key v = Some true -> kv_get kv' key = Some (Some v);
+    create_is_exclusive : forall key v v',
+      kv_create kv key v = Some true -> kv_create kv' key v' <> Some true
+  }.
+```
+
+The first field is the read-back promise the lifecycle theorem needs. The
+second is atomicity stated as the only thing it buys a caller: if this create
+won, no other create of that key can also win. Both are the production
+storage question written down rather than answered — nothing here says the
+write is durable, or that any particular provider honors either field.
 
 The serialization is proved, and this cost a code change.
 `Store.enrollment_record` used to prepend an email field to the Argon2
@@ -902,8 +934,26 @@ error". `login_then_validate_wire` is `login_then_validate` restated over
 `render (Token token)` — the object it built by hand is the response the host
 sends, and saying so costs one `unfold`.
 
-Not covered: liveness (every hypothesis is an implication), uniqueness, and
-anything about concurrency.
+Uniqueness follows from the second field alone, and needs none of the
+hypotheses above:
+
+```coq
+Theorem signup_happens_once :
+  forall ops kv kv' mail cfg now now' email password password' body body',
+    store_creates kv kv' ->
+    parse_request RtSignup body = Signup email password ->
+    parse_request RtSignup body' = Signup email password' ->
+    handle ops kv mail cfg now RtSignup body = Created ->
+    handle ops kv' mail cfg now' RtSignup body' <> Created.
+```
+
+Two signups, the same email, different passwords and clocks permitted: at
+most one is created. The proof is `created_requires_persistence` twice and
+then `create_is_exclusive`, which is the point of keeping the assumption
+that narrow.
+
+Not covered: liveness (every hypothesis is an implication), and whether a
+provider actually is atomic.
 
 `Print Assumptions login_then_validate` already runs in the proof file. That
 turns "what are we actually trusting" into output rather than a comment, and
@@ -924,12 +974,16 @@ proof.
 - Adapter/runtime tests cover the void/global-result ABI, ignored force
   argument, u32 handles, memory growth, all seven alignment boundaries,
   wrapper marshalling, actual extracted closures, sequential calls, failures,
-  signup persistence acknowledgments and validation's storage independence.
+  signup persistence acknowledgments, create-if-absent over CAS (created,
+  taken, lost race, refused, handle accounting) and validation's storage
+  independence.
   Crypto imports in these tests are mocks, not Rust or native cryptography.
 - `cargo test --locked` uses the actual WAC-composed service and Rust Wasm
   Argon2/Ed25519/email. It checks signup/login/claims across fresh instances,
   tampering, malformed input, duplicate/concurrent signup, Host/Origin and body
   limits, real socket/chunked requests, stdout email and Linux stdout failure.
+  The host implements `atomics` over the same `BTreeMap`, comparing and
+  writing under one mutex, so two parallel signups answer 201 and 409.
 - Rust native unit tests total 14 (4 Argon2, 10 Ed25519), covering enrollment
   format/verification and RFC vectors, invalid handles/inputs and strict
   rejection cases. Native enrollment tests supply salt to the helper; they
@@ -959,8 +1013,8 @@ proof.
   table. A WIT resource could improve lifecycle/capability semantics, but is
   not required to remove private-key bytes from the Rocq heap. Key import,
   rotation, destruction and per-instance provisioning remain design concerns.
-- ~~Where do users live?~~ Answered: standard `wasi:keyvalue`, get/set by
-  email; the demo supplies an ephemeral Map. Store lookup timing is provider
+- ~~Where do users live?~~ Answered: standard `wasi:keyvalue`, get by email
+  and create through `atomics`' CAS; the demo supplies an ephemeral Map. Store lookup timing is provider
   behavior, not proved independent of key presence. Signup explicitly
   discloses existence, which is accepted; login dummy hashing does not
   eliminate all channels.
@@ -1000,12 +1054,15 @@ Remaining work, in priority order:
    timing — is either a protocol decision or needs measurement, not another
    theorem of this shape. The nested JSON round trip is done
    (`validated_claims_reach_the_client`), so the response path is covered too.
-2. Define production storage/effect semantics and atomic create-if-absent;
-   test concurrent writers beyond the synchronous demo. `store_commits` states
-   the read-back promise the lifecycle theorem needs and nothing more — a
-   provider still has to satisfy it, and atomicity and durability are not in
-   it. Account existence disclosure at signup is accepted, so no
-   confirmation-mail flow is planned.
+2. Define production storage/effect semantics and choose a provider that
+   honors the CAS. Create-if-absent is implemented (`cas.new`/`swap`, pinned
+   at an untagged `wasi:keyvalue` `main` commit, package version
+   `0.2.0-draft2`), the demo host implements it under a mutex, and
+   `tests/component.mjs` interleaves a second writer between `new` and `swap`
+   to check that the loser gets a `409` without overwriting. What remains is
+   deployment: a real provider satisfying `store_creates`, durability, and the
+   pin following upstream once CAS is tagged. Account existence disclosure at
+   signup is accepted, so no confirmation-mail flow is planned.
 3. Define the threat/leakage model, choose Argon2 policy, implement timing
    measurements (`dudect`-style) and re-hash-on-login migration. No timing
    guarantee should precede evidence and a precise scope.

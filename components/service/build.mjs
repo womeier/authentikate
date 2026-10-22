@@ -43,7 +43,7 @@ rocq = rocq.replace(/  \(export "([^"]+)"[^\n]+\n/g, (line, name) => keep.has(na
 rocq = rocq.replace(/\n\)\s*$/, '\n  (export "table" (table 0))\n)');
 const ffiNames = new Set([
   'ffi_argon2_verify', 'ffi_argon2_enroll', 'ffi_secret_of_bytes',
-  'ffi_ed25519_sign', 'ffi_ed25519_verify', 'ffi_kv_get', 'ffi_kv_set',
+  'ffi_ed25519_sign', 'ffi_ed25519_verify', 'ffi_kv_get', 'ffi_kv_create',
   'ffi_email_send',
 ]);
 // The service boundary restores heap alignment after the byte-oriented adapters.
@@ -96,7 +96,8 @@ run('wasm-opt', [join(out, 'linked.wasm'), '--enable-tail-call', '--remove-unuse
   '--remove-unused-module-elements', '-o', join(out, 'authentikate.core.wasm')]);
 const module = new WebAssembly.Module(readFileSync(join(out, 'authentikate.core.wasm')));
 const unexpected = WebAssembly.Module.imports(module).filter(i => ![
-  'wasi:keyvalue/store@0.2.0-draft', 'authentikate:crypto/argon2@0.1.0',
+  'wasi:keyvalue/store@0.2.0-draft2', 'wasi:keyvalue/atomics@0.2.0-draft2',
+  'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0',
   'authentikate:email/sender@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',

@@ -71,7 +71,9 @@ Each request gets a fresh composed instance to reclaim the Rocq bump heap. Only
 one request executes at a time; up to eight admitted requests (including the
 active request) may wait/run, with excess returning 503. The permit stays held
 through blocking component execution even if the HTTP request is cancelled.
-This serializes signup's get-then-set within one process, not across processes.
+Signup does not depend on this serialization: it creates the record through
+the `wasi:keyvalue/atomics` compare-and-swap, which this host performs under
+one mutex over its account map.
 Wasmtime fuel is limited to two billion per instance and linear memories to
 128 MiB each (at most eight), with instance/table count limits as well. Fuel is
 an instruction budget, not a wall-clock deadline or full process memory limit.

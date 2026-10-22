@@ -44,10 +44,21 @@ Record store_ops := MkStore {
   (* key -> the stored value.  [None] is the store refusing; [Some None] is
      the key being absent. *)
   kv_get : bytes -> option (option bytes);
-  (* key, value -> persistence acknowledged.  The caller must inspect this
-     result so extraction cannot erase a unit-valued write.  This pure record
-     does not model temporal consistency or make get-then-set atomic. *)
-  kv_set : bytes -> bytes -> option bool
+  (* key, value -> this caller created the pair.  [Some true] is "the key was
+     absent and now holds this value, and no other caller can be told the
+     same"; [Some false] is "the key was already taken"; [None] is the store
+     refusing.  The caller must inspect the result, so extraction cannot
+     erase a unit-valued write.
+
+     Create, not set.  There is no overwrite operation in this record, which
+     is the reason the service cannot replace an account's record even by
+     mistake: the primitive does not exist.  A rehash-on-login migration
+     would have to add one, deliberately.
+
+     What this record cannot say is that the operation is atomic -- a record
+     of functions has no notion of two callers.  The hypotheses in Proofs.v
+     say it instead, and the adapter earns them with a compare-and-swap. *)
+  kv_create : bytes -> bytes -> option bool
 }.
 
 (* ---- the stored record -------------------------------------------------- *)

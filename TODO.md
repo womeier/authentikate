@@ -14,8 +14,9 @@
   component and wire it into the service through `host/composition.wac`. Preserve
   account state across fresh per-request component instances, preferably with a
   file-backed store and narrowly scoped host-granted filesystem access; an
-  in-memory provider would require a separate, long-lived instance. Keep signup
-  serialization unless the get-then-set operation is made atomic.
+  in-memory provider would require a separate, long-lived instance. Signup no
+  longer depends on that serialization -- it creates through the atomic CAS --
+  but a file-backed provider still has to implement `cas`/`swap` atomically.
 - [ ] Consider extracting the JSON layer as a standalone Rocq library
   (`rocq-json`): the parser, canonical printer, accessors, `parse_print`,
   `parse_json_ok`, `get_str_ok` and the fuel measure, over a lower layer with

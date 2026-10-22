@@ -29,13 +29,22 @@ use bindings::{
         crypto::argon2::Algorithm,
         service::api::{Argon2Params, Config},
     },
-    wasi::keyvalue::store as kv,
+    wasi::keyvalue::{atomics, store as kv},
 };
 
 const BODY_LIMIT: usize = 16 * 1024;
 const FUEL: u64 = 2_000_000_000;
 type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
 pub struct Bucket;
+
+/// A compare-and-swap handle: the key it was opened on, and the value that
+/// key held at the time.  `swap` writes only if the key still holds that
+/// value, which is how the service creates an account without a window
+/// between the read and the write.
+pub struct Cas {
+    key: String,
+    seen: Option<Vec<u8>>,
+}
 
 struct GuestState {
     wasi: WasiCtx,
@@ -104,15 +113,17 @@ impl kv::HostBucket for GuestState {
     fn list_keys(
         &mut self,
         bucket: Resource<kv::Bucket>,
-        cursor: Option<u64>,
+        cursor: Option<String>,
     ) -> wasmtime::Result<Result<kv::KeyResponse, kv::Error>> {
         self.table.get(&bucket)?;
+        // draft2 cursors are keys, not offsets: resume strictly after the one
+        // handed back.  The map is ordered, so this is the whole tail.
         let keys = self
             .records
             .lock()
             .unwrap()
             .keys()
-            .skip(cursor.unwrap_or(0) as usize)
+            .filter(|key| cursor.as_ref().is_none_or(|from| *key > from))
             .cloned()
             .collect();
         Ok(Ok(kv::KeyResponse { keys, cursor: None }))
@@ -120,6 +131,75 @@ impl kv::HostBucket for GuestState {
     fn drop(&mut self, bucket: Resource<kv::Bucket>) -> wasmtime::Result<()> {
         self.table.delete(bucket)?;
         Ok(())
+    }
+}
+
+impl atomics::HostCas for GuestState {
+    fn new(
+        &mut self,
+        bucket: Resource<kv::Bucket>,
+        key: String,
+    ) -> wasmtime::Result<Result<Resource<atomics::Cas>, kv::Error>> {
+        self.table.get(&bucket)?;
+        let seen = self.records.lock().unwrap().get(&key).cloned();
+        Ok(Ok(self.table.push(Cas { key, seen })?))
+    }
+    fn current(
+        &mut self,
+        cas: Resource<atomics::Cas>,
+    ) -> wasmtime::Result<Result<Option<Vec<u8>>, kv::Error>> {
+        Ok(Ok(self.table.get(&cas)?.seen.clone()))
+    }
+    fn drop(&mut self, cas: Resource<atomics::Cas>) -> wasmtime::Result<()> {
+        self.table.delete(cas)?;
+        Ok(())
+    }
+}
+
+impl atomics::Host for GuestState {
+    fn increment(
+        &mut self,
+        bucket: Resource<kv::Bucket>,
+        key: String,
+        delta: i64,
+    ) -> wasmtime::Result<Result<i64, kv::Error>> {
+        self.table.get(&bucket)?;
+        let mut records = self.records.lock().unwrap();
+        let counter: i64 = match records.get(&key) {
+            None => 0,
+            Some(value) => match std::str::from_utf8(value).ok().and_then(|v| v.parse().ok()) {
+                Some(counter) => counter,
+                None => return Ok(Err(kv::Error::Other("not a counter".into()))),
+            },
+        };
+        let Some(next) = counter.checked_add(delta) else {
+            return Ok(Err(kv::Error::Other("counter overflow".into())));
+        };
+        records.insert(key, next.to_string().into_bytes());
+        Ok(Ok(next))
+    }
+    /// The whole point of the interface: the comparison and the write happen
+    /// under one lock, so no other caller can land in between.  A swap that
+    /// loses gets a fresh handle rather than an error, because upstream means
+    /// it as an invitation to retry.
+    fn swap(
+        &mut self,
+        cas: Resource<atomics::Cas>,
+        value: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), atomics::CasError>> {
+        let open = self.table.delete(cas)?;
+        let mut records = self.records.lock().unwrap();
+        let current = records.get(&open.key).cloned();
+        if current != open.seen {
+            drop(records);
+            let retry = self.table.push(Cas {
+                key: open.key,
+                seen: current,
+            })?;
+            return Ok(Err(atomics::CasError::CasFailed(retry)));
+        }
+        records.insert(open.key, value);
+        Ok(Ok(()))
     }
 }
 
@@ -153,13 +233,16 @@ impl Runtime {
             .contains(&interface)
                 && ["0.2.0", "0.2.4"].contains(&version);
             ensure!(
-                name == "wasi:keyvalue/store@0.2.0-draft" || wasi,
+                ["wasi:keyvalue/store@0.2.0-draft2", "wasi:keyvalue/atomics@0.2.0-draft2"]
+                    .contains(&name)
+                    || wasi,
                 "Unexpected composed-component import: {name}"
             );
         }
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
         kv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
+        atomics::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let mut seed = Zeroizing::new([0; 32]);
         getrandom::fill(seed.as_mut()).context("Generate signing seed")?;
         let mut runtime = Self {

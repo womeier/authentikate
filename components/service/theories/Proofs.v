@@ -123,7 +123,7 @@ Proof.
     destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
-    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
       (lit ("Your Authentikate account has been created."%string))) as [[|] |];
@@ -156,7 +156,7 @@ Theorem created_requires_persistence :
       Store.stored kv email = Absent /\
       argon2_enroll ops password = Some public_json /\
       Store.enrollment_record email public_json = Some record /\
-      kv_set kv email record = Some true /\
+      kv_create kv email record = Some true /\
       send_email mail (cfg_email_from cfg) email
         (lit ("Welcome to Authentikate"%string))
         (lit ("Your Authentikate account has been created."%string)) = Some true.
@@ -173,7 +173,7 @@ Proof.
     [| discriminate].
   destruct (Store.enrollment_record e v) as [record |] eqn:Hr;
     [| discriminate].
-  destruct (kv_set kv e record) as [[|] |] eqn:Hset; try discriminate.
+  destruct (kv_create kv e record) as [[|] |] eqn:Hset; try discriminate.
   destruct (send_email mail (cfg_email_from cfg) e
     (lit ("Welcome to Authentikate"%string))
     (lit ("Your Authentikate account has been created."%string))) as [[|] |]
@@ -313,7 +313,7 @@ Proof.
     destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
-    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
       (lit ("Your Authentikate account has been created."%string))) as [[|] |];
@@ -795,7 +795,7 @@ Proof.
     destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
-    destruct (kv_set kv email record) as [[|] |]; try (intros H; discriminate).
+    destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
       (lit ("Your Authentikate account has been created."%string))) as [[|] |];
@@ -978,7 +978,7 @@ Qed.
 
 (* And the same thing about the service: a wrong password against an account
    that exists is the same response as any password against an account that
-   does not.  Two store records rather than one state, as in [store_commits],
+   does not.  Two store records rather than one state, as in [store_creates],
    because the model has no state: [kv] answers [Absent] for this email and
    [kv'] answers [Found u], and the answers [handle] gives are equal.
 
@@ -1244,18 +1244,29 @@ Record argon2_spec (ops : crypto_ops) : Prop :=
 (* And the storage assumption, which is the one worth arguing about.  There
    is no state in this model -- [store_ops] is a record of functions -- so
    "the account is there afterwards" cannot be said of one store.  It is said
-   of two: the store signup ran against, and the store the later login runs
-   against, related by the only promise this service needs.
+   of two: the store signup ran against, and the store a later caller runs
+   against, related by the two promises this service needs.
 
-   What it does not say is the whole of the production storage question.  It
-   does not say the write is durable, that no other writer touched the key in
-   between, that [kv_get] and [kv_set] are atomic, or that a second signup
-   for the same email loses.  A store that satisfies this and still loses
-   accounts under concurrency is entirely possible; see PLAN.md. *)
-Record store_commits (kv kv' : store_ops) : Prop :=
-  MkCommits {
-    set_then_get : forall key v,
-      kv_set kv key v = Some true -> kv_get kv' key = Some (Some v)
+   [create_then_get] is read-your-write.  [create_is_exclusive] is the
+   atomicity of the create, written as the only thing atomicity buys a
+   caller: two callers cannot both be told they created the same key, in
+   either order and for any values.  It is what [kv_get] followed by a plain
+   [set] could not promise, and it is what the adapter's compare-and-swap
+   earns -- for a store that merely overwrites, [kv_create] cannot be
+   implemented at all, which is the point of taking it as a primitive rather
+   than building it here.
+
+   What they still do not say: that the write is durable, that a record once
+   created is never deleted or replaced by something outside this service, or
+   anything about the order two concurrent callers are served in.  A store
+   that satisfies both and loses the account to a disk failure a moment later
+   is entirely possible; see PLAN.md. *)
+Record store_creates (kv kv' : store_ops) : Prop :=
+  MkCreates {
+    create_then_get : forall key v,
+      kv_create kv key v = Some true -> kv_get kv' key = Some (Some v);
+    create_is_exclusive : forall key v v',
+      kv_create kv key v = Some true -> kv_create kv' key v' <> Some true
   }.
 
 (* An account that was created can log in.  The signing hypothesis is not
@@ -1267,20 +1278,20 @@ Record store_commits (kv kv' : store_ops) : Prop :=
 Theorem signup_then_login :
   forall ops kv kv' mail cfg now now' email password body,
     argon2_spec ops ->
-    store_commits kv kv' ->
+    store_creates kv kv' ->
     (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
     parse_request RtSignup body = Signup email password ->
     handle ops kv mail cfg now RtSignup body = Created ->
     exists token, handle ops kv' mail cfg now' RtLogin body = Token token.
 Proof.
   intros ops kv kv' mail cfg now now' email password body
-    [Hargon] [Hcommit] Hsign Hp Hcreated.
+    [Hargon] [Hcommit Hexcl] Hsign Hp Hcreated.
   pose proof (login_email_ok _ _ _ (signup_is_login _ _ _ Hp)) as He.
   unfold handle in Hcreated. rewrite Hp in Hcreated.
   destruct (kv_get kv email) as [[existing |] |]; try discriminate.
   destruct (argon2_enroll ops password) as [pj |] eqn:Epj; [| discriminate].
   destruct (Store.enrollment_record email pj) as [v |] eqn:Ev; [| discriminate].
-  destruct (kv_set kv email v) as [[|] |] eqn:Eset; try discriminate.
+  destruct (kv_create kv email v) as [[|] |] eqn:Eset; try discriminate.
   apply enrollment_record_decode in Ev as
     [j [p [salt [tag [Ej [Ep [Esalt [Etag Edec]]]]]]]]; [| exact He].
   unfold handle. rewrite (signup_is_login _ _ _ Hp).
@@ -1326,12 +1337,12 @@ Qed.
    implication, and a store that refuses everything satisfies none of them
    vacuously but also answers 500 honestly), a uniqueness result (two
    concurrent signups can both reach [Created] against stores that each
-   satisfy [store_commits]), or a security result -- for the converse
+   satisfy [store_creates]), or a security result -- for the converse
    direction see [accepted_implies_authenticated]. *)
 Corollary signup_then_validate :
   forall ops kv kv' mail cfg now now' d email password body,
     argon2_spec ops ->
-    store_commits kv kv' ->
+    store_creates kv kv' ->
     crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
     (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
     ok_string (cfg_iss cfg) ->
@@ -1358,6 +1369,40 @@ Qed.
 (* Five hypotheses and no axioms: Argon2, Ed25519 and the store all travel in
    the statement. *)
 Print Assumptions signup_then_validate.
+
+(* And the account is created once.  This is the theorem the store change was
+   for: two signups naming the same email, in either order and with any two
+   passwords, cannot both be answered [Created].  Before [kv_create] it was
+   not provable and it was not true -- the read and the write were separate
+   operations, so two callers could both read [Some None] and both write, and
+   the second silently replaced the first's account.
+
+   The hypothesis doing the work is [create_is_exclusive], and it is an
+   assumption about the store, not a theorem about this file: what is proved
+   here is that signup rests the account's uniqueness on that one primitive
+   and on nothing else -- not on the read above it, not on the order the two
+   requests arrive in, and not on there being only one process. *)
+Theorem signup_happens_once :
+  forall ops kv kv' mail cfg now now' email password password' body body',
+    store_creates kv kv' ->
+    parse_request RtSignup body = Signup email password ->
+    parse_request RtSignup body' = Signup email password' ->
+    handle ops kv mail cfg now RtSignup body = Created ->
+    handle ops kv' mail cfg now' RtSignup body' <> Created.
+Proof.
+  intros ops kv kv' mail cfg now now' email password password' body body'
+    [_ Hexcl] Hp Hp' H1 H2.
+  apply created_requires_persistence in H1
+    as [e1 [pw1 [pj1 [r1 [Hq1 [_ [_ [_ [_ [Hc1 _]]]]]]]]]].
+  apply created_requires_persistence in H2
+    as [e2 [pw2 [pj2 [r2 [Hq2 [_ [_ [_ [_ [Hc2 _]]]]]]]]]].
+  rewrite Hp in Hq1. rewrite Hp' in Hq2.
+  injection Hq1 as <- _. injection Hq2 as <- _.
+  exact (Hexcl _ _ _ Hc1 Hc2).
+Qed.
+
+(* No axioms: exclusivity travels in [store_creates] as a hypothesis. *)
+Print Assumptions signup_happens_once.
 
 (* ---- what the client gets ----------------------------------------------- *)
 

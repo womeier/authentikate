@@ -131,9 +131,11 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
   match parse_request r body with
   | Malformed => BadRequest
   | Signup email password =>
-      (* Any existing key conflicts, even if its record cannot be decoded.
-         Standard WASI keyvalue set is not create-only: this prevents
-         sequential overwrites, not concurrent signups. *)
+      (* The read first, and it decides nothing.  Any existing key conflicts,
+         even if its record cannot be decoded, and answering here saves an
+         Argon2 for a signup that cannot succeed -- which is the only reason
+         it is here, since enumeration is already disclosed by the 409.  The
+         write below is what the account's uniqueness rests on. *)
       match kv_get kv email with
       | Some (Some _) => Conflict
       | None => Internal
@@ -144,7 +146,12 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
               match Store.enrollment_record email public_json with
               | None => Internal
               | Some v =>
-                  match kv_set kv email v with
+                  (* Create, not set: [Some false] is another caller holding
+                     the key, which is a conflict and not a failure, and is
+                     the answer that closes the get-then-set race.  The read
+                     above may have said absent a moment ago; this is the
+                     answer that counts. *)
+                  match kv_create kv email v with
                   | Some true =>
                       (* A send refusal is a 500 after persistence, not a
                          rollback: a retry finding this key conflicts. *)
@@ -154,7 +161,8 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
                       | Some true => Created
                       | _ => Internal
                       end
-                  | _ => Internal
+                  | Some false => Conflict
+                  | None => Internal
                   end
               end
           end

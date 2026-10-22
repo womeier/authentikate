@@ -23,14 +23,18 @@ Axiom ffi_ed25519_sign : Key.t -> bytes -> option bytes.
 Axiom ffi_ed25519_verify : bytes -> bytes -> bytes -> option bool.
 
 (* These signatures abstract effects, not temporal consistency.  Enrollment
-   generates fresh randomness, get reads mutable state, and set persists it.
-   No theorem over the pure records establishes read-after-write behavior or
-   atomic uniqueness.  Standard WASI keyvalue set is not create-only.
-   In particular set must return an inspected result, never unit: Some true
-   acknowledges persistence, while None and Some false are refusals.  The
-   runtime compiler must retain the call and branch on this result. *)
+   generates fresh randomness, get reads mutable state, and create persists
+   it.  No theorem over the pure records establishes read-after-write
+   behaviour or atomic uniqueness; the hypotheses in Proofs.v say what is
+   needed and the adapter earns it with wasi:keyvalue's compare-and-swap,
+   which is why there is no plain set here -- a set cannot implement create,
+   and nothing in this service overwrites a record.
+   In particular create must return an inspected result, never unit: Some
+   true is this caller creating the pair, Some false is the key already being
+   taken, and None is a refusal.  The runtime compiler must retain the call
+   and branch on this result. *)
 Axiom ffi_kv_get : bytes -> option (option bytes).
-Axiom ffi_kv_set : bytes -> bytes -> option bool.
+Axiom ffi_kv_create : bytes -> bytes -> option bool.
 
 (* Acceptance is required after persistence; a refusal does not undo the write. *)
 Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> option bool.
@@ -46,7 +50,7 @@ CertiRocq Register [
   ffi_ed25519_sign => "ffi_ed25519_sign" 3 with tinfo,
   ffi_ed25519_verify => "ffi_ed25519_verify" 4 with tinfo,
   ffi_kv_get => "ffi_kv_get" 2 with tinfo,
-  ffi_kv_set => "ffi_kv_set" 3 with tinfo,
+  ffi_kv_create => "ffi_kv_create" 3 with tinfo,
   ffi_email_send => "ffi_email_send" 5 with tinfo,
   Secret.of_bytes => "ffi_secret_of_bytes" 2
 ]
@@ -55,7 +59,7 @@ Include [ ].
 Definition ffi_ops : crypto_ops :=
   MkOps ffi_argon2_verify ffi_argon2_enroll ffi_ed25519_sign ffi_ed25519_verify.
 
-Definition ffi_kv : store_ops := MkStore ffi_kv_get ffi_kv_set.
+Definition ffi_kv : store_ops := MkStore ffi_kv_get ffi_kv_create.
 
 Definition ffi_mail : email_ops := MkEmail ffi_email_send.
 

@@ -1,9 +1,11 @@
 /// Standalone storage import world, retained for adapter experiments.
 /// The service build uses components/service/wit/service.wit instead. The pinned
 /// wasi:keyvalue dependency is in components/service/wit/deps/keyvalue; its draft
-/// resource layout is implemented by components/service/adapters/store.wat.
+/// resource layout, including the CAS operations create-if-absent is built from,
+/// is implemented by components/service/adapters/store.wat.
 package authentikate:store@0.1.0;
 
 world rocq-store {
-    import wasi:keyvalue/store@0.2.0-draft;
+    import wasi:keyvalue/store@0.2.0-draft2;
+    import wasi:keyvalue/atomics@0.2.0-draft2;
 }

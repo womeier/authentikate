@@ -18,8 +18,8 @@ Definition mock_crypto (enrolled : option bytes) : crypto_ops :=
         (fun _ _ => None) (fun _ _ _ => None).
 
 Definition mock_store (read : option (option bytes))
-                      (write : option bool) : store_ops :=
-  MkStore (fun _ => read) (fun _ _ => write).
+                      (create : option bool) : store_ops :=
+  MkStore (fun _ => read) (fun _ _ => create).
 
 Definition mock_mail (result : option bool) : email_ops :=
   MkEmail (fun _ _ _ _ => result).
@@ -59,11 +59,16 @@ Example signup_created_only_after_matching_write :
     cfg 0 RtSignup signup_body = Created.
 Proof. vm_compute. reflexivity. Qed.
 
-Example signup_write_refusals :
+(* The two ways a create can fail to create, and they are not the same
+   answer.  [None] is the store refusing, which is a 500.  [Some false] is
+   another caller already holding the key -- the race the read above cannot
+   see -- and that is a conflict, the same answer the read would have given a
+   moment later. *)
+Example signup_create_refusals :
   forall mail,
   map (fun result => handle (mock_crypto (Some public_enrollment))
     (mock_store (Some None) result) mail cfg 0 RtSignup signup_body)
-    [None; Some false] = [Internal; Internal].
+    [None; Some false] = [Internal; Conflict].
 Proof. intros. vm_compute. reflexivity. Qed.
 
 Example signup_send_refusals_after_acknowledged_write :

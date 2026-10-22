@@ -1,8 +1,12 @@
 package authentikate:service@0.1.0;
 
 // The host implements only keyvalue. WASI supplies clock, entropy and stdout.
+// Both keyvalue interfaces: the service creates accounts through the atomic
+// compare-and-swap, not through bucket.set, so a host that implements only
+// `store` cannot run it.
 world web-host {
-    import wasi:keyvalue/store@0.2.0-draft;
+    import wasi:keyvalue/store@0.2.0-draft2;
+    import wasi:keyvalue/atomics@0.2.0-draft2;
     export api;
     export authentikate:crypto/argon2@0.1.0;
     export authentikate:crypto/ed25519@0.1.0;

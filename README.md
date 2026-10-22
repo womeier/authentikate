@@ -67,16 +67,21 @@ synchronized host clock.
 
 ### Other Providers
 
-Storage uses the draft `wasi:keyvalue/store@0.2.0-draft` interface. Signup
-checks for an existing account, enrolls the password, and stores the record
-through `bucket.set`, then sends a welcome email. The stored record is printed
-by the Rocq core from the fields it read out of the Argon2 component's JSON,
-not from that JSON itself: exactly eight fields, no nested objects, no cost
-parameter wider than a `u32`, and a provider-supplied email is refused. Success (`201`) requires both
-an acknowledged write and email acceptance; known accounts return `409` without
-sending email. Get-then-set is not atomic: production account uniqueness
-requires a transactional store or external serialization. Write durability
-depends on the storage provider; the demo's in-memory store is not durable.
+Storage uses the draft `wasi:keyvalue/store@0.2.0-draft2` interface together
+with its `atomics` compare-and-swap. Signup checks for an existing account,
+enrolls the password, creates the record only if the key is still absent, then
+sends a welcome email. The create is a `cas.new`/`swap` pair, so losing a race
+answers `409` instead of overwriting the winner; `bucket.set` is not imported
+at all, which is why a host implementing only `store` cannot run the service.
+The stored record is printed by the Rocq core from the fields it read out of
+the Argon2 component's JSON, not from that JSON itself: exactly eight fields,
+no nested objects, no cost parameter wider than a `u32`, and a
+provider-supplied email is refused. Success (`201`) requires both an
+acknowledged create and email acceptance; known accounts return `409` without
+sending email. The initial read only avoids paying for an Argon2 enrollment
+that cannot be used; uniqueness rests on the swap, and so on the provider
+implementing compare-and-swap atomically. Write durability depends on the
+storage provider; the demo's in-memory store is not durable.
 
 Cryptography uses custom component interfaces in `components/crypto/wit/`: Argon2 enrollment
 and verification, and Ed25519 signing and verification. Signing uses opaque u32

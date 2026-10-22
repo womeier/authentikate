@@ -72,14 +72,21 @@
   \source{components/service/theories/Proofs.v\#L846}{\code{accepted_implies_authenticated}}
   (an accepted token implies a credential check), under an assumed
   \source{components/service/theories/Proofs.v\#L684}{\code{signing_oracle}}:
-  unforgeability is assumed, not proved.\par
-  \source{components/service/theories/Proofs.v\#L1182}{\code{signup_then_validate}}
+  unforgeability is assumed, not proved.  Its rejection form,
+  \source{components/service/theories/Proofs.v\#L913}{\code{no_valid_token_without_a_password}},
+  rests on that assumption and on no other.\par
+  \source{components/service/theories/Proofs.v\#L1342}{\code{signup_then_validate}}
   carries a created account through login to validation, under an assumed
-  \source{components/service/theories/Proofs.v\#L1083}{\code{argon2_spec}} and
-  \source{components/service/theories/Proofs.v\#L1106}{\code{store_commits}}
-  (a write that was acknowledged reads back; neither atomicity nor durability).\par
-  No whole-service constant-time, replay, revocation, durable-storage,
-  atomic-creation or actual-email-delivery theorem is established.
+  \source{components/service/theories/Proofs.v\#L1232}{\code{argon2_spec}} and
+  \source{components/service/theories/Proofs.v\#L1264}{\code{store_creates}}
+  (an acknowledged create reads back, and no second create of that key
+  succeeds; neither durability nor the provider's atomicity itself).\par
+  \source{components/service/theories/Proofs.v\#L1385}{\code{signup_happens_once}}
+  turns that exclusivity into account uniqueness: of two signups for one
+  email, at most one is created.\par
+  No whole-service constant-time, replay, revocation, durable-storage or
+  actual-email-delivery theorem is established, and the atomicity the create
+  rests on is the provider's to supply.
 };
 
 % Source-level functionality inside the extracted service.
@@ -113,9 +120,9 @@
   \source{components/service/theories/Jwt.v}{JWT:}\ \ty{sign : crypto_ops * Key * claims -> option bytes}\par
   \ty{verify : crypto_ops * bytes * bytes -> option claims}\par
   \source{components/service/theories/Store.v}{Store:}\ \ty{decode : bytes -> option user}\par\smallskip
-  \source{components/service/theories/Proofs.v\#L322}{Claims conversion statement}\quad
-  \source{components/service/theories/Proofs.v\#L262}{Pinned-header statement}\par
-  \source{components/service/theories/Store.v\#L139}{Stored-email statement}\par
+  \source{components/service/theories/Proofs.v\#L325}{Claims conversion statement}\quad
+  \source{components/service/theories/Proofs.v\#L265}{Pinned-header statement}\par
+  \source{components/service/theories/Store.v\#L193}{Stored-email statement}\par
   Adapters: \source{components/service/adapters/ed25519.wat}{signatures},
   \source{components/service/adapters/store.wat}{storage}, \source{components/service/adapters/service.wat}{bytes}.
 };
@@ -126,9 +133,9 @@
   \partialproof{} Creation requires an acknowledged write and email acceptance;
   token issuance requires a successful credential check.\par
   \source{components/service/theories/Api.v}{Implementation}\quad
-  \source{components/service/theories/Proofs.v\#L99}{Token theorem}\quad
-  \source{components/service/theories/Proofs.v\#L147}{Signup theorem}\par
-  \source{components/service/theories/Proofs.v\#L291}{Freshness / issuer theorem}\quad
+  \source{components/service/theories/Proofs.v\#L102}{Token theorem}\quad
+  \source{components/service/theories/Proofs.v\#L150}{Signup theorem}\par
+  \source{components/service/theories/Proofs.v\#L294}{Freshness / issuer theorem}\quad
   \source{components/service/adapters/service.wat}{Adapter}
 };
 \node[checked] (runtime) at (44,-8) {
@@ -167,12 +174,14 @@
 \node[checked] (storeadapter) at (22,-14) {
   \textbf{WASI keyvalue FFI adapter} \hfill WAT / core Wasm\par
   \ty{get : bytes -> option (option bytes)}\par
-  \ty{set : bytes * bytes -> option bool}\par\smallskip
-  Standard bucket open/get/set; UTF-8 key checks.
-  Missing keys and provider refusal remain distinct.\par
-  \tested{} Acknowledgment, nested options and UTF-8.\par
+  \ty{create : bytes * bytes -> option bool}\par\smallskip
+  Bucket open/get and create-if-absent over \code{cas.new} /
+  \code{cas.current} / \code{swap}; \code{bucket.set} is not imported.
+  UTF-8 key checks.  Missing keys, a taken key and provider refusal remain
+  three distinct answers.\par
+  \tested{} Created / taken / lost race / refused, handle accounting, UTF-8.\par
   \links{components/service/adapters/store.wat}{components/service/adapters/store.wat}\par
-  \source{components/service/wit/deps/keyvalue/store.wit}{Standard WIT types}
+  \source{components/service/wit/deps/keyvalue/atomic.wit}{Standard WIT types}
 };
 \node[checked] (emailadapter) at (33,-14) {
   \textbf{Email FFI adapter} \hfill WAT / core Wasm\par
@@ -233,11 +242,13 @@
   \textbf{Actual demo keyvalue provider} \hfill Rust / BTreeMap\par
   \ty{open(string) -> result<bucket,error>}\par
   \ty{bucket.get(string) -> result<option<bytes>,error>}\par
-  \ty{bucket.set(string,bytes) -> result<(),error>}\par\smallskip
-  \tested{} Ephemeral in-memory storage. No durability or distributed
-  create-if-absent guarantee.\par
+  \ty{cas.new/current; swap(cas,bytes) -> result<_,cas-error>}\par\smallskip
+  Compare and write under one mutex, so a lost swap is a conflict rather
+  than an overwrite.\par
+  \tested{} Ephemeral in-memory storage; concurrent signups give 201/409.
+  No durability, and no distributed atomicity.\par
   \links{host/src/main.rs}{components/service/adapters/store.wat}\par
-  \source{components/service/wit/deps/keyvalue/store.wit}{WASI keyvalue 0.2.0-draft contract}
+  \source{components/service/wit/deps/keyvalue/atomic.wit}{WASI keyvalue 0.2.0-draft2 contract}
 };
 \node[checked] (stdoutemail) at (44,-20) {
   \textbf{Actual stdout email provider component} \hfill Rust\par
@@ -254,12 +265,12 @@
 % External standards, optional email provider, and important behavioral limits.
 \node[external] (limits) at (0,-26) {
   \textbf{Important behavioral limits}\par
-  Signup is get/enroll/set/send, not atomic.
-  A failed email can leave a persisted account; retries conflict.\par\smallskip
+  Signup is get/enroll/create/send.  The create is atomic, the sequence is
+  not: a failed email can leave a persisted account; retries conflict.\par\smallskip
   Config, time, entropy, key custody, storage and provider correctness remain
   trusted boundaries. No email confirmation / retry queue is implied.\par
   \source{components/service/theories/Api.v}{Control flow}\quad
-  \source{components/service/theories/Proofs.v\#L147}{Creation statement}\par
+  \source{components/service/theories/Proofs.v\#L150}{Creation statement}\par
   \source{tests/component.mjs}{Runtime tests}\quad
   \source{host/tests/http.rs}{HTTP tests}
 };
@@ -276,10 +287,12 @@
 \node[external] (kvstandard) at (22,-26) {
   \textbf{External persistent WASI keyvalue provider}\par
   Implementation language: deployment-dependent; none bundled.\par
-  \ty{resource bucket; get/set/open}\par
+  \ty{resource bucket; get/open}\par
+  \ty{resource cas; new/current; swap}\par
   \ty{error = no-such-store | access-denied | other(string)}\par\smallskip
-  \trusted{} Standard WIT does not supply atomic account creation.\par
-  \source{components/service/wit/deps/keyvalue/store.wit}{Contract; implementation supplied by host}\par
+  \trusted{} The CAS the create needs is WASI, but only on an untagged
+  \code{main} commit; the provider must honor it atomically.\par
+  \source{components/service/wit/deps/keyvalue/atomic.wit}{Contract; implementation supplied by host}\par
   \source{components/service/adapters/store.wat}{Adapter}; no durability theorem.
 };
 \node[external] (emailwasi) at (33,-26) {

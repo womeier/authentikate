@@ -45,7 +45,7 @@ fn main() {
     fs::write(
         out.join("bindings.rs"),
         format!(
-            "wasmtime::component::bindgen!({{path: {:?}, world: \"web-host\", imports: {{ default: trappable }}, with: {{ \"wasi:keyvalue/store.bucket\": super::Bucket }} }});",
+            "wasmtime::component::bindgen!({{path: {:?}, world: \"web-host\", imports: {{ default: trappable }}, with: {{ \"wasi:keyvalue/store.bucket\": super::Bucket, \"wasi:keyvalue/atomics.cas\": super::Cas }} }});",
             wit
         ),
     )
