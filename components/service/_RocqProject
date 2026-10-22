@@ -7,7 +7,6 @@ theories/JsonProofs.v
 theories/Crypto.v
 theories/Claims.v
 theories/Store.v
-theories/Backoff.v
 theories/Jwt.v
 theories/Api.v
 theories/Proofs.v

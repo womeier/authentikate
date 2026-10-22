@@ -203,8 +203,7 @@ Rehash-on-login and a migration policy are not implemented. The absent-account
 timing regression is evidence against eliminating the hash, not proof of equal
 timings. There is no comprehensive statistical side-channel test suite.
 
-`Backoff.v` proves logarithmic guess bounds before a cap and linear bounds after
-it, but is not connected to requests. Integration needs a policy for keying,
+Rate limiting is not implemented. Integration needs a policy for keying,
 enumeration, account lockout, bounded counter storage and trustworthy time, plus
 a new atomic-counter capability. Immutable account storage supplies no counters.
 

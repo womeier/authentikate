@@ -224,11 +224,11 @@ individual cases; this is the inventory.
   outside. A signing key shared across deployments or
   dummy parameters that do not match what stored records carry are all outside
   what the proofs can see.
-- **Rate limiting, replay and revocation.** No throttling is connected:
-  `Backoff.v` proves its bounds and is deliberately unwired, so online password
-  guessing is limited only by Argon2's cost. Tokens are bearer tokens with an
-  `exp` and nothing else, and `validate_ignores_the_store` proves that no state
-  a deployment can reach will stop a fresh, well-signed token from validating.
+- **Rate limiting, replay and revocation.** No throttling is implemented, so
+  online password guessing is limited only by Argon2's cost. Tokens are bearer
+  tokens with an `exp` and nothing else, and `validate_ignores_the_store` proves
+  that no state a deployment can reach will stop a fresh, well-signed token from
+  validating.
 - **Transport and operations.** There is no TLS; the demo listens on loopback,
   with `LISTEN`/`PUBLIC_ORIGIN` for a trusted proxy. Key custody, rotation,
   recovery tooling, backup and audit logging are not implemented. Account

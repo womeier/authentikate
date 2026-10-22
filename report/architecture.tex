@@ -15,7 +15,7 @@
 \node[anchor=north west,font=\LARGE\bfseries] at (0,0)
   {Authentikate backend: components, types and verification boundaries};
 \node[anchor=north west,font=\small,text width=54cm] at (0,-.85)
-  {Solid arrows: active backend calls. Dashed arrows: alternative providers / unwired policy.
+  {Solid arrows: active backend calls. Dashed arrows: alternative providers.
    Dotted arrows: build or source dependency. Every blue source label is a PDF hyperlink.
    \textbf{Green means a named source theorem, not a verified executable stack.}};
 
@@ -50,16 +50,6 @@
   \source{components/service/build.mjs}{Assembler}\quad
   \source{flake.nix}{Nix}\par
   \source{components/service/adapters/service.wat}{Adapter / canonical boundary}
-};
-\node[inactive] (backoff) at (33,-2) {
-  \textbf{Backoff policy: NOT wired into the API} \hfill Rocq\par
-  \ty{delay : bo_config -> N -> N}\par
-  Capped exponential delay; trace-based guess bounds.\par\smallskip
-  \partialproof{} No operational rate limiting follows while disconnected.\par
-  \source{components/service/theories/Backoff.v}{Implementation}\quad
-  \source{components/service/theories/Backoff.v\#L246}{Logarithmic bound}\par
-  \source{components/service/theories/Backoff.v\#L273}{Linear bound after cap}\par
-  Adapter: none; pure policy only.
 };
 \node[external] (scope) at (44,-2) {
   \textbf{Verification legend and scope}\par\smallskip
