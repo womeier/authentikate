@@ -1,5 +1,10 @@
 # Deferred Work
 
+- [ ] Experiment with a Lettermint email component behind the existing sender
+  interface, keeping stdout as the default. Commit `c0c33f9` removed the previous
+  backend; its parent retains the implementation and mocked HTTP tests for
+  reference. Evaluate credential provisioning, restricted outbound HTTPS,
+  timeouts, retries/idempotency and acceptance versus actual delivery.
 - [ ] Implement rate limiting only after settling counter keying, enumeration,
   account lockout, bounded storage, trustworthy time and atomic enforcement.
   Commit `077c9be` removed the unwired `Backoff.v` policy and trace proofs;

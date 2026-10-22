@@ -320,7 +320,8 @@
             mkdir -p $out/share/authentikate
             cp build/host.component.wasm $out/share/authentikate/
             makeWrapper $out/bin/authentikate-host $out/bin/authentikate-local \
-              --set HOST_COMPONENT $out/share/authentikate/host.component.wasm
+              --set HOST_COMPONENT $out/share/authentikate/host.component.wasm \
+              --set-default STORAGE_DIR ./run
           '';
 
           meta = {

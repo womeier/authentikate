@@ -42,32 +42,8 @@ HMAC key or filesystem. The service's adapter reads its own configuration and
 imports the shared key into the crypto component. Only opaque key handles enter
 the Rocq heap. The provisioning host and ABI marshalling still handle key copies.
 
-## Request Behavior
-
-| Method | Path | Request | Successful Response |
-| --- | --- | --- | --- |
-| POST | `/api/signup` | `{email, password}` | `201 {}` |
-| POST | `/api/login` | `{email, password}` | `200 {token}` |
-| POST | `/api/validate` | `{token}` | `200 {valid, claims?}` |
-
-Signup checks the raw key, enrolls the password, constructs and validates the
-account record in Rocq, atomically creates it, then sends a welcome email.
-An existing key or lost create race returns `409`. Storage, enrollment and
-email failures return `500`. Email acceptance is not delivery; a send failure
-does not roll back the account, so a retry can return `409`.
-
-Login returns `401` for wrong credentials or an absent account, with the same
-response value. Missing accounts still pay for a dummy Argon2 computation.
-Storage refusal and signing failure can return `500`.
-
-Validation checks the MAC, issuer and expiry before returning claims. An invalid
-token returns `200 {valid:false}`. It never reads account storage: account changes
-cannot revoke tokens, and validation does not depend on storage availability.
-
-The JSON contract is deliberately restricted: printable ASCII strings without
-escapes, non-negative integers, booleans and objects, with no duplicate keys.
-Arrays, null, floats and negative numbers are rejected. See the main README for
-the complete input restrictions.
+Request behavior and input restrictions are documented in
+[README.md](README.md#request-behavior).
 
 ## Token Cryptography
 
