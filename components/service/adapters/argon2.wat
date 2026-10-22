@@ -50,8 +50,8 @@
   ;; four u32, so it flattens to four i32 in field order; `algorithm` is an
   ;; enum, so one i32.  The results need more than one flat value, so they
   ;; come back through a return area we supply.
-  (import "authentikate:crypto/argon2@0.1.0" "enroll"
-    (func $wit_enroll
+  (import "authentikate:crypto/argon2@0.1.0" "hash"
+    (func $wit_hash
       (param i32 i32)          ;; password: ptr, len
       (param i32)))            ;; return area
   (import "authentikate:crypto/argon2@0.1.0" "verify"
@@ -153,17 +153,17 @@
   (func (export "ffi_secret_of_bytes") (param $force i32) (param $bytes i32)
     (global.set $result (local.get $bytes)))
 
-  ;; argon2_enroll : Secret.t -> option bytes
+  ;; argon2_hash : Secret.t -> option bytes
   ;; The component generates the random salt and serializes the stored JSON
   ;; record. The adapter only moves bytes; no salt or tag is constructed here.
-  (func $argon2_enroll (param $password i32) (result i32)
+  (func $argon2_hash (param $password i32) (result i32)
     (local $pp i32) (local $pl i32) (local $ret i32)
     (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
     (local.set $pp (call $lower (local.get $password)))
     (local.set $pl (global.get $buf_len))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
-    (call $wit_enroll (local.get $pp) (local.get $pl) (local.get $ret))
+    (call $wit_hash (local.get $pp) (local.get $pl) (local.get $ret))
     ;; result<list<u8>, error>: discriminant @0, ok pointer @4, length @8.
     (if (result i32) (i32.load8_u (local.get $ret))
       (then (i32.const 1))
@@ -173,7 +173,7 @@
             (i32.load offset=4 (local.get $ret))
             (i32.load offset=8 (local.get $ret)))))))
 
-  (func (export "ffi_argon2_enroll") (param $force i32) (param $password i32)
-    (global.set $result (call $argon2_enroll (local.get $password))))
+  (func (export "ffi_argon2_hash") (param $force i32) (param $password i32)
+    (global.set $result (call $argon2_hash (local.get $password))))
 
 )

@@ -94,7 +94,7 @@ function listResult(h, exports, ret, data, offset = 4) {
 try {
   assert.throws(() => expandAdapter(';; @COMMON missing@'), /Missing common WAT helper missing/);
   for (const [name, provider, functions] of [
-    ['argon2', 'authentikate:crypto/argon2@0.1.0', ['enroll', 'verify']],
+    ['argon2', 'authentikate:crypto/argon2@0.1.0', ['hash', 'verify']],
     ['hmac', 'authentikate:crypto/hmac@0.1.0', ['sign', 'verify']],
     ['store', 'authentikate:storage/accounts@0.1.0', ['get', 'create']],
   ]) {
@@ -132,7 +132,7 @@ try {
     const costs = [2, 19456, 2, 1, 32];
     const e = instantiate('components/service/adapters/argon2.wat', h, {
       'authentikate:crypto/argon2@0.1.0': {
-        enroll(pp, pl, ret) {
+        hash(pp, pl, ret) {
           enrollCalls++;
           assert.deepEqual(h.flat(pp, pl), enrollPassword);
           h.put(ret, Number(enrollError));
@@ -166,9 +166,9 @@ try {
     for (enrollPassword of [password, []]) {
       const secret = h.call(e.ffi_secret_of_bytes, h.bytes(enrollPassword));
       enrollError = false;
-      assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_argon2_enroll, secret))), record);
+      assert.deepEqual(h.unbytes(h.some(h.call(e.ffi_argon2_hash, secret))), record);
       enrollError = true;
-      assert.equal(h.call(e.ffi_argon2_enroll, secret), 1);
+      assert.equal(h.call(e.ffi_argon2_hash, secret), 1);
     }
     assert.equal(enrollCalls, 4);
     console.log('argon2: void/global ABI, stored parameters, Some false/true vs None, secret identity, enrollment JSON/error');

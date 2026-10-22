@@ -211,7 +211,7 @@
 \node[checked] (argonrust) at (11,-20) {
   \textbf{Active Argon2 provider component} \hfill Rust\par
   RustCrypto Argon2 + subtle; enrollment uses a fresh 16-byte salt.\par
-  \ty{enroll(bytes) -> result<bytes,error>}\par
+  \ty{hash(bytes) -> result<bytes,error>}\par
   \ty{verify(password,salt,algorithm,params,tag)}\par
   \ty{  -> result<bool,error>}\par\smallskip
   \tested{} Unit tests; no crypto-security / timing proof.\par
@@ -255,7 +255,7 @@
 % External standards and important behavioral limits.
 \node[external] (limits) at (0,-26) {
   \textbf{Important behavioral limits}\par
-  Signup is get/enroll/create/send.  The create is atomic, the sequence is
+  Signup is get/hash/create/send.  The create is atomic, the sequence is
   not: a failed email can leave a persisted account; retries conflict.\par\smallskip
   Config, time, entropy, key custody, storage and provider correctness remain
   trusted boundaries. No email confirmation / retry queue is implied.\par

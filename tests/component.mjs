@@ -98,7 +98,7 @@ const out = resolve(process.argv[2] ?? 'build');
     assert.deepEqual(WebAssembly.Module.imports(service).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
       'rocq#memory:memory', 'rocq#table:table', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global',
       'rocq#result:global', 'rocq#main_function:function',
-      'argon2#ffi_argon2_verify:function', 'argon2#ffi_argon2_enroll:function', 'argon2#ffi_secret_of_bytes:function',
+      'argon2#ffi_argon2_verify:function', 'argon2#ffi_argon2_hash:function', 'argon2#ffi_secret_of_bytes:function',
       'hmac#ffi_hmac_sign:function', 'hmac#ffi_hmac_verify:function',
       'store#ffi_kv_get:function', 'store#ffi_kv_create:function', 'email#ffi_email_send:function',
       'wasi:clocks/wall-clock@0.2.0#now:function',
@@ -108,7 +108,7 @@ const out = resolve(process.argv[2] ?? 'build');
     ].sort());
     wrapper = new WebAssembly.Instance(service, {
       rocq,
-      argon2: { ffi_argon2_verify: adapter, ffi_argon2_enroll: adapter, ffi_secret_of_bytes: adapter },
+      argon2: { ffi_argon2_verify: adapter, ffi_argon2_hash: adapter, ffi_secret_of_bytes: adapter },
       hmac: { ffi_hmac_sign: adapter, ffi_hmac_verify: adapter },
       store: { ffi_kv_get: adapter, ffi_kv_create: adapter },
       email: { ffi_email_send: adapter },
@@ -168,7 +168,7 @@ const out = resolve(process.argv[2] ?? 'build');
       clockSeconds = clockSeconds === 0xffffffffffffffffn ? 0n : 0x100000001n;
     }
     assert.equal(calls, 3);
-    for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_enroll', 2],
+    for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_hash', 2],
       ['ffi_secret_of_bytes', 2], ['ffi_hmac_sign', 3], ['ffi_hmac_verify', 4],
       ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
       assert.equal(wrapper[name].length, arity);
@@ -223,7 +223,7 @@ assert.deepEqual([...new Set(WebAssembly.Module.imports(core).map(i => i.module)
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
 assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
-  'authentikate:crypto/argon2@0.1.0#enroll:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
+  'authentikate:crypto/argon2@0.1.0#hash:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
   'authentikate:crypto/hmac@0.1.0#sign:function', 'authentikate:crypto/hmac@0.1.0#verify:function',
   'authentikate:email/sender@0.1.0#send:function',
   'authentikate:storage/accounts@0.1.0#get:function',
@@ -329,7 +329,7 @@ const imports = {
       if (verifyError) { failure(ret); return; }
       put(ret, 0); put(ret + 4, Number(verifyMatched));
     },
-    enroll(p, n, ret) {
+    hash(p, n, ret) {
       assert.ok(allowEnrollment, 'enrollment must not run before a parsed signup requires it');
       enrolls++; assert.equal(bytes(p, n).toString(), 'password');
       if (enrollError) { failure(ret); return; }

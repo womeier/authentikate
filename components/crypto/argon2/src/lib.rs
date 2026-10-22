@@ -148,7 +148,7 @@ fn derive_into(
 }
 
 impl Guest for Component {
-    fn enroll(password: Vec<u8>) -> Result<Vec<u8>, Error> {
+    fn hash(password: Vec<u8>) -> Result<Vec<u8>, Error> {
         let password = Zeroizing::new(password);
         check_password(&password)?;
         #[cfg(target_arch = "wasm32")]
@@ -289,7 +289,7 @@ mod tests {
             Err(Error::InvalidPassword(_))
         ));
         assert!(matches!(
-            Component::enroll(vec![0; MAX_PASSWORD + 1]),
+            Component::hash(vec![0; MAX_PASSWORD + 1]),
             Err(Error::InvalidPassword(_))
         ));
     }

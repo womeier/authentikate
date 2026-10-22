@@ -9,7 +9,7 @@
   (import "rocq" "result" (global $result (mut i32)))
   (import "rocq" "main_function" (func $main))
   (import "argon2" "ffi_argon2_verify" (func $argon2-verify (param i32 i32 i32 i32 i32)))
-  (import "argon2" "ffi_argon2_enroll" (func $argon2-enroll (param i32 i32)))
+  (import "argon2" "ffi_argon2_hash" (func $argon2-hash (param i32 i32)))
   (import "argon2" "ffi_secret_of_bytes" (func $secret (param i32 i32)))
   (import "hmac" "ffi_hmac_sign" (func $sign (param i32 i32 i32)))
   (import "hmac" "ffi_hmac_verify" (func $verify (param i32 i32 i32 i32)))
@@ -46,8 +46,8 @@
   (func (export "ffi_argon2_verify") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $e i32)
     (call $argon2-verify (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $e))
     (call $align-heap))
-  (func (export "ffi_argon2_enroll") (param $a i32) (param $b i32)
-    (call $argon2-enroll (local.get $a) (local.get $b))
+  (func (export "ffi_argon2_hash") (param $a i32) (param $b i32)
+    (call $argon2-hash (local.get $a) (local.get $b))
     (call $align-heap))
   (func (export "ffi_secret_of_bytes") (param $a i32) (param $b i32)
     (call $secret (local.get $a) (local.get $b))
@@ -211,7 +211,7 @@
     (call $check)
     (i32.store (local.get $cfg) (i32.const 0))
     (i32.store (local.get $params) (i32.const 0))
-    ;; 2 is argon2id, the algorithm `enroll` writes into every record it mints;
+    ;; 2 is argon2id, the algorithm `hash` writes into every record it mints;
     ;; the other four are `recommended-params` in field order.
     (i32.store offset=4 (local.get $params) (call $N (i64.const 2)))
     (i32.store offset=8 (local.get $params)

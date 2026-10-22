@@ -21,7 +21,7 @@ const keep = new Set(['main_function', 'memory', 'result', 'mem_ptr', 'out_of_me
 rocq = rocq.replace(/  \(export "([^"]+)"[^\n]+\n/g, (line, name) => keep.has(name) ? line : '');
 rocq = rocq.replace(/\n\)\s*$/, '\n  (export "table" (table 0))\n)');
 const ffiNames = new Set([
-  'ffi_argon2_verify', 'ffi_argon2_enroll', 'ffi_secret_of_bytes',
+  'ffi_argon2_verify', 'ffi_argon2_hash', 'ffi_secret_of_bytes',
   'ffi_hmac_sign', 'ffi_hmac_verify', 'ffi_kv_get', 'ffi_kv_create',
   'ffi_email_send',
 ]);

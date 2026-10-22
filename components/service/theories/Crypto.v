@@ -82,7 +82,7 @@ Record crypto_ops := MkOps {
   (* A fresh random salt is generated inside the Argon2 component.  The result
      is PUBLIC JSON with base64url salt/tag and numeric algorithm/cost fields;
      Store.enrollment_record adds the email.  No secret eliminator is exposed. *)
-  argon2_enroll : Secret.t -> option bytes;
+  argon2_hash : Secret.t -> option bytes;
   (* key handle, message *)
   hmac_sign : Key.t -> bytes -> option bytes;
   (* The same opaque shared-key handle, message, and full authentication tag.

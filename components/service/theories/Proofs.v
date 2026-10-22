@@ -120,7 +120,7 @@ Proof.
       intros H; discriminate.
   - intros H; discriminate.
   - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
-    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (argon2_hash ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
@@ -154,7 +154,7 @@ Theorem created_requires_persistence :
       parse_request RtSignup body = Signup email password /\
       kv_get kv email = Some None /\
       Store.stored kv email = Absent /\
-      argon2_enroll ops password = Some public_json /\
+      argon2_hash ops password = Some public_json /\
       Store.enrollment_record email public_json = Some record /\
       kv_create kv email record = Some true /\
       send_email mail (cfg_email_from cfg) email
@@ -169,7 +169,7 @@ Proof.
   destruct (Json.get_str (lit ("password"%string)) j') as [p |] eqn:Hpw;
     [| discriminate].
   destruct (kv_get kv e) as [[existing |] |] eqn:Hs; try discriminate.
-  destruct (argon2_enroll ops (Secret.of_bytes p)) as [v |] eqn:Ha;
+  destruct (argon2_hash ops (Secret.of_bytes p)) as [v |] eqn:Ha;
     [| discriminate].
   destruct (Store.enrollment_record e v) as [record |] eqn:Hr;
     [| discriminate].
@@ -310,7 +310,7 @@ Proof.
     + intros H; discriminate.
   - intros H; discriminate.
   - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
-    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (argon2_hash ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
@@ -795,7 +795,7 @@ Proof.
     + intros H; discriminate.
   - intros H; discriminate.
   - destruct (kv_get kv email) as [[existing |] |]; try (intros H; discriminate).
-    destruct (argon2_enroll ops password) as [v |]; try (intros H; discriminate).
+    destruct (argon2_hash ops password) as [v |]; try (intros H; discriminate).
     destruct (Store.enrollment_record email v) as [record |];
       try (intros H; discriminate).
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
@@ -1296,8 +1296,8 @@ Qed.
    says nothing about what else verifies. *)
 Record argon2_spec (ops : crypto_ops) : Prop :=
   MkArgon2Spec {
-    enroll_verifies : forall password pj j p salt tag,
-      argon2_enroll ops password = Some pj ->
+    hash_verifies : forall password pj j p salt tag,
+      argon2_hash ops password = Some pj ->
       Json.parse pj = Some j ->
       Store.public_of_json j = Some p ->
       Base64.decode (pr_salt64 p) = Some salt ->
@@ -1354,7 +1354,7 @@ Proof.
   pose proof (login_email_ok _ _ _ (signup_is_login _ _ _ Hp)) as He.
   unfold handle in Hcreated. rewrite Hp in Hcreated.
   destruct (kv_get kv email) as [[existing |] |]; try discriminate.
-  destruct (argon2_enroll ops password) as [pj |] eqn:Epj; [| discriminate].
+  destruct (argon2_hash ops password) as [pj |] eqn:Epj; [| discriminate].
   destruct (Store.enrollment_record email pj) as [v |] eqn:Ev; [| discriminate].
   destruct (kv_create kv email v) as [[|] |] eqn:Eset; try discriminate.
   apply enrollment_record_decode in Ev as

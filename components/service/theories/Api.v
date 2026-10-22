@@ -140,7 +140,7 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
       | Some (Some _) => Conflict
       | None => Internal
       | Some None =>
-          match argon2_enroll ops password with
+          match argon2_hash ops password with
           | None => Internal
           | Some public_json =>
               match Store.enrollment_record email public_json with

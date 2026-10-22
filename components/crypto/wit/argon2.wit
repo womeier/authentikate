@@ -44,11 +44,11 @@ interface argon2 {
         invalid-tag(string),
     }
 
-    /// Enroll with Argon2id, recommended parameters, and a fresh 16-byte salt
+    /// Hash a password with Argon2id, recommended parameters, and a fresh 16-byte salt
     /// from wasi:random/random. Returns UTF-8 JSON with salt and tag encoded
     /// as unpadded base64url, algorithm 2, and numeric memory_kib, iterations,
     /// parallelism and tag_length fields. Contains no email or password.
-    enroll: func(password: list<u8>) -> result<list<u8>, error>;
+    hash: func(password: list<u8>) -> result<list<u8>, error>;
 
     /// Derive a tag of `params.tag-length` bytes from `password` and `salt`.
     ///
