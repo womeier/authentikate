@@ -1,4 +1,4 @@
-;; Build template. Shared heap helpers are extracted from the Argon2 adapter.
+;; Build template. Shared heap helpers are selected from common.wat.
 ;; Instances may serve sequential requests, but the bump heap is never reclaimed.
 (module
   (type $apply-type (func (param i32 i32)))
@@ -35,7 +35,7 @@
   (global $initialized (mut i32) (i32.const 0))
   (global $api (mut i32) (i32.const 0))
   (global $buf_len (mut i32) (i32.const 0))
-  ;; @HEAP_HELPERS@
+  ;; @COMMON alloc list_len read_N lower lift_bytes@
 
   ;; Canonical byte buffers may leave the shared bump pointer unaligned, in
   ;; particular when an adapter returns immediate None instead of boxed Some.

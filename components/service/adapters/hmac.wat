@@ -46,57 +46,8 @@
   ;; function returns at most one value.
   (global $buf_len (mut i32) (i32.const 0))
 
-  ;; ---- allocation ----------------------------------------------------------
-
-  ;; Bump-allocate $n bytes aligned to $align (a power of two), growing the
-  ;; memory as needed.  Sets `out_of_mem` and returns 0 if it cannot.  The
-  ;; backend pre-grows only 52 bytes around an `Eprim` node, which a 32-byte
-  ;; tag turned into cons cells exhausts immediately, so this grows for
-  ;; itself.
-  (func $alloc (param $n i32) (param $align i32) (result i32)
-    (local $p i32) (local $end i32) (local $have i32) (local $pages i32)
-    (local.set $p
-      (i32.and
-        (i32.add (global.get $mem_ptr) (i32.sub (local.get $align) (i32.const 1)))
-        (i32.xor (i32.sub (local.get $align) (i32.const 1)) (i32.const -1))))
-    (local.set $end (i32.add (local.get $p) (local.get $n)))
-    (local.set $have (i32.shl (memory.size) (i32.const 16)))
-    (if (i32.gt_u (local.get $end) (local.get $have))
-      (then
-        (local.set $pages
-          (i32.add
-            (i32.shr_u
-              (i32.sub (local.get $end) (local.get $have))
-              (i32.const 16))
-            (i32.const 1)))
-        (if (i32.eq (memory.grow (local.get $pages)) (i32.const -1))
-          (then
-            (global.set $out_of_mem (i32.const 1))
-            (return (i32.const 0))))))
-    (global.set $mem_ptr (local.get $end))
-    (local.get $p))
-
-  ;; The canonical ABI allocates a returned list in *our* memory through this.
-  (func (export "cabi_realloc")
-        (param $old_ptr i32) (param $old_size i32)
-        (param $align i32) (param $new_size i32) (result i32)
-    (local $p i32) (local $i i32) (local $n i32)
-    (local.set $p (call $alloc (local.get $new_size) (local.get $align)))
-    (if (global.get $out_of_mem) (then (return (i32.const 0))))
-    (local.set $n (local.get $old_size))
-    (if (i32.gt_u (local.get $n) (local.get $new_size))
-      (then (local.set $n (local.get $new_size))))
-    (block $done
-      (loop $next
-        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-        (i32.store8
-          (i32.add (local.get $p) (local.get $i))
-          (i32.load8_u (i32.add (local.get $old_ptr) (local.get $i))))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $next)))
-    (local.get $p))
-
-  ;; ---- Rocq values down to flat bytes --------------------------------------
+  ;; Expanded at build/test time from common.wat; checked keys stay local.
+  ;; @COMMON alloc cabi_realloc list_len lower lift_bytes some@
 
   ;; Key.t is an opaque N. Reject values wider than u32 before calling WIT.
   ;; Return i64 so every u32, including 0xffffffff, is distinct from failure.
@@ -117,64 +68,6 @@
         (local.set $n (i32.load offset=4 (local.get $n)))
         (br $next)))
     (i64.add (local.get $acc) (local.get $w)))
-
-  (func $list_len (param $l i32) (result i32)
-    (local $n i32)
-    (block $done
-      (loop $next
-        (br_if $done (i32.and (local.get $l) (i32.const 1)))
-        (local.set $n (i32.add (local.get $n) (i32.const 1)))
-        (local.set $l (i32.load offset=8 (local.get $l)))
-        (br $next)))
-    (local.get $n))
-
-  (func $lower (param $l i32) (result i32)
-    (local $len i32) (local $p i32) (local $i i32)
-    (local.set $len (call $list_len (local.get $l)))
-    (global.set $buf_len (local.get $len))
-    (local.set $p (call $alloc (local.get $len) (i32.const 1)))
-    (if (global.get $out_of_mem) (then (return (i32.const 0))))
-    (block $done
-      (loop $next
-        (br_if $done (i32.and (local.get $l) (i32.const 1)))
-        (i32.store8
-          (i32.add (local.get $p) (local.get $i))
-          (i32.shr_u (i32.load offset=4 (local.get $l)) (i32.const 1)))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (local.set $l (i32.load offset=8 (local.get $l)))
-        (br $next)))
-    (local.get $p))
-
-  ;; ---- flat bytes back up to Rocq values -----------------------------------
-
-  (func $lift_bytes (param $p i32) (param $len i32) (result i32)
-    (local $acc i32) (local $cell i32)
-    (local.set $acc (i32.const 1))  ;; EmptyString
-    (block $done
-      (loop $next
-        (br_if $done (i32.eqz (local.get $len)))
-        (local.set $len (i32.sub (local.get $len) (i32.const 1)))
-        (local.set $cell (call $alloc (i32.const 12) (i32.const 4)))
-        (if (global.get $out_of_mem) (then (return (i32.const 1))))
-        (i32.store (local.get $cell) (i32.const 0))
-        (i32.store offset=4 (local.get $cell)
-          (i32.or
-            (i32.shl
-              (i32.load8_u (i32.add (local.get $p) (local.get $len)))
-              (i32.const 1))
-            (i32.const 1)))
-        (i32.store offset=8 (local.get $cell) (local.get $acc))
-        (local.set $acc (local.get $cell))
-        (br $next)))
-    (local.get $acc))
-
-  (func $some (param $x i32) (result i32)
-    (local $cell i32)
-    (local.set $cell (call $alloc (i32.const 8) (i32.const 4)))
-    (if (global.get $out_of_mem) (then (return (i32.const 1))))
-    (i32.store (local.get $cell) (i32.const 0))
-    (i32.store offset=4 (local.get $cell) (local.get $x))
-    (local.get $cell))
 
   ;; ---- the registered primitives -------------------------------------------
   ;;

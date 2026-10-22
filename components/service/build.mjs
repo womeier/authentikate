@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, cpSync, existsSync, rmSync, mkdtempSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expandAdapter } from './adapters/expand.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const out = resolve(process.argv[2] ?? join(root, 'build'));
@@ -13,28 +14,6 @@ const parse = (name, wat) => {
   writeFileSync(join(out, `${name}.wat`), wat);
   run('wasm-tools', ['parse', join(out, `${name}.wat`), '-o', join(out, `${name}.wasm`)]);
 };
-
-// Balanced function extraction ignores strings and both WAT comment forms.
-function form(source, start) {
-  let depth = 0, comment = 0, quoted = false;
-  for (let i = start; i < source.length; i++) {
-    const pair = source.slice(i, i + 2), c = source[i];
-    if (comment) {
-      if (pair === '(;') { comment++; i++; }
-      else if (pair === ';)') { comment--; i++; }
-    } else if (quoted) {
-      if (c === '\\') i++;
-      else if (c === '"') quoted = false;
-    } else if (pair === ';;') {
-      i = source.indexOf('\n', i);
-      if (i < 0) break;
-    } else if (pair === '(;') { comment++; i++; }
-    else if (c === '"') quoted = true;
-    else if (c === '(') depth++;
-    else if (c === ')' && --depth === 0) return source.slice(start, i + 1);
-  }
-  throw new Error('Unbalanced WAT form');
-}
 
 run('wasm-tools', ['print', join(root, 'build/Authentikate.extraction.authentikate_api.wasm'), '-o', join(out, 'rocq.original.wat')]);
 let rocq = text(join(out, 'rocq.original.wat'));
@@ -63,24 +42,10 @@ for (const match of rocq.matchAll(/\(import "env" "([^"]+)" \(func \(;(\d+);\)/g
   rocq = rocq.replace(new RegExp(`  \\(elem \\(;\\d+;\\) \\(i32\\.const ${index}\\) func ${index}\\)\\n`), '');
 }
 parse('rocq', rocq);
-const argon = text(join(root, 'components/service/adapters/argon2.wat'));
-const helpers = ['$alloc', '$list_len', '$read_N', '$lower', '$lift_bytes'].map(name => {
-  const start = argon.indexOf(`(func ${name} `);
-  if (start < 0) throw new Error(`Missing adapter helper ${name}`);
-  return form(argon, start);
-}).join('\n');
-parse('service', text(join(root, 'components/service/adapters/service.wat')).replace(';; @HEAP_HELPERS@', helpers));
+parse('service', expandAdapter(text(join(root, 'components/service/adapters/service.wat'))));
 for (const name of ['argon2', 'hmac', 'store', 'email']) {
   // Only the wrapper allocator and public service functions survive the merge.
-  let adapter = text(join(root, 'components/service/adapters', `${name}.wat`));
-  if (name === 'email') {
-    const store = text(join(root, 'components/service/adapters/store.wat'));
-    const emailHelpers = [
-      ...['$alloc', '$list_len', '$lower'].map(name => form(argon, argon.indexOf(`(func ${name} `))),
-      ...['$some', '$utf8_ok'].map(name => form(store, store.indexOf(`(func ${name} `))),
-    ].join('\n');
-    adapter = adapter.replace(';; @EMAIL_HELPERS@', emailHelpers);
-  }
+  let adapter = expandAdapter(text(join(root, 'components/service/adapters', `${name}.wat`)));
   adapter = adapter.replace(/\(export "([^"]+)"\)/g, (match, name) => name.startsWith('ffi_') ? match : '');
   parse(name, adapter);
 }

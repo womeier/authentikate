@@ -1,4 +1,4 @@
-;; Template expanded by components/service/build.mjs with the existing heap and
+;; Template expanded from common.wat by expand.mjs with shared heap and
 ;; UTF-8 helpers. Email strings must be validated before canonical ABI lifting.
 (module
   (import "rocq" "memory" (memory 1))
@@ -14,7 +14,7 @@
       (param i32 i32 i32)   ;; idempotency-key: option<string>
       (param i32)))         ;; result<_, error>: 16-byte return area
   (global $buf_len (mut i32) (i32.const 0))
-  ;; @EMAIL_HELPERS@
+  ;; @COMMON alloc list_len lower some utf8_ok@
 
   (func $email-send (param $from i32) (param $to i32)
                     (param $subject i32) (param $text i32) (result i32)

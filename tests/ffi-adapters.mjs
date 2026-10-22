@@ -1,18 +1,18 @@
-// Run after the component build: nix develop --command node tests/ffi-adapters.mjs [build-dir]
-// Exercise the actual exports without rewriting WAT or exporting internals.
+// nix develop --command node tests/ffi-adapters.mjs
+// Exercise actual adapter templates using the production build's expansion.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expandAdapter } from '../components/service/adapters/expand.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const out = resolve(process.argv[2] ?? join(root, 'build'));
 const temp = mkdtempSync(join(tmpdir(), 'ffi-adapters-'));
 
-function heap() {
-  const memory = new WebAssembly.Memory({ initial: 1 });
+function heap(maximum = 65536) {
+  const memory = new WebAssembly.Memory({ initial: 1, maximum });
   const global = value => new WebAssembly.Global({ value: 'i32', mutable: true }, value);
   const rocq = { memory, mem_ptr: global(1024), out_of_mem: global(0), result: global(-1) };
   const view = () => new DataView(memory.buffer);
@@ -69,12 +69,17 @@ function heap() {
 }
 
 function instantiate(path, h, imports) {
-  const binary = path.endsWith('.wasm') ? path : join(temp, path.replaceAll('/', '-') + '.wasm');
-  if (!path.endsWith('.wasm')) execFileSync('wasm-tools', ['parse', join(root, path), '-o', binary]);
+  const wat = join(temp, path.replaceAll('/', '-'));
+  const binary = wat + '.wasm';
+  writeFileSync(wat, expandAdapter(readFileSync(join(root, path), 'utf8')));
+  execFileSync('wasm-tools', ['parse', wat, '-o', binary]);
   execFileSync('wasm-tools', ['validate', binary]);
   const module = new WebAssembly.Module(readFileSync(binary));
-  assert.deepEqual(WebAssembly.Module.imports(module).filter(i => i.module === 'rocq').map(i => i.name).sort(),
-    ['mem_ptr', 'memory', 'out_of_mem', 'result']);
+  assert.deepEqual(WebAssembly.Module.imports(module).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
+    'rocq#memory:memory', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global', 'rocq#result:global',
+    ...Object.entries(imports).flatMap(([provider, functions]) =>
+      Object.keys(functions).map(name => `${provider}#${name}:function`)),
+  ].sort());
   return new WebAssembly.Instance(module, { rocq: h.rocq, ...imports }).exports;
 }
 
@@ -87,6 +92,33 @@ function listResult(h, exports, ret, data, offset = 4) {
 }
 
 try {
+  assert.throws(() => expandAdapter(';; @COMMON missing@'), /Missing common WAT helper missing/);
+  for (const [name, provider, functions] of [
+    ['argon2', 'authentikate:crypto/argon2@0.1.0', ['enroll', 'verify']],
+    ['hmac', 'authentikate:crypto/hmac@0.1.0', ['sign', 'verify']],
+    ['store', 'authentikate:storage/accounts@0.1.0', ['get', 'create']],
+  ]) {
+    const h = heap(1);
+    const e = instantiate(`components/service/adapters/${name}.wat`, h, {
+      [provider]: Object.fromEntries(functions.map(name => [name, () => assert.fail('unexpected provider call')])),
+    });
+    h.rocq.mem_ptr.value = 1025;
+    const p = e.cabi_realloc(0, 0, 8, 4);
+    assert.equal(p, 1032, 'canonical allocation must honor alignment');
+    new Uint8Array(h.rocq.memory.buffer).set([1, 128, 255, 4], p);
+    const grown = e.cabi_realloc(p, 4, 4, 7);
+    assert.deepEqual(h.flat(grown, 4), [1, 128, 255, 4]);
+    const shrunk = e.cabi_realloc(grown, 7, 1, 2);
+    assert.deepEqual(h.flat(shrunk, 2), [1, 128]);
+    assert.equal(e.cabi_realloc(shrunk, 2, 8, 0), 1048);
+    assert.equal(h.rocq.mem_ptr.value, 1048, 'zero size still aligns the bump pointer');
+    h.rocq.mem_ptr.value = 65532;
+    assert.equal(e.cabi_realloc(0, 0, 4, 8), 0, 'failed memory growth returns zero');
+    assert.equal(h.rocq.out_of_mem.value, 1);
+    assert.equal(h.rocq.mem_ptr.value, 65532, 'failed allocation must not advance the heap');
+  }
+  console.log('shared allocators: alignment, grow/shrink copying, zero size, OOM flag and unchanged heap');
+
   {
     const h = heap();
     let outcome = 0;
@@ -256,15 +288,7 @@ try {
     let calls = 0, error = -1;
     let fields = ['Authentikate <hello@example.test>', 'user@example.test',
       'Welcome to Authentikate', 'Your Authentikate account has been created.'].map(s => [...Buffer.from(s)]);
-    // Use the built adapter so its shared-helper placeholders are resolved by
-    // the production build rather than duplicating template expansion here.
-    const path = join(out, 'email.wasm');
-    const module = new WebAssembly.Module(readFileSync(path));
-    assert.deepEqual(WebAssembly.Module.imports(module).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
-      'rocq#memory:memory', 'rocq#mem_ptr:global', 'rocq#out_of_mem:global', 'rocq#result:global',
-      'authentikate:email/sender@0.1.0#send:function',
-    ].sort());
-    const e = instantiate(path, h, {
+    const e = instantiate('components/service/adapters/email.wat', h, {
       'authentikate:email/sender@0.1.0': {
         send(...args) {
           calls++;
