@@ -1,0 +1,25 @@
+// The service's own interface, in its own file so a caller can vendor it
+// without vendoring `world service` as well.  That world imports keyvalue,
+// email, wall-clock and -- through the crypto package -- wasi:random, and a
+// WIT package does not parse unless every package its worlds name is present,
+// so a file carrying both made the gateway's dependency tree four packages
+// larger than its imports.
+package authentikate:service@0.1.0;
+
+interface api {
+    record response {
+        status: u32,
+        body: list<u8>,
+    }
+
+    /// Each takes the raw request body and returns a status and a JSON body.
+    ///
+    /// No configuration crosses this boundary.  The signing key, the issuer,
+    /// the token lifetime, the sender address and the dummy Argon2 cost
+    /// parameters are read by the adapter from `authentikate:config/service`
+    /// and the crypto imports the world already has, so a caller cannot
+    /// influence them and never holds the seed.
+    login: func(body: list<u8>) -> response;
+    validate: func(body: list<u8>) -> response;
+    signup: func(body: list<u8>) -> response;
+}

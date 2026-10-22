@@ -9,14 +9,19 @@ package authentikate:host@0.1.0;
 //
 // Both keyvalue interfaces: the service creates accounts through the atomic
 // compare-and-swap, not through bucket.set, so a host that implements only
-// `store` cannot run it.  The crypto interfaces are deliberately *not*
-// re-exported any more: nothing outside the composition needs them, because
-// the gateway derives the public key and the dummy parameters from the same
-// instances the service uses.
+// `store` cannot run it.
+//
+// Two configuration interfaces rather than one, and the split is a capability
+// boundary, not tidiness.  `service` carries the signing seed and is imported
+// only by the service's world; `policy` carries the origin rules and is
+// imported only by the gateway.  The host answers both, so it is the only
+// place the two meet -- the gateway has no import through which the seed
+// could arrive.  Neither is `wasi:cli/environment`, which would be read
+// access to every variable in the process for a handful of named values.
 world web-host {
     import wasi:keyvalue/store@0.2.0-draft2;
     import wasi:keyvalue/atomics@0.2.0-draft2;
-    // A narrow, typed substitute for granting wasi:cli/environment.
-    import authentikate:gateway/settings@0.1.0;
+    import authentikate:config/service@0.1.0;
+    import authentikate:config/policy@0.1.0;
     export wasi:http/incoming-handler@0.2.4;
 }

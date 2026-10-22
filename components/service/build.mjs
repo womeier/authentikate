@@ -101,6 +101,7 @@ const unexpected = WebAssembly.Module.imports(module).filter(i => ![
   'authentikate:crypto/ed25519@0.1.0',
   'authentikate:email/sender@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
+  'authentikate:config/service@0.1.0',
 ].includes(i.module));
 if (unexpected.length) throw new Error(`Unresolved imports: ${JSON.stringify(unexpected)}`);
 
@@ -110,6 +111,8 @@ try {
   cpSync(join(root, 'components/service/wit'), wit, { recursive: true });
   cpSync(join(root, 'components/crypto/wit'), join(wit, 'deps/crypto'), { recursive: true });
   cpSync(join(root, 'components/email/wit'), join(wit, 'deps/email'), { recursive: true });
+  mkdirSync(join(wit, 'deps/config'), { recursive: true });
+  cpSync(join(root, 'wit/config.wit'), join(wit, 'deps/config/config.wit'));
   if (existsSync(join(root, 'components/crypto/wit/deps'))) {
     cpSync(join(root, 'components/crypto/wit/deps'), join(wit, 'deps'), { recursive: true });
   }

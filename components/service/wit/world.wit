@@ -1,0 +1,19 @@
+package authentikate:service@0.1.0;
+
+// The extracted Rocq service.  `api` lives in api.wit so the gateway can
+// vendor the interface alone; this file is the world, and nothing outside this
+// component needs it.  (The comment sits below the package declaration
+// because wasm-tools treats a leading comment as a package doc comment, and
+// only one file in a package may carry one.)
+world service {
+    import wasi:clocks/wall-clock@0.2.0;
+    import wasi:keyvalue/store@0.2.0-draft2;
+    import wasi:keyvalue/atomics@0.2.0-draft2;
+    import authentikate:crypto/argon2@0.1.0;
+    import authentikate:crypto/ed25519@0.1.0;
+    import authentikate:email/sender@0.1.0;
+    // The signing seed, issuer, TTL and sender address.  Read by the adapter
+    // once per request, so no caller supplies them.
+    import authentikate:config/service@0.1.0;
+    export api;
+}

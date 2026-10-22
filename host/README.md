@@ -61,39 +61,45 @@ non-browser clients. No permissive CORS headers are emitted.
 `host/composition.wac` instantiates the existing Rust Argon2, Ed25519, stdout-email
 and Rocq service components. It connects the service imports directly to those
 component exports, with no host crypto implementations or forwarding callbacks.
-It exports the service API and the same signer/hash instances for initialization.
-It also instantiates the HTTP gateway, wiring it to the *same* Argon2 and
-Ed25519 instances as the service rather than to fresh ones. That is
-load-bearing: `config.key` is an instance-local Ed25519 handle, so a second
-signer instance would hand the service a handle naming nothing, and
-`config.dummy_params` has to be the parameters real records are enrolled under
-or the missing-account login path becomes distinguishable by duration. The
-composition now enforces this, where the host previously relied on exporting
-the right instances and being asked for them in the right order. The crypto
-interfaces are consequently no longer re-exported to the host.
+It also instantiates the HTTP gateway, which gets the service export and
+nothing else from inside the composition: no crypto instances to wire, because
+it no longer assembles the service's configuration.
 
 `host/world.wit` describes this host-facing surface; bindings use the authoritative
-service, crypto and keyvalue WIT sources, staged by `host/build.rs`.
+config, service `api` and keyvalue WIT sources, staged by `host/build.rs`.
 
-The host generates a random signing seed once per process and passes it, with
-the issuer, TTL, welcome-email sender and origin policy, through
-`authentikate:gateway/settings@0.1.0` -- a typed six-field record rather than a
-grant of `wasi:cli/environment`, which would be a capability to read every
-variable in the process. The gateway provisions the seed into the Ed25519
-component via `import-key` once per request and passes the returned handle to
-the service; public-key derivation, signing and verification all remain inside
-the Ed25519 component. One honest consequence of removing the host's call site:
-the seed now crosses into the gateway guest as well as the Ed25519 one.
+The host generates a random signing seed once per process and hands out its
+configuration through two interfaces rather than one.
+`authentikate:config/service@0.1.0` carries the seed, the issuer, the TTL and
+the welcome-email sender, and is imported only by the service's world;
+`authentikate:config/policy@0.1.0` carries the approved origin or the bound
+authorities, and is imported only by the gateway. The host answers both, so it
+is the only place the two meet. The split is a capability boundary: the
+gateway terminates HTTP and is the component an attacker talks to, and it has
+no import through which the seed could arrive. Neither interface is a grant of
+`wasi:cli/environment`, which would be read access to every variable in the
+process.
 
-The missing-account dummy tag is a fixed 32 bytes rather than a derived hash.
-Only the cost parameters affect how long the absent path takes -- the tag enters
-only the final constant-time comparison -- and `login_check` in `Api.v` returns
+The service's adapter reads `config/service` once per request and does the rest
+itself: `ed25519.import-key` on the seed, `ed25519.public-key` on the handle,
+and `argon2.recommended-params` for the cost parameters. Handles are
+instance-local and an instance is per-request, so the import repeats; what does
+not repeat is anyone outside holding the seed. Signing and verification stay
+inside the Ed25519 component throughout. A seed Ed25519 refuses is a
+`500 {"error":"Service is misconfigured"}` built in the adapter -- byte for
+byte what the gateway used to return -- rather than a trap, which would lose
+the body; `a_rejected_signing_seed_is_a_clean_500` and `tests/component.mjs`
+both pin it.
+
+The missing-account dummy record is built in the adapter too: a fixed 16-byte
+salt and a zero-filled tag whose length follows `recommended-params`. Only the
+cost parameters affect how long the absent path takes -- the tag enters only
+the final constant-time comparison -- and `login_check` in `Api.v` returns
 `Unauthorized` whenever the lookup found nothing regardless of what the hash
-said. The parameters come from the Argon2 component's `recommended-params`.
-Enrollment salts come from WASI random inside that component.
+said. Enrollment salts come from WASI random inside the Argon2 component.
 
 The host provides only WASI clock/random, stdout/I/O, an in-memory WASI keyvalue
-resource table, and `settings`. It rejects composed artifacts with unexpected
+resource table, and the two configuration interfaces. It rejects composed artifacts with unexpected
 imports, including unresolved crypto imports. No guest filesystem, environment,
 or network access is granted, and there is no outbound HTTP: `wasmtime-wasi-http`
 is built without `default-send-request` and the host's `send_request` refuses

@@ -78,29 +78,17 @@
   unproved, so this trades a Rust-sized gap for a smaller Wasm-sized one rather
   than closing it outright.
 
-- [ ] Take the Ed25519 handle out of `api.config` so the gateway stops seeing
-  the signing seed. Its only non-service imports are three calls in
-  `service_config` -- `ed25519.import-key`, `ed25519.public-key` and
-  `argon2.recommended-params` -- none of them on the request path, and all
-  three exist because `config` is expressed as `key: u32` plus `pubkey` and
-  `dummy-params` rather than as the seed. The service's own world already
-  imports `authentikate:crypto/ed25519@0.1.0`, so its adapter can import the
-  key itself: `settings` would hand the seed straight to the host-facing edge
-  of the service, the gateway would drop both crypto imports and its
-  `signing-seed` field, and the capability story would match what
-  `gateway.wit` claims. Cost is glue in
-  `components/service/adapters/service.wat`. Keeping `config`'s `key: u32` and
-  having the adapter fill it leaves the Rocq side and `Proofs.v` untouched;
-  only changing `cfg_key`'s shape propagates into the proofs.
-
-- [ ] Reduce the gateway's vendored WIT. `components/gateway/wit/deps`
-  carries copies of `service.wit`, the crypto and email interfaces and the
-  keyvalue draft because `wit_bindgen::generate!` needs a literal path and
-  cannot stage sources the way `host/build.rs` does. `make check-wit` fails on
-  drift, which is a guard rather than a fix. Two versions of `wasi:clocks`
-  coexist there as a result -- the service's `wall-clock@0.2.0` and
-  `wasi:http`'s `monotonic-clock@0.2.4` -- which is why the gateway refers to
-  `wasi::clocks0_2_4`.
+- [ ] Reduce the gateway's vendored WIT further. Splitting `world service` out
+  of `api.wit` took `components/gateway/wit/deps` from fifteen files to eight
+  by removing the keyvalue, email, wall-clock and `wasi:random` packages,
+  which were present only because a world the gateway never instantiates
+  named them -- and with `wasi:clocks@0.2.0` gone there is one clocks version
+  again, so the `wasi::clocks0_2_4` workaround is retired. What remains is the
+  pinned `wasi:http`/`wasi:io`/`wasi:clocks` set plus `authentikate:config`
+  and `api.wit`, copied because `wit_bindgen::generate!` needs a literal path
+  and cannot stage sources the way `host/build.rs` does. `make check-wit`
+  fails on drift in the two that have an authoritative source elsewhere,
+  which is a guard rather than a fix.
 
 - [ ] Consider extracting the JSON layer as a standalone Rocq library
   (`rocq-json`): the parser, canonical printer, accessors, `parse_print`,

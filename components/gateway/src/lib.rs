@@ -2,9 +2,11 @@
 //!
 //! The runtime hands us a parsed `incoming-request`; we decide the request's
 //! fate, forward a byte body to `authentikate:service/api`, and write back the
-//! status and body the Rocq service returned.  No JSON is parsed here, no
-//! credential is inspected, and no key is held: `config` carries an opaque
-//! Ed25519 handle, and signing happens inside the crypto component.
+//! status and body the Rocq service returned.  No JSON is parsed here and no
+//! credential is inspected.  Nor is any key held, and that is now structural
+//! rather than a promise: the signing seed lives in
+//! `authentikate:config/service`, which only the service's world imports, so
+//! there is no import here through which it could arrive.
 //!
 //! What moved here from the host: the request target's form, the Host/Origin
 //! policy, routing, the static assets, the method and media-type checks, the
@@ -17,20 +19,13 @@ wit_bindgen::generate!({ world: "gateway", path: "wit", generate_all });
 
 mod policy;
 
-use authentikate::crypto::{argon2, ed25519};
+use authentikate::config;
 use authentikate::service::api;
-use authentikate::gateway::settings;
 use exports::wasi::http::incoming_handler::Guest;
 use policy::{
     is_json, is_origin_form, route, Operation, Policy, Route, BODY_LIMIT, READ_DEADLINE_NS,
 };
-// `clocks0_2_4` rather than `clocks`: the vendored `service.wit` world imports
-// `wasi:clocks/wall-clock@0.2.0` while `wasi:http/types` imports
-// `wasi:clocks/monotonic-clock@0.2.4`, so two versions of the package are in
-// the resolve and wit-bindgen disambiguates by version.  Both are byte-identical
-// upstream copies; unifying them would mean editing the service's WIT and the
-// import string in its hand-written adapter, which is not worth a nicer name.
-use wasi::clocks0_2_4::monotonic_clock;
+use wasi::clocks::monotonic_clock;
 use wasi::http::types::{
     Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
@@ -40,13 +35,6 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
                    connect-src 'self'; img-src 'self'; base-uri 'none'; \
                    frame-ancestors 'none'; form-action 'self'";
 const JSON: &str = "application/json; charset=utf-8";
-
-/// A fixed salt for the missing-account hash.  It is not a secret -- it exists
-/// only so that a login for an unknown email runs the same Argon2 as one for a
-/// known email with the wrong password.  Being constant costs nothing: the
-/// result is discarded, because `login_check` in Api.v returns `Unauthorized`
-/// whenever the lookup found nothing, whatever the hash said.
-const DUMMY_SALT: [u8; 16] = *b"authentikate-abs";
 
 struct Component;
 
@@ -102,54 +90,12 @@ fn read_body(request: &IncomingRequest) -> Result<Vec<u8>, BodyError> {
     }
 }
 
-/// Everything the host told us, with the origin policy already derived.
-struct Settings {
-    config: settings::Config,
-    policy: Policy,
-}
-
-impl Settings {
-    fn load() -> Self {
-        let config = settings::get();
-        Self {
-            policy: Policy {
-                approved_origin: config.approved_origin.clone(),
-                approved_authorities: config.approved_authorities.clone(),
-            },
-            config,
-        }
-    }
-
-    /// Assemble the service configuration.  The Ed25519 and Argon2 instances
-    /// here are the ones WAC wires into the service, so `key` names a key in
-    /// the service's own view and `dummy_params` are the parameters real
-    /// records are enrolled under -- which is what keeps the missing-account
-    /// path indistinguishable by duration.
-    fn service_config(&self) -> Option<api::Config> {
-        let key = ed25519::import_key(&self.config.signing_seed).ok()?;
-        let params = argon2::recommended_params();
-        Some(api::Config {
-            key,
-            pubkey: ed25519::public_key(key).ok()?,
-            iss: self.config.issuer.clone().into_bytes(),
-            ttl: self.config.ttl,
-            dummy_salt: DUMMY_SALT.to_vec(),
-            dummy_tag: vec![0; params.tag_length as usize],
-            dummy_params: api::Argon2Params {
-                // 2 is argon2id, the algorithm `enroll` writes into a record.
-                algorithm: 2,
-                memory_kib: params.memory_kib,
-                iterations: params.iterations,
-                parallelism: params.parallelism,
-                tag_length: params.tag_length,
-            },
-            email_from: self.config.email_from.clone().into_bytes(),
-        })
-    }
-}
-
 fn respond(request: &IncomingRequest) -> Reply {
-    let settings = Settings::load();
+    let rules = config::policy::get();
+    let allowed = Policy {
+        approved_origin: rules.approved_origin,
+        approved_authorities: rules.approved_authorities,
+    };
     let Some(target) = request.path_with_query() else {
         return error(400, "Use an origin-form relative request target");
     };
@@ -159,15 +105,12 @@ fn respond(request: &IncomingRequest) -> Reply {
     let headers = request.headers();
     let field = |name: &str| {
         headers
-            .get(&name.to_string())
+            .get(name)
             .into_iter()
             .map(|value| String::from_utf8_lossy(&value).into_owned())
             .collect::<Vec<_>>()
     };
-    if !settings
-        .policy
-        .permits(request.authority().as_deref(), &field("origin"))
-    {
+    if !allowed.permits(request.authority().as_deref(), &field("origin")) {
         return error(403, "Host or Origin is not allowed");
     }
     let operation = match route(&target) {
@@ -215,13 +158,14 @@ fn respond(request: &IncomingRequest) -> Reply {
         Err(BodyError::TimedOut) => return error(408, "Request body timed out"),
         Err(BodyError::Interrupted) => return error(400, "Request interrupted"),
     };
-    let Some(config) = settings.service_config() else {
-        return error(500, "Service is misconfigured");
-    };
+    // No configuration crosses this call.  The service's adapter reads the
+    // seed, the issuer, the TTL, the sender and the dummy Argon2 cost
+    // parameters for itself, so a 500 for a bad seed is now its answer to
+    // give, not ours to anticipate.
     let response = match operation {
-        Operation::Signup => api::signup(&config, &body),
-        Operation::Login => api::login(&config, &body),
-        Operation::Validate => api::validate(&config, &body),
+        Operation::Signup => api::signup(&body),
+        Operation::Login => api::login(&body),
+        Operation::Validate => api::validate(&body),
     };
     Reply {
         // The service's statuses are the seven in Api.v's `status`; anything
@@ -237,7 +181,7 @@ fn send(outparam: ResponseOutparam, reply: Reply) {
     let headers = Fields::new();
     let set = |name: &str, value: &str| {
         // A rejected header name would be a bug here, not input-dependent.
-        let _ = headers.append(&name.to_string(), &value.as_bytes().to_vec());
+        let _ = headers.append(name, value.as_bytes());
     };
     set("content-type", reply.content_type);
     set("cache-control", "no-store");
@@ -250,7 +194,10 @@ fn send(outparam: ResponseOutparam, reply: Reply) {
     let response = OutgoingResponse::new(headers);
     let _ = response.set_status_code(reply.status);
     let Ok(body) = response.body() else {
-        return ResponseOutparam::set(outparam, Err(wasi::http::types::ErrorCode::InternalError(None)));
+        return ResponseOutparam::set(
+            outparam,
+            Err(wasi::http::types::ErrorCode::InternalError(None)),
+        );
     };
     ResponseOutparam::set(outparam, Ok(response));
     {
@@ -288,7 +235,6 @@ mod tests {
             "Request body exceeds 16 KiB",
             "Request body timed out",
             "Request interrupted",
-            "Service is misconfigured",
         ] {
             assert!(
                 !message.contains(['"', '\\']) && !message.contains(|c: char| c.is_control()),
@@ -300,10 +246,5 @@ mod tests {
                 format!("{{\"error\":\"{message}\"}}")
             );
         }
-    }
-
-    #[test]
-    fn dummy_salt_meets_the_argon2_minimum() {
-        assert!(DUMMY_SALT.len() >= 8);
     }
 }

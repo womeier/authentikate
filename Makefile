@@ -36,11 +36,15 @@ check-wit:
 	diff -u components/service/wit/deps/clocks/wall-clock.wit 'components/gateway/wit/deps/clocks@0.2.0/wall-clock.wit'
 
 # Component-level composition; wasm-merge remains internal to the Rocq build.
-host-component: check-wit component crypto-components email-stdout-component gateway-component
+host-component: check-wit component crypto-components email-stdout-component
 	$(MAKE) compose-host
 
-# Also usable with existing build/*.component.wasm, without rebuilding Rocq.
-compose-host:
+# Also usable with existing build/*.component.wasm, without rebuilding Rocq --
+# which is the expensive part, so the gateway is a prerequisite rather than
+# something the caller has to remember.  CI composes a downloaded Rocq
+# component with freshly built providers, and would otherwise need the list
+# kept in step with this file.
+compose-host: gateway-component
 	wac compose host/composition.wac \
 		-d authentikate:service=build/authentikate.component.wasm \
 		-d authentikate:argon2=build/argon2.component.wasm \

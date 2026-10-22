@@ -52,9 +52,11 @@ all four first. Node remains only build/test tooling, not a running server.
 
 ## The service
 
-Three operations, JSON in and JSON out. The component exports
-`authentikate:service/api@0.1.0` (`components/service/wit/service.wit`), not WASI HTTP: each
-operation takes config, Unix time and request bytes and returns status/body.
+Three operations, JSON in and JSON out. The service component exports
+`authentikate:service/api@0.1.0` (`components/service/wit/api.wit`): each
+operation takes request bytes and returns status/body, reading its own
+configuration and the clock through imports. The composed artifact does export
+WASI HTTP -- `components/gateway` terminates it.
 The Rust demo exposes the following HTTP routes:
 
 | Method | Path            | Request                        | Response                     |
@@ -592,7 +594,7 @@ module.
 ## Spec and client
 
 Not implemented: there is no root `openapi.yaml`, generated `client/`, or
-`gen-client` flake app. `components/service/wit/service.wit` is the current component contract;
+`gen-client` flake app. `components/service/wit/api.wit` is the current component contract;
 it is not an HTTP/OpenAPI contract. The intended work remains:
 
 - Hand-write `openapi.yaml` for all three demo HTTP endpoints and errors.

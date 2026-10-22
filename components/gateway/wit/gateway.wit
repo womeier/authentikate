@@ -4,56 +4,20 @@
 // limit, and the response security headers -- is decided here, inside a
 // component, and the host is left with the engine and the keyvalue provider.
 //
-// What this does NOT do is decide anything about authentication.  It parses no
-// JSON, inspects no credentials and holds no key: it assembles `config`,
-// forwards a byte body to `authentikate:service/api`, and writes back the
-// status and body the Rocq service returned.  The split is deliberate -- the
-// proofs in components/service/theories/Proofs.v are about `api`, so keeping
-// this layer free of judgement keeps those theorems load-bearing.
+// Three imports, and the shape of that list is the point.  It forwards a byte
+// body to `authentikate:service/api`, reads the origin policy from
+// `authentikate:config/policy`, and streams through `wasi:http`.  It parses no
+// JSON, inspects no credentials, holds no key and cannot reach one: the
+// signing seed is in `authentikate:config/service`, which only the service
+// imports.  The proofs in components/service/theories/Proofs.v are about
+// `api`, so keeping this layer free of judgement keeps those theorems
+// load-bearing.
 package authentikate:gateway@0.1.0;
-
-/// What the host must tell the gateway at the start of a request.
-///
-/// A dedicated interface rather than `wasi:cli/environment`, which would be a
-/// capability to read every variable in the host's process when six named
-/// values are wanted -- one of them a private signing seed.  Typed, so a
-/// missing or malformed value is a host-side error instead of a parse that
-/// fails inside the guest.
-interface settings {
-    record config {
-        /// The 32-byte Ed25519 seed.  Instance-local handles mean a fresh
-        /// instance must import it again, so this is read once per request;
-        /// it must be stable for the process or tokens stop validating.
-        signing-seed: list<u8>,
-        /// Token issuer, and lifetime in seconds.
-        issuer: string,
-        ttl: u64,
-        /// Welcome-email sender.
-        email-from: string,
-        /// Exactly one approved origin, when the operator configured one.
-        /// Checked and normalized by the host; the gateway compares against
-        /// it rather than re-parsing.
-        approved-origin: option<string>,
-        /// Otherwise, the authorities the host is actually listening on.  The
-        /// bound port is host knowledge -- `LISTEN=127.0.0.1:0` picks it at
-        /// runtime -- while the rule applied to it is the gateway's.
-        approved-authorities: list<string>,
-    }
-
-    get: func() -> config;
-}
 
 world gateway {
     // Parsed by the runtime, not here; see README's Trusted Computing Base.
     export wasi:http/incoming-handler@0.2.4;
 
     import authentikate:service/api@0.1.0;
-
-    // The same instances WAC wires into the service, so the key handle in
-    // `config` is valid in the service's own resource table and the dummy
-    // cost parameters are the ones real records are enrolled under.
-    import authentikate:crypto/ed25519@0.1.0;
-    import authentikate:crypto/argon2@0.1.0;
-
-    import settings;
+    import authentikate:config/policy@0.1.0;
 }

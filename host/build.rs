@@ -15,9 +15,9 @@ fn copy_wit(source: &Path, destination: &Path) {
 
 fn main() {
     for path in [
-        "../components/service/wit",
-        "../components/crypto/wit",
-        "../components/email/wit",
+        "../wit/config.wit",
+        "../components/service/wit/api.wit",
+        "../components/service/wit/deps/keyvalue",
         "../components/gateway/wit",
         "world.wit",
     ] {
@@ -30,36 +30,25 @@ fn main() {
         fs::remove_dir_all(&wit).unwrap();
     }
     let deps = wit.join("deps");
-    // The gateway's tree carries the pinned wasi:http, wasi:io, wasi:clocks
-    // (both 0.2.4 and, version-qualified, the service's 0.2.0) and wasi:cli
-    // copies that the exported handler resolves against.
+    // The gateway's tree carries the pinned wasi:http, wasi:io and wasi:clocks
+    // copies the exported handler resolves against, plus `authentikate:config`
+    // and the service's `api` interface.
     copy_wit(Path::new("../components/gateway/wit/deps"), &deps);
-    fs::create_dir_all(deps.join("gateway")).unwrap();
-    fs::copy(
-        "../components/gateway/wit/gateway.wit",
-        deps.join("gateway/gateway.wit"),
-    )
-    .unwrap();
+    // The keyvalue draft is not in that tree -- the gateway does not touch
+    // storage -- so it comes from the service, which does.
+    copy_wit(
+        Path::new("../components/service/wit/deps/keyvalue"),
+        &deps.join("keyvalue"),
+    );
     // Authoritative sources win over the gateway's vendored copies, so the
     // host is never built against a stale interface.  `make check-wit` fails
     // when the two have drifted.
-    copy_wit(Path::new("../components/service/wit"), &deps.join("service"));
-    copy_wit(Path::new("../components/crypto/wit"), &deps.join("crypto"));
-    copy_wit(Path::new("../components/email/wit"), &deps.join("email"));
-    // service/wit carries its own deps/ (keyvalue, clocks 0.2.0); flatten them
-    // up a level and keep the service's clock version-qualified.
-    for name in ["keyvalue", "clocks", "store"] {
-        let nested = deps.join("service/deps").join(name);
-        if nested.exists() {
-            let target = if name == "clocks" {
-                deps.join("clocks@0.2.0")
-            } else {
-                deps.join(name)
-            };
-            copy_wit(&nested, &target);
-        }
-    }
-    fs::remove_dir_all(deps.join("service/deps")).ok();
+    fs::copy("../wit/config.wit", deps.join("config/config.wit")).unwrap();
+    fs::copy(
+        "../components/service/wit/api.wit",
+        deps.join("service/api.wit"),
+    )
+    .unwrap();
     fs::copy("world.wit", wit.join("host.wit")).unwrap();
     fs::write(
         out.join("bindings.rs"),

@@ -28,31 +28,32 @@ On Linux, the cache is optional and missing components can build locally.
 ## Wasm Component Interfaces
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,
-and `validate`. Each accepts a typed configuration record and a JSON request
-body as bytes, and returns a status code and JSON body as bytes. Clients send
-only the request body. See
-[service.wit](components/service/wit/service.wit).
+and `validate`. Each accepts a JSON request body as bytes and returns a status
+code and JSON body as bytes -- nothing else. The signing key, the issuer, the
+token lifetime, the sender address and the dummy Argon2 cost parameters are
+read by the service's own adapter from `authentikate:config/service@0.1.0` and
+the crypto imports its world already has, so no caller can influence them.
+See [api.wit](components/service/wit/api.wit).
 
 The composed artifact exports `wasi:http/incoming-handler@0.2.4`, and the HTTP
 gateway in [components/gateway](components/gateway) is what implements it:
 it decides the request target's form, applies the Host/Origin policy, routes,
 serves the three static assets, checks the method and media type, enforces the
-16 KiB body limit and the 15-second read deadline, sets the response security
-headers, and assembles the `config` record the service needs. It parses no
-JSON and inspects no credential, and signing happens in the crypto component,
-but it is not key-free: `config` carries an opaque Ed25519 handle, and
-obtaining that handle means the gateway receives the signing seed from
-`settings` and imports it. Giving the service the seed and letting its own
-adapter import the key would remove both crypto imports and keep the seed out
-of this guest; see TODO.md. WAC wires the
-gateway to the *same* Argon2 and Ed25519 instances as the service, which is
-what makes that handle valid in the service's view and the dummy cost
-parameters the ones real records are enrolled under.
+16 KiB body limit and the 15-second read deadline, and sets the response
+security headers. It has three imports -- `authentikate:service/api`,
+`authentikate:config/policy` and `wasi:http` -- and that list is the security
+claim: it parses no JSON, inspects no credential, and cannot reach a key,
+because the signing seed is in `authentikate:config/service`, which only the
+service's world imports. The part an attacker talks to has no import through
+which a private key could arrive.
 
 That leaves the host with the engine and its limits, admission control, the
-account map, and configuration, which it supplies through
-`authentikate:gateway/settings@0.1.0` -- a typed six-field record rather than a
-grant of `wasi:cli/environment`. No guest filesystem, environment or network
+account map, and configuration, which it supplies through two interfaces
+rather than one: `authentikate:config/service@0.1.0` carries the seed to the
+service, `authentikate:config/policy@0.1.0` carries the origin rules to the
+gateway, and the host is the only place the two meet. Neither is a grant of
+`wasi:cli/environment`, which would be read access to every variable in the
+process for a handful of named values. No guest filesystem, environment or network
 access is granted, and there is no outbound HTTP: `wasmtime-wasi-http` is built
 without `default-send-request` and the host's `send_request` refuses.
 
@@ -169,6 +170,14 @@ individual cases; this is the inventory.
   is the natural yardstick for exactly this layer, being an HTTP/1.1
   specification in Coq built for model-based testing of servers; it is not
   used here, and its HTTP/1.1 parser is the part `wasi:http` makes redundant.
+- **The service's adapter assembles its own configuration.** The 500 for a
+  seed Ed25519 refuses, the constant dummy salt, and the zero-filled dummy tag
+  whose length tracks `recommended-params` are all hand-written WebAssembly in
+  `components/service/adapters/service.wat`, unproved like the rest of that
+  glue. The differential tests in `tests/component.mjs` pin the assembled
+  record field by field, including that the dummy cost parameters equal the
+  enrolled ones -- which is what keeps the absent-account login path
+  indistinguishable by duration.
 - **Routing and the origin policy are not proved.** They moved from the host
   into a component, which makes the artifact self-contained and the checks
   unit-testable without an engine, but `components/gateway` is ordinary Rust.

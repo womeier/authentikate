@@ -35,9 +35,18 @@ mod bindings {
 }
 use bindings::{
     WebHost,
-    authentikate::gateway::settings,
+    authentikate::config::{policy, service as service_config},
     wasi::keyvalue::{atomics, store as kv},
 };
+
+/// Everything the host configures, in the shape it hands out.  Split in two on
+/// the way to the guests: the seed goes only to the service, the origin rules
+/// only to the gateway.
+#[derive(Clone)]
+struct Settings {
+    service: service_config::Settings,
+    policy: policy::Rules,
+}
 
 const FUEL: u64 = 2_000_000_000;
 type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
@@ -78,9 +87,8 @@ impl WasiHttpHooks for NoOutboundHttp {
                     (
                         hyper::Response<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
                         Box<
-                            dyn std::future::Future<
-                                    Output = Result<(), wasmtime_wasi_http::Error>,
-                                > + Send,
+                            dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>>
+                                + Send,
                         >,
                     ),
                     wasmtime_wasi_http::Error,
@@ -99,7 +107,7 @@ struct GuestState {
     hooks: NoOutboundHttp,
     table: ResourceTable,
     records: Records,
-    settings: settings::Config,
+    settings: Settings,
     limits: StoreLimits,
 }
 
@@ -122,12 +130,24 @@ impl WasiHttpView for GuestState {
     }
 }
 
-/// The configuration the gateway asks for, once per request.  A typed
-/// interface rather than `wasi:cli/environment`: the component gets these six
-/// values and no capability to read anything else in the process.
-impl settings::Host for GuestState {
-    fn get(&mut self) -> wasmtime::Result<settings::Config> {
-        Ok(self.settings.clone())
+/// The service's configuration, read once per request by its adapter -- the
+/// signing seed, the issuer, the TTL and the sender address.  The gateway does
+/// not import this interface, so the seed reaches only the component that
+/// signs with it.
+impl service_config::Host for GuestState {
+    fn get(&mut self) -> wasmtime::Result<service_config::Settings> {
+        Ok(self.settings.service.clone())
+    }
+}
+
+/// The gateway's configuration: the approved origin, or the authorities this
+/// process is actually listening on.  Both are host knowledge -- `LISTEN`
+/// picks the port at runtime -- while the rule applied to them is the
+/// gateway's.  A typed interface rather than `wasi:cli/environment`, which
+/// would be read access to every variable in the process.
+impl policy::Host for GuestState {
+    fn get(&mut self) -> wasmtime::Result<policy::Rules> {
+        Ok(self.settings.policy.clone())
     }
 }
 
@@ -277,11 +297,11 @@ struct Runtime {
     component: Component,
     linker: Linker<GuestState>,
     records: Records,
-    settings: settings::Config,
+    settings: Settings,
 }
 
 impl Runtime {
-    fn new(path: &str, settings: settings::Config) -> Result<Self> {
+    fn new(path: &str, settings: Settings) -> Result<Self> {
         let mut options = wasmtime::Config::new();
         options.consume_fuel(true);
         let engine = Engine::new(&options)?;
@@ -310,7 +330,8 @@ impl Runtime {
                 [
                     "wasi:keyvalue/store@0.2.0-draft2",
                     "wasi:keyvalue/atomics@0.2.0-draft2",
-                    "authentikate:gateway/settings@0.1.0",
+                    "authentikate:config/service@0.1.0",
+                    "authentikate:config/policy@0.1.0",
                 ]
                 .contains(&name)
                     || wasi,
@@ -322,7 +343,11 @@ impl Runtime {
         wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)?;
         kv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         atomics::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
-        settings::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
+        service_config::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )?;
+        policy::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         Ok(Self {
             engine,
             component,
@@ -367,7 +392,10 @@ impl Runtime {
         &self,
         request: hyper::Request<B>,
         sender: tokio::sync::oneshot::Sender<
-            Result<hyper::Response<HyperOutgoingBody>, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode>,
+            Result<
+                hyper::Response<HyperOutgoingBody>,
+                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode,
+            >,
         >,
     ) -> Result<()>
     where
@@ -397,7 +425,10 @@ fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<Hype
     let body = format!("{{\"error\":\"{message}\"}}");
     hyper::Response::builder()
         .status(status)
-        .header(hyper::header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(
+            hyper::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )
         .header(hyper::header::CACHE_CONTROL, "no-store")
         .body(
             http_body_util::Full::new(body.into())
@@ -486,22 +517,26 @@ fn loopback_authorities(port: u16) -> Vec<String> {
         .collect()
 }
 
-fn configuration(port: u16, public_origin: Option<&str>) -> Result<settings::Config> {
+fn configuration(port: u16, public_origin: Option<&str>) -> Result<Settings> {
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(seed.as_mut()).context("Generate signing seed")?;
     let approved_origin = public_origin.map(approved_origin).transpose()?;
-    Ok(settings::Config {
-        signing_seed: seed.to_vec(),
-        issuer: "demo".into(),
-        ttl: 600,
-        email_from: std::env::var("SIGNUP_EMAIL_FROM")
-            .unwrap_or_else(|_| "Authentikate <hello@example.test>".into()),
-        approved_authorities: if approved_origin.is_some() {
-            vec![]
-        } else {
-            loopback_authorities(port)
+    Ok(Settings {
+        service: service_config::Settings {
+            signing_seed: seed.to_vec(),
+            iss: "demo".into(),
+            ttl: 600,
+            email_from: std::env::var("SIGNUP_EMAIL_FROM")
+                .unwrap_or_else(|_| "Authentikate <hello@example.test>".into()),
         },
-        approved_origin,
+        policy: policy::Rules {
+            approved_authorities: if approved_origin.is_some() {
+                vec![]
+            } else {
+                loopback_authorities(port)
+            },
+            approved_origin,
+        },
     })
 }
 
@@ -562,7 +597,7 @@ mod tests {
 
     const COMPOSED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm");
 
-    fn app(settings: settings::Config) -> Arc<App> {
+    fn app(settings: Settings) -> Arc<App> {
         Arc::new(App {
             runtime: Runtime::new(COMPOSED, settings).unwrap(),
             gate: Arc::new(Semaphore::new(1)),
@@ -570,7 +605,7 @@ mod tests {
         })
     }
 
-    fn demo() -> settings::Config {
+    fn demo() -> Settings {
         configuration(3000, None).unwrap()
     }
 
@@ -653,10 +688,34 @@ mod tests {
 
         let json = [(header::CONTENT_TYPE.as_str(), "application/json")];
         for (method, path, body, headers, expected) in [
-            (Method::GET, "/api/login", "", &json[..], StatusCode::METHOD_NOT_ALLOWED),
-            (Method::GET, "/Cargo.toml", "", &[][..], StatusCode::NOT_FOUND),
-            (Method::POST, "/api/no-route", "{}", &json[..], StatusCode::NOT_FOUND),
-            (Method::POST, "/api/login", "{}", &[][..], StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                Method::GET,
+                "/api/login",
+                "",
+                &json[..],
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::GET,
+                "/Cargo.toml",
+                "",
+                &[][..],
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                Method::POST,
+                "/api/no-route",
+                "{}",
+                &json[..],
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                Method::POST,
+                "/api/login",
+                "{}",
+                &[][..],
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
             (
                 Method::POST,
                 "/api/login",
@@ -679,13 +738,31 @@ mod tests {
         let credentials =
             json!({"email":"workbench@example.test", "password":"a-local-demo-password"});
         assert_eq!(
-            post(&app, "/api/signup", credentials.clone(), StatusCode::CREATED).await,
+            post(
+                &app,
+                "/api/signup",
+                credentials.clone(),
+                StatusCode::CREATED
+            )
+            .await,
             json!({})
         );
-        post(&app, "/api/signup", credentials.clone(), StatusCode::CONFLICT).await;
+        post(
+            &app,
+            "/api/signup",
+            credentials.clone(),
+            StatusCode::CONFLICT,
+        )
+        .await;
         let login = post(&app, "/api/login", credentials.clone(), StatusCode::OK).await;
         let token = login["token"].as_str().unwrap().to_owned();
-        let validation = post(&app, "/api/validate", json!({"token": token}), StatusCode::OK).await;
+        let validation = post(
+            &app,
+            "/api/validate",
+            json!({"token": token}),
+            StatusCode::OK,
+        )
+        .await;
         assert_eq!(validation["valid"], true);
         assert_eq!(validation["claims"]["sub"], credentials["email"]);
         assert_eq!(validation["claims"]["iss"], "demo");
@@ -711,7 +788,11 @@ mod tests {
 
         let mut tampered = token.into_bytes();
         let signature = tampered.iter().rposition(|b| *b == b'.').unwrap() + 1;
-        tampered[signature] = if tampered[signature] == b'A' { b'B' } else { b'A' };
+        tampered[signature] = if tampered[signature] == b'A' {
+            b'B'
+        } else {
+            b'A'
+        };
         assert_eq!(
             post(
                 &app,
@@ -723,7 +804,13 @@ mod tests {
             json!({"valid": false})
         );
         assert_eq!(
-            post(&app, "/api/validate", json!({"token":"not.a.token"}), StatusCode::OK).await,
+            post(
+                &app,
+                "/api/validate",
+                json!({"token":"not.a.token"}),
+                StatusCode::OK
+            )
+            .await,
             json!({"valid": false})
         );
         for endpoint in ["signup", "login", "validate"] {
@@ -825,6 +912,30 @@ mod tests {
         );
     }
 
+    /// A seed Ed25519 will refuse. The gateway used to catch this when it
+    /// assembled `config`; now the service's adapter imports the key, so the
+    /// 500 and its body are hand-written WebAssembly in
+    /// `components/service/adapters/service.wat`. Nothing else exercises that
+    /// branch, and it is the one place a bad configuration can reach.
+    #[tokio::test]
+    async fn a_rejected_signing_seed_is_a_clean_500() {
+        let mut settings = demo();
+        settings.service.signing_seed = vec![0u8; 31];
+        let app = app(settings);
+        let (status, body) = request(
+            &app,
+            Method::POST,
+            "/api/login",
+            "{\"email\":\"a@b.test\",\"password\":\"xxxxxxxxxxxx\"}",
+            &[(header::CONTENT_TYPE.as_str(), "application/json")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"error": "Service is misconfigured"})
+        );
+    }
 
     #[test]
     fn approved_origins_must_be_origins() {
@@ -854,7 +965,10 @@ mod tests {
             loopback_authorities(3000),
             ["127.0.0.1:3000", "localhost:3000", "[::1]:3000"]
         );
-        assert_eq!(loopback_authorities(80), ["127.0.0.1", "localhost", "[::1]"]);
+        assert_eq!(
+            loopback_authorities(80),
+            ["127.0.0.1", "localhost", "[::1]"]
+        );
     }
 
     /// An approved origin and the loopback allow-list are alternatives: with
@@ -862,11 +976,14 @@ mod tests {
     #[test]
     fn configured_origin_replaces_the_loopback_list() {
         let settings = configuration(3000, Some("https://demo.example.test")).unwrap();
-        assert_eq!(settings.approved_origin.as_deref(), Some("https://demo.example.test"));
-        assert!(settings.approved_authorities.is_empty());
+        assert_eq!(
+            settings.policy.approved_origin.as_deref(),
+            Some("https://demo.example.test")
+        );
+        assert!(settings.policy.approved_authorities.is_empty());
         let settings = configuration(3000, None).unwrap();
-        assert!(settings.approved_origin.is_none());
-        assert_eq!(settings.approved_authorities.len(), 3);
-        assert_eq!(settings.signing_seed.len(), 32);
+        assert!(settings.policy.approved_origin.is_none());
+        assert_eq!(settings.policy.approved_authorities.len(), 3);
+        assert_eq!(settings.service.signing_seed.len(), 32);
     }
 }

@@ -175,6 +175,9 @@
                 "components/service"
                 "components/crypto/wit"
                 "components/email/wit"
+                # The host-to-component configuration contract, staged into the
+                # service's WIT tree by build.mjs.
+                "wit"
                 "tests"
               ]
           || (
@@ -250,6 +253,7 @@
           ./components/email
           ./components/gateway
           ./components/service/wit
+          ./wit
         ];
       };
 
