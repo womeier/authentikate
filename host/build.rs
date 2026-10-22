@@ -18,7 +18,7 @@ fn main() {
         "../components/service/wit",
         "../components/crypto/wit",
         "../components/email/wit",
-        "../components/frontend/wit",
+        "../components/gateway/wit",
         "world.wit",
     ] {
         println!("cargo:rerun-if-changed={path}");
@@ -30,17 +30,17 @@ fn main() {
         fs::remove_dir_all(&wit).unwrap();
     }
     let deps = wit.join("deps");
-    // The front-end's tree carries the pinned wasi:http, wasi:io, wasi:clocks
+    // The gateway's tree carries the pinned wasi:http, wasi:io, wasi:clocks
     // (both 0.2.4 and, version-qualified, the service's 0.2.0) and wasi:cli
     // copies that the exported handler resolves against.
-    copy_wit(Path::new("../components/frontend/wit/deps"), &deps);
-    fs::create_dir_all(deps.join("frontend")).unwrap();
+    copy_wit(Path::new("../components/gateway/wit/deps"), &deps);
+    fs::create_dir_all(deps.join("gateway")).unwrap();
     fs::copy(
-        "../components/frontend/wit/frontend.wit",
-        deps.join("frontend/frontend.wit"),
+        "../components/gateway/wit/gateway.wit",
+        deps.join("gateway/gateway.wit"),
     )
     .unwrap();
-    // Authoritative sources win over the front-end's vendored copies, so the
+    // Authoritative sources win over the gateway's vendored copies, so the
     // host is never built against a stale interface.  `make check-wit` fails
     // when the two have drifted.
     copy_wit(Path::new("../components/service/wit"), &deps.join("service"));

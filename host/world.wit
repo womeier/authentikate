@@ -11,12 +11,12 @@ package authentikate:host@0.1.0;
 // compare-and-swap, not through bucket.set, so a host that implements only
 // `store` cannot run it.  The crypto interfaces are deliberately *not*
 // re-exported any more: nothing outside the composition needs them, because
-// the front-end derives the public key and the dummy parameters from the same
+// the gateway derives the public key and the dummy parameters from the same
 // instances the service uses.
 world web-host {
     import wasi:keyvalue/store@0.2.0-draft2;
     import wasi:keyvalue/atomics@0.2.0-draft2;
     // A narrow, typed substitute for granting wasi:cli/environment.
-    import authentikate:frontend/settings@0.1.0;
+    import authentikate:gateway/settings@0.1.0;
     export wasi:http/incoming-handler@0.2.4;
 }

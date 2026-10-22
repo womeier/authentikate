@@ -17,26 +17,26 @@ email-components: email-stdout-component
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-lettermint.component.wasm
 	wasm-tools validate build/email-lettermint.component.wasm
 
-frontend-component:
+gateway-component:
 	mkdir -p build
-	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-frontend
-	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_frontend.wasm -o build/frontend.component.wasm
-	wasm-tools validate build/frontend.component.wasm
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-gateway
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_gateway.wasm -o build/gateway.component.wasm
+	wasm-tools validate build/gateway.component.wasm
 
-# The front-end vendors the pinned WASI copies plus the service, crypto, email
+# The gateway vendors the pinned WASI copies plus the service, crypto, email
 # and keyvalue interfaces so `wit_bindgen::generate!` can see them; that macro
 # needs a literal path, so it cannot stage them the way host/build.rs does.
 # Fail loudly if a vendored copy has drifted from its authoritative source.
 check-wit:
-	diff -u components/service/wit/service.wit components/frontend/wit/deps/service/service.wit
-	diff -u components/crypto/wit/argon2.wit components/frontend/wit/deps/crypto/argon2.wit
-	diff -u components/crypto/wit/ed25519.wit components/frontend/wit/deps/crypto/ed25519.wit
-	diff -u components/email/wit/email.wit components/frontend/wit/deps/email/email.wit
-	diff -ru components/service/wit/deps/keyvalue components/frontend/wit/deps/keyvalue
-	diff -u components/service/wit/deps/clocks/wall-clock.wit 'components/frontend/wit/deps/clocks@0.2.0/wall-clock.wit'
+	diff -u components/service/wit/service.wit components/gateway/wit/deps/service/service.wit
+	diff -u components/crypto/wit/argon2.wit components/gateway/wit/deps/crypto/argon2.wit
+	diff -u components/crypto/wit/ed25519.wit components/gateway/wit/deps/crypto/ed25519.wit
+	diff -u components/email/wit/email.wit components/gateway/wit/deps/email/email.wit
+	diff -ru components/service/wit/deps/keyvalue components/gateway/wit/deps/keyvalue
+	diff -u components/service/wit/deps/clocks/wall-clock.wit 'components/gateway/wit/deps/clocks@0.2.0/wall-clock.wit'
 
 # Component-level composition; wasm-merge remains internal to the Rocq build.
-host-component: check-wit component crypto-components email-stdout-component frontend-component
+host-component: check-wit component crypto-components email-stdout-component gateway-component
 	$(MAKE) compose-host
 
 # Also usable with existing build/*.component.wasm, without rebuilding Rocq.
@@ -46,7 +46,7 @@ compose-host:
 		-d authentikate:argon2=build/argon2.component.wasm \
 		-d authentikate:ed25519=build/ed25519.component.wasm \
 		-d authentikate:email-stdout=build/email-stdout.component.wasm \
-		-d authentikate:frontend=build/frontend.component.wasm \
+		-d authentikate:gateway=build/gateway.component.wasm \
 		-o build/host.component.wasm
 	wasm-tools validate build/host.component.wasm
 
@@ -65,4 +65,4 @@ test-email: email-components
 rocq component test clean:
 	$(MAKE) -C components/service $@
 
-.PHONY: all rocq component test clean crypto-components email-stdout-component email-components frontend-component check-wit host-component compose-host test-host test-email-stdout test-email
+.PHONY: all rocq component test clean crypto-components email-stdout-component email-components gateway-component check-wit host-component compose-host test-host test-email-stdout test-email

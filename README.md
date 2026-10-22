@@ -34,20 +34,24 @@ only the request body. See
 [service.wit](components/service/wit/service.wit).
 
 The composed artifact exports `wasi:http/incoming-handler@0.2.4`, and the HTTP
-front-end in [components/frontend](components/frontend) is what implements it:
+gateway in [components/gateway](components/gateway) is what implements it:
 it decides the request target's form, applies the Host/Origin policy, routes,
 serves the three static assets, checks the method and media type, enforces the
 16 KiB body limit and the 15-second read deadline, sets the response security
 headers, and assembles the `config` record the service needs. It parses no
-JSON, inspects no credential and holds no key -- `config` carries an opaque
-Ed25519 handle, and signing happens in the crypto component. WAC wires the
-front-end to the *same* Argon2 and Ed25519 instances as the service, which is
+JSON and inspects no credential, and signing happens in the crypto component,
+but it is not key-free: `config` carries an opaque Ed25519 handle, and
+obtaining that handle means the gateway receives the signing seed from
+`settings` and imports it. Giving the service the seed and letting its own
+adapter import the key would remove both crypto imports and keep the seed out
+of this guest; see TODO.md. WAC wires the
+gateway to the *same* Argon2 and Ed25519 instances as the service, which is
 what makes that handle valid in the service's view and the dummy cost
 parameters the ones real records are enrolled under.
 
 That leaves the host with the engine and its limits, admission control, the
 account map, and configuration, which it supplies through
-`authentikate:frontend/settings@0.1.0` -- a typed six-field record rather than a
+`authentikate:gateway/settings@0.1.0` -- a typed six-field record rather than a
 grant of `wasi:cli/environment`. No guest filesystem, environment or network
 access is granted, and there is no outbound HTTP: `wasmtime-wasi-http` is built
 without `default-send-request` and the host's `send_request` refuses.
@@ -156,7 +160,7 @@ individual cases; this is the inventory.
   `wasi:http/incoming-handler` added hyper's HTTP/1.1 parser and
   `wasmtime-wasi-http`'s mapping from wire bytes onto `incoming-request`,
   `fields` and the body streams, in exchange for deleting the host's own
-  request handling. The front-end therefore never sees a request line: it is
+  request handling. The gateway therefore never sees a request line: it is
   handed a method, a `path-with-query` and an authority that something else
   decided. One consequence is visible in the tests -- `wasmtime-wasi-http`
   takes the authority from the URI in preference to the `Host` header, so an
@@ -167,7 +171,7 @@ individual cases; this is the inventory.
   used here, and its HTTP/1.1 parser is the part `wasi:http` makes redundant.
 - **Routing and the origin policy are not proved.** They moved from the host
   into a component, which makes the artifact self-contained and the checks
-  unit-testable without an engine, but `components/frontend` is ordinary Rust.
+  unit-testable without an engine, but `components/gateway` is ordinary Rust.
   Nothing in Rocq says that `/api/login` reaches `login`, that a foreign
   `Origin` is refused, or that the security headers are set. Widening the Rocq
   `handle` to take a method, a path and the headers it cares about, and to

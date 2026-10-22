@@ -1,4 +1,4 @@
-//! The HTTP front-end.
+//! The HTTP gateway.
 //!
 //! The runtime hands us a parsed `incoming-request`; we decide the request's
 //! fate, forward a byte body to `authentikate:service/api`, and write back the
@@ -13,13 +13,13 @@
 //! and the `wasi:keyvalue` provider, which has to outlive a request because
 //! each request gets a fresh instance.
 
-wit_bindgen::generate!({ world: "frontend", path: "wit", generate_all });
+wit_bindgen::generate!({ world: "gateway", path: "wit", generate_all });
 
 mod policy;
 
 use authentikate::crypto::{argon2, ed25519};
 use authentikate::service::api;
-use authentikate::frontend::settings;
+use authentikate::gateway::settings;
 use exports::wasi::http::incoming_handler::Guest;
 use policy::{
     is_json, is_origin_form, route, Operation, Policy, Route, BODY_LIMIT, READ_DEADLINE_NS,

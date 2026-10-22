@@ -1,7 +1,7 @@
 // WASI HTTP 0.2.4, Apache-2.0 WITH LLVM-exception.  Upstream's interface
 // unchanged except for the package declaration, which upstream keeps in
 // proxy.wit -- not vendored here, because its world drags in
-// imports this front-end does not use.
+// imports this gateway does not use.
 package wasi:http@0.2.4;
 
 /// This interface defines all of the types and methods for implementing

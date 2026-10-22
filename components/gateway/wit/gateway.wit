@@ -1,4 +1,4 @@
-// The HTTP front-end.  Everything the host used to decide about a request --
+// The HTTP gateway.  Everything the host used to decide about a request --
 // the request target's form, the Host and Origin policy, which path is an API
 // route and which is a static asset, the method and media type, the body
 // limit, and the response security headers -- is decided here, inside a
@@ -10,9 +10,9 @@
 // status and body the Rocq service returned.  The split is deliberate -- the
 // proofs in components/service/theories/Proofs.v are about `api`, so keeping
 // this layer free of judgement keeps those theorems load-bearing.
-package authentikate:frontend@0.1.0;
+package authentikate:gateway@0.1.0;
 
-/// What the host must tell the front-end at the start of a request.
+/// What the host must tell the gateway at the start of a request.
 ///
 /// A dedicated interface rather than `wasi:cli/environment`, which would be a
 /// capability to read every variable in the host's process when six named
@@ -31,19 +31,19 @@ interface settings {
         /// Welcome-email sender.
         email-from: string,
         /// Exactly one approved origin, when the operator configured one.
-        /// Checked and normalized by the host; the front-end compares against
+        /// Checked and normalized by the host; the gateway compares against
         /// it rather than re-parsing.
         approved-origin: option<string>,
         /// Otherwise, the authorities the host is actually listening on.  The
         /// bound port is host knowledge -- `LISTEN=127.0.0.1:0` picks it at
-        /// runtime -- while the rule applied to it is the front-end's.
+        /// runtime -- while the rule applied to it is the gateway's.
         approved-authorities: list<string>,
     }
 
     get: func() -> config;
 }
 
-world frontend {
+world gateway {
     // Parsed by the runtime, not here; see README's Trusted Computing Base.
     export wasi:http/incoming-handler@0.2.4;
 

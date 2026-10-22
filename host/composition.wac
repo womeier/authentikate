@@ -10,7 +10,7 @@ let service = new authentikate:service {
     ...
 };
 
-// The HTTP front-end gets the *same* Argon2 and Ed25519 instances the service
+// The HTTP gateway gets the *same* Argon2 and Ed25519 instances the service
 // got, not fresh ones.  That is load-bearing rather than tidy: `config.key` is
 // an instance-local Ed25519 handle, so a second signer instance would hand the
 // service a handle naming nothing, and `config.dummy_params` has to be the
@@ -18,7 +18,7 @@ let service = new authentikate:service {
 // becomes distinguishable by how long it takes.  Wiring it here means the
 // composition enforces that, where the host used to rely on exporting the
 // right instances and being asked for them in the right order.
-let frontend = new authentikate:frontend {
+let gateway = new authentikate:gateway {
     "authentikate:service/api@0.1.0": service["authentikate:service/api@0.1.0"],
     "authentikate:crypto/argon2@0.1.0": argon2["authentikate:crypto/argon2@0.1.0"],
     "authentikate:crypto/ed25519@0.1.0": signer["authentikate:crypto/ed25519@0.1.0"],
@@ -27,5 +27,5 @@ let frontend = new authentikate:frontend {
 
 // One export.  The host no longer calls the service directly, and no longer
 // needs the crypto interfaces re-exported to derive a public key or a dummy
-// hash for itself -- the front-end does that from inside the composition.
-export frontend["wasi:http/incoming-handler@0.2.4"];
+// hash for itself -- the gateway does that from inside the composition.
+export gateway["wasi:http/incoming-handler@0.2.4"];

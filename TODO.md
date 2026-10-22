@@ -44,7 +44,7 @@
   HTTP interfaces on top), and `serve` shares `RunCommon::configure_wasip2`,
   so `--dir` preopens apply. `wasmtime serve -S cli --dir ...` is the target
   invocation. Doing this plus folding
-  `authentikate:frontend/settings` into a config component (with the signing
+  `authentikate:gateway/settings` into a config component (with the signing
   seed generated into that same directory from `wasi:random` on first run,
   rather than baked in at build time) would leave `wasi:filesystem` as the only
   non-proxy import and delete the host rather than shrink it.
@@ -67,7 +67,7 @@
     composed artifact cannot link against it as written.
 - [ ] Bring routing and the Host/Origin policy under proof by widening the Rocq
   `handle`: take a method, a path and the headers it depends on, and return
-  headers alongside the status and body. Today `components/frontend` makes
+  headers alongside the status and body. Today `components/gateway` makes
   those decisions in ordinary Rust -- unit-tested natively, but unproved -- and
   the static assets are constants it serves itself. Candidate theorems:
   only `POST` reaches `handle`, a foreign `Origin` is always refused, the
@@ -78,13 +78,28 @@
   unproved, so this trades a Rust-sized gap for a smaller Wasm-sized one rather
   than closing it outright.
 
-- [ ] Reduce the front-end's vendored WIT. `components/frontend/wit/deps`
+- [ ] Take the Ed25519 handle out of `api.config` so the gateway stops seeing
+  the signing seed. Its only non-service imports are three calls in
+  `service_config` -- `ed25519.import-key`, `ed25519.public-key` and
+  `argon2.recommended-params` -- none of them on the request path, and all
+  three exist because `config` is expressed as `key: u32` plus `pubkey` and
+  `dummy-params` rather than as the seed. The service's own world already
+  imports `authentikate:crypto/ed25519@0.1.0`, so its adapter can import the
+  key itself: `settings` would hand the seed straight to the host-facing edge
+  of the service, the gateway would drop both crypto imports and its
+  `signing-seed` field, and the capability story would match what
+  `gateway.wit` claims. Cost is glue in
+  `components/service/adapters/service.wat`. Keeping `config`'s `key: u32` and
+  having the adapter fill it leaves the Rocq side and `Proofs.v` untouched;
+  only changing `cfg_key`'s shape propagates into the proofs.
+
+- [ ] Reduce the gateway's vendored WIT. `components/gateway/wit/deps`
   carries copies of `service.wit`, the crypto and email interfaces and the
   keyvalue draft because `wit_bindgen::generate!` needs a literal path and
   cannot stage sources the way `host/build.rs` does. `make check-wit` fails on
   drift, which is a guard rather than a fix. Two versions of `wasi:clocks`
   coexist there as a result -- the service's `wall-clock@0.2.0` and
-  `wasi:http`'s `monotonic-clock@0.2.4` -- which is why the front-end refers to
+  `wasi:http`'s `monotonic-clock@0.2.4` -- which is why the gateway refers to
   `wasi::clocks0_2_4`.
 
 - [ ] Consider extracting the JSON layer as a standalone Rocq library

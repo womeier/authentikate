@@ -1,5 +1,5 @@
 [workspace]
-members = ["host", "components/crypto/argon2", "components/crypto/ed25519", "components/email", "components/frontend"]
+members = ["host", "components/crypto/argon2", "components/crypto/ed25519", "components/email", "components/gateway"]
 default-members = ["host"]
 resolver = "3"
 

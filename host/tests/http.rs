@@ -108,7 +108,7 @@ fn real_http_and_stdout_email() {
     ));
     assert_eq!(status, 200);
     assert!(page.contains("Identity Workbench"));
-    // A protocol-relative target still reaches the front-end as a path and is
+    // A protocol-relative target still reaches the gateway as a path and is
     // refused as not origin-form.  Absolute-form is different now: wasi-http
     // takes the authority from the URI in preference to the Host header, so
     // `http://rebound.test/` arrives as authority `rebound.test` and the

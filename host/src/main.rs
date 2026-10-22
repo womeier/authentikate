@@ -1,6 +1,6 @@
 //! The host: an engine, a socket, a keyvalue provider, and configuration.
 //!
-//! Everything request-shaped moved into `components/frontend`.  What is left
+//! Everything request-shaped moved into `components/gateway`.  What is left
 //! is the part that cannot be a per-request component instance: the Wasmtime
 //! engine and its limits, admission control, the account map that has to
 //! outlive a request, and the signing seed and origin policy the operator
@@ -35,7 +35,7 @@ mod bindings {
 }
 use bindings::{
     WebHost,
-    authentikate::frontend::settings,
+    authentikate::gateway::settings,
     wasi::keyvalue::{atomics, store as kv},
 };
 
@@ -122,7 +122,7 @@ impl WasiHttpView for GuestState {
     }
 }
 
-/// The configuration the front-end asks for, once per request.  A typed
+/// The configuration the gateway asks for, once per request.  A typed
 /// interface rather than `wasi:cli/environment`: the component gets these six
 /// values and no capability to read anything else in the process.
 impl settings::Host for GuestState {
@@ -310,7 +310,7 @@ impl Runtime {
                 [
                     "wasi:keyvalue/store@0.2.0-draft2",
                     "wasi:keyvalue/atomics@0.2.0-draft2",
-                    "authentikate:frontend/settings@0.1.0",
+                    "authentikate:gateway/settings@0.1.0",
                 ]
                 .contains(&name)
                     || wasi,
@@ -410,7 +410,7 @@ fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<Hype
 /// Admission, then one request at a time inside the engine.
 ///
 /// The two responses this host still writes itself are both refusals to run
-/// the component at all, which is why they are here and not in the front-end.
+/// the component at all, which is why they are here and not in the gateway.
 async fn serve<B>(
     app: Arc<App>,
     request: hyper::Request<B>,
@@ -454,7 +454,7 @@ where
 }
 
 /// Validate and normalize an approved origin: scheme plus authority, nothing
-/// else.  The front-end compares against the result rather than parsing it
+/// else.  The gateway compares against the result rather than parsing it
 /// again, so this is the only place the shape is checked.
 fn approved_origin(value: &str) -> Result<String> {
     let origin = url::Url::parse(value)?;
@@ -858,7 +858,7 @@ mod tests {
     }
 
     /// An approved origin and the loopback allow-list are alternatives: with
-    /// one configured, the front-end must not also accept `127.0.0.1`.
+    /// one configured, the gateway must not also accept `127.0.0.1`.
     #[test]
     fn configured_origin_replaces_the_loopback_list() {
         let settings = configuration(3000, Some("https://demo.example.test")).unwrap();
