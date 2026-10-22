@@ -7,8 +7,7 @@ package authentikate:service@0.1.0;
 // only one file in a package may carry one.)
 world service {
     import wasi:clocks/wall-clock@0.2.0;
-    import wasi:keyvalue/store@0.2.0-draft2;
-    import wasi:keyvalue/atomics@0.2.0-draft2;
+    import authentikate:storage/accounts@0.1.0;
     import authentikate:crypto/argon2@0.1.0;
     import authentikate:crypto/ed25519@0.1.0;
     import authentikate:email/sender@0.1.0;

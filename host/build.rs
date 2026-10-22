@@ -17,7 +17,7 @@ fn main() {
     for path in [
         "../wit/config.wit",
         "../components/service/wit/api.wit",
-        "../components/service/wit/deps/keyvalue",
+        "../wit/accounts.wit",
         "../components/gateway/wit",
         "world.wit",
     ] {
@@ -34,12 +34,9 @@ fn main() {
     // copies the exported handler resolves against, plus `authentikate:config`
     // and the service's `api` interface.
     copy_wit(Path::new("../components/gateway/wit/deps"), &deps);
-    // The keyvalue draft is not in that tree -- the gateway does not touch
-    // storage -- so it comes from the service, which does.
-    copy_wit(
-        Path::new("../components/service/wit/deps/keyvalue"),
-        &deps.join("keyvalue"),
-    );
+    // The storage test bindings use the authoritative accounts interface.
+    fs::create_dir_all(deps.join("storage")).unwrap();
+    fs::copy("../wit/accounts.wit", deps.join("storage/accounts.wit")).unwrap();
     // Authoritative sources win over the gateway's vendored copies, so the
     // host is never built against a stale interface.  `make check-wit` fails
     // when the two have drifted.
@@ -60,10 +57,16 @@ fn main() {
                with: {{ \
                  \"wasi:http\": wasmtime_wasi_http::p2::bindings::http, \
                  \"wasi:io\": wasmtime_wasi::p2::bindings::sync::io, \
-                 \"wasi:keyvalue/store.bucket\": super::Bucket, \
-                 \"wasi:keyvalue/atomics.cas\": super::Cas, \
                }} \
              }});",
+            wit
+        ),
+    )
+    .unwrap();
+    fs::write(
+        out.join("storage-bindings.rs"),
+        format!(
+            "wasmtime::component::bindgen!({{ path: {:?}, world: \"storage-test\" }});",
             wit
         ),
     )

@@ -252,6 +252,7 @@
           ./components/crypto
           ./components/email
           ./components/gateway
+          ./components/storage
           ./components/service/wit
           ./wit
         ];
@@ -279,6 +280,7 @@
           runHook preInstall
           mkdir -p $out
           cp build/host.component.wasm $out/
+          cp build/storage.component.wasm $out/
           runHook postInstall
         '';
       };
@@ -311,6 +313,7 @@
           preBuild = ''
             mkdir -p build
             cp ${authentikate-host-component}/host.component.wasm build/
+            cp ${authentikate-host-component}/storage.component.wasm build/
           '';
 
           postInstall = ''
@@ -321,7 +324,7 @@
           '';
 
           meta = {
-            description = "Local authentication demo with in-memory accounts and stdout email";
+            description = "Local authentication demo with persistent accounts and stdout email";
             mainProgram = "authentikate-local";
             license = lib.licenses.mit;
             platforms = [

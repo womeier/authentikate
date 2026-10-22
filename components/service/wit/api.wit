@@ -1,5 +1,5 @@
 // The service's own interface, in its own file so a caller can vendor it
-// without vendoring `world service` as well.  That world imports keyvalue,
+// without vendoring `world service` as well.  That world imports accounts,
 // email, wall-clock and -- through the crypto package -- wasi:random, and a
 // WIT package does not parse unless every package its worlds name is present,
 // so a file carrying both made the gateway's dependency tree four packages

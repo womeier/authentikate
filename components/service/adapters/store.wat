@@ -1,4 +1,4 @@
-;; Adapter: wasi:keyvalue as a CertiRocq registered primitive.
+;; Adapter: accounts.get/create as CertiRocq registered primitives.
 ;;
 ;; Same two calling conventions as components/service/adapters/argon2.wat, and the same
 ;; value representation -- see the header of that file, which documents it.
@@ -13,46 +13,22 @@
 ;; --rename-export-conflicts and the component wrapping needs exactly one of
 ;; them to keep the name.
 ;;
-;; THE ONE INTERFACE ASSUMPTION: wasi:keyvalue@0.2.0-draft2, of which this
-;; file uses
+;; Interface: authentikate:storage/accounts@0.1.0.
 ;;
-;;   open: func(identifier: string) -> result<bucket, error>;
-;;   bucket.get: func(key: string) -> result<option<list<u8>>, error>;
-;;   cas.new: static func(bucket: borrow<bucket>, key: string)
-;;              -> result<cas, error>;
-;;   cas.current: func() -> result<option<list<u8>>, error>;
-;;   swap: func(cas: cas, value: list<u8>) -> result<_, cas-error>;
+;;   get: func(key: string) -> result<option<list<u8>>, error>;
+;;   create: func(key: string, value: list<u8>) -> result<bool, error>;
 ;;
-;; and nothing else -- note what is missing: `bucket.set`.  The service has no
-;; overwrite primitive, because `Store.store_ops` has no field for one, and an
-;; account record can therefore not be replaced by a bug on this side of the
-;; line.  Creation goes through the CAS operations instead, which is what
-;; makes `ffi_kv_create` atomic and what the exclusivity hypothesis in
-;; Proofs.v is paid for with.
-;;
-;; The draft qualifier is load-bearing, and draft2 more so: this interface has
-;; changed shape before (buckets were not resources in 0.1), the CAS
-;; operations do not exist at all in the v0.2.0-draft tag, and `increment`
-;; changed signature between the two.  What does not change is the Rocq side
-;; -- `ffi_kv_get : bytes -> option (option bytes)` is a statement about this
-;; file, not about WASI.
+;; No buckets, resource handles, or overwrite primitive. The provider must make
+;; create atomic and its successful writes readable, as assumed in Proofs.v.
 ;;
 ;; Canonical ABI return-area layouts, each with a one-byte variant
 ;; discriminant padded to the payload's four-byte alignment:
 ;;
-;; error is a variant { no-such-store, access-denied, other(string) }, not a
-;; resource. Its discriminant is at 4 and its string payload at 8 and 12.
+;; error is a payload-free variant { unavailable }.
 ;;
-;;   result<own<bucket>, error>          disc @0, handle-or-error @4    (16 b)
 ;;   result<option<list<u8>>, error>     disc @0, inner disc @4,
 ;;                                       ptr @8, len @12                (16 b)
-;;   result<own<cas>, error>             disc @0, handle-or-error @4    (16 b)
-;;   result<_, cas-error>                disc @0, cas-error disc @4,
-;;                                       its payload @8                 (20 b)
-;;
-;; cas-error is a variant { store-error(error), cas-failed(own<cas>) }, so at
-;; @8 there is either an `error` (disc @8, string @12 and @16) or a fresh cas
-;; handle.
+;;   result<bool, error>                disc @0, bool-or-error @1       (2 b)
 (module
   ;; ---- from the CertiRocq module -------------------------------------------
   (import "rocq" "memory" (memory 1))
@@ -60,48 +36,18 @@
   (import "rocq" "out_of_mem" (global $out_of_mem (mut i32)))
   (import "rocq" "result" (global $result (mut i32)))
 
-  ;; ---- from the engine -----------------------------------------------------
-  ;; No --plug for these: wasi:keyvalue is provided by the host, not by a
-  ;; component of ours.
-  (import "wasi:keyvalue/store@0.2.0-draft2" "open"
-    (func $wasi_open
-      (param i32 i32)   ;; identifier: ptr, len
-      (param i32)))     ;; return area
-  (import "wasi:keyvalue/store@0.2.0-draft2" "[method]bucket.get"
-    (func $wasi_get
-      (param i32)       ;; self: bucket handle
+  ;; ---- from the accounts provider -----------------------------------------
+  (import "authentikate:storage/accounts@0.1.0" "get"
+    (func $accounts_get
       (param i32 i32)   ;; key: ptr, len
       (param i32)))     ;; return area
-  (import "wasi:keyvalue/atomics@0.2.0-draft2" "[static]cas.new"
-    (func $wasi_cas_new
-      (param i32)       ;; bucket: borrowed handle
+  (import "authentikate:storage/accounts@0.1.0" "create"
+    (func $accounts_create
       (param i32 i32)   ;; key: ptr, len
-      (param i32)))     ;; return area
-  (import "wasi:keyvalue/atomics@0.2.0-draft2" "[method]cas.current"
-    (func $wasi_cas_current
-      (param i32)       ;; self: cas handle
-      (param i32)))     ;; return area
-  (import "wasi:keyvalue/atomics@0.2.0-draft2" "swap"
-    (func $wasi_swap
-      (param i32)       ;; cas: owned handle, consumed by the call
       (param i32 i32)   ;; value: ptr, len
       (param i32)))     ;; return area
-  ;; Handles are owned, and a create that does not reach `swap` still holds
-  ;; one.  The provider may have a transaction open behind it, so it goes
-  ;; back explicitly rather than at the end of the instance's life.
-  (import "wasi:keyvalue/atomics@0.2.0-draft2" "[resource-drop]cas"
-    (func $wasi_cas_drop (param i32)))
 
   (global $buf_len (mut i32) (i32.const 0))
-
-  ;; The bucket handle, opened on first use and kept for the life of the
-  ;; instance.  -1 is "not open yet", which is not a valid handle.
-  ;;
-  ;; Caching it is only safe because there is no GC and no instance reuse: one
-  ;; instance serves one request, so the handle cannot outlive a transaction
-  ;; or go stale between callers.  If instances are ever pooled this has to
-  ;; become a per-request open, or a reconnect on the first failure.
-  (global $bucket (mut i32) (i32.const -1))
 
   ;; ---- allocation ----------------------------------------------------------
 
@@ -207,7 +153,7 @@
 
   ;; ---- keys are strings, and a string is UTF-8 -----------------------------
 
-  ;; wasi:keyvalue types its keys as `string`, so the canonical ABI will lift
+  ;; accounts types its keys as `string`, so the canonical ABI will lift
   ;; the (pointer, length) pair below as UTF-8 and *trap* if it is not.  The
   ;; email in a login body is attacker-controlled, so without this check a
   ;; request carrying a stray 0xFF takes the instance down rather than failing
@@ -289,27 +235,6 @@
 
   ;; ---- the bucket ----------------------------------------------------------
 
-  ;; The empty identifier is the default bucket.  A named one would need its
-  ;; name as a (pointer, length) in this memory, and a `data` segment here
-  ;; would write at a fixed offset into the CertiRocq heap -- so a named
-  ;; bucket wants the host to place the string and hand over the pointer,
-  ;; not a constant in this file.
-  ;;
-  ;; Returns -1 if the store cannot be opened, which becomes `None` and then
-  ;; a 500.
-  (func $bucket (result i32)
-    (local $ret i32)
-    (if (i32.ne (global.get $bucket) (i32.const -1))
-      (then (return (global.get $bucket))))
-    (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
-    (if (global.get $out_of_mem) (then (return (i32.const -1))))
-    (call $wasi_open (i32.const 0) (i32.const 0) (local.get $ret))
-    (if (i32.load8_u (local.get $ret))
-      (then
-        (return (i32.const -1))))
-    (global.set $bucket (i32.load offset=4 (local.get $ret)))
-    (global.get $bucket))
-
   ;; ---- the registered primitives -------------------------------------------
 
   ;; kv_get : bytes -> option (option bytes)
@@ -323,7 +248,7 @@
   ;; What it does not do is interpret the value.  Decoding belongs to
   ;; Store.decode, inside the verified perimeter; this moves bytes.
   (func $kv_get (param $key i32) (result i32)
-    (local $kp i32) (local $kl i32) (local $b i32) (local $ret i32)
+    (local $kp i32) (local $kl i32) (local $ret i32)
 
     (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
@@ -338,18 +263,12 @@
     (if (i32.eqz (call $utf8_ok (local.get $kp) (local.get $kl)))
       (then (return (call $some (i32.const 1)))))
 
-    (local.set $b (call $bucket))
-    (if (i32.eq (local.get $b) (i32.const -1)) (then (return (i32.const 1))))
-
-    (call $wasi_get
-      (local.get $b) (local.get $kp) (local.get $kl) (local.get $ret))
+    (call $accounts_get
+      (local.get $kp) (local.get $kl) (local.get $ret))
 
     (if (result i32) (i32.load8_u (local.get $ret))
       (then
-        ;; The error variant's message is discarded: it is a
-        ;; string in linear memory and Rocq has nothing to do with it.  Which
-        ;; is the one real cost of this design -- a store failure reaches the
-        ;; logs as a bare 500, with the reason left on this side of the line.
+        ;; The interface exposes no error details; every failure remains None.
         (i32.const 1))                                  ;; err -> None
       (else
         (if (result i32) (i32.load8_u offset=4 (local.get $ret))
@@ -369,21 +288,15 @@
   ;; kv_create : bytes -> bytes -> option bool
   ;;
   ;; Create-if-absent, and the three answers are three different facts.
-  ;; `Some true` is this caller creating the pair -- published only after the
-  ;; swap is acknowledged.  `Some false` is the key being taken, which is a
-  ;; conflict rather than a failure, and is reached two ways: the key was
-  ;; already there when the handle was opened, or the swap lost a race with
-  ;; another caller.  `None` is the store refusing, and an invalid UTF-8 key
-  ;; is one of those: it names no account and cannot be written.
+  ;; `Some true` is this caller creating the pair. `Some false` is the key
+  ;; being taken, including a lost race. `None` is the store refusing; an invalid
+  ;; UTF-8 key is one such refusal: it names no account and cannot be written.
   ;;
-  ;; The exclusivity this buys is the provider's, not this file's: `swap`
-  ;; fails if the key moved under the handle, so of two callers who both find
-  ;; it absent exactly one can have a swap accepted.  A get followed by a set
-  ;; could not say that, which is why there is no set here.
+  ;; Atomicity is the provider's responsibility, not implemented as get-then-set.
   (func $kv_create (param $key i32) (param $value i32) (result i32)
     (local $kp i32) (local $kl i32) (local $vp i32) (local $vl i32)
-    (local $b i32) (local $ret i32) (local $cas i32)
-    (local.set $ret (call $alloc (i32.const 20) (i32.const 4)))
+    (local $ret i32)
+    (local.set $ret (call $alloc (i32.const 2) (i32.const 1)))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
     (local.set $kp (call $lower (local.get $key)))
     (local.set $kl (global.get $buf_len))
@@ -393,43 +306,13 @@
     (local.set $vp (call $lower (local.get $value)))
     (local.set $vl (global.get $buf_len))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
-    (local.set $b (call $bucket))
-    (if (i32.eq (local.get $b) (i32.const -1)) (then (return (i32.const 1))))
-
-    ;; A handle on the key, at whatever version the store holds now.
-    (call $wasi_cas_new
-      (local.get $b) (local.get $kp) (local.get $kl) (local.get $ret))
-    (if (i32.load8_u (local.get $ret)) (then (return (i32.const 1))))
-    (local.set $cas (i32.load offset=4 (local.get $ret)))
-
-    ;; `current` is the read that comes with the handle, so asking costs no
-    ;; extra round trip and -- unlike `bucket.get` -- its answer is tied to
-    ;; the version the swap below will check.
-    (call $wasi_cas_current (local.get $cas) (local.get $ret))
-    (if (i32.load8_u (local.get $ret))
-      (then
-        (call $wasi_cas_drop (local.get $cas))
-        (return (i32.const 1))))
-    (if (i32.load8_u offset=4 (local.get $ret))
-      (then
-        (call $wasi_cas_drop (local.get $cas))
-        (return (call $some (i32.const 1)))))      ;; Some false: taken
-
-    ;; Absent at that version, so write.  The swap consumes the handle
-    ;; whichever way it goes.
-    (call $wasi_swap
-      (local.get $cas) (local.get $vp) (local.get $vl) (local.get $ret))
+    (call $accounts_create
+      (local.get $kp) (local.get $kl) (local.get $vp) (local.get $vl) (local.get $ret))
     (if (result i32) (i32.load8_u (local.get $ret))
-      (then
-        (if (result i32)
-            (i32.eq (i32.load8_u offset=4 (local.get $ret)) (i32.const 1))
-          (then
-            ;; cas-failed, and the variant hands back a fresh handle for a
-            ;; retry this does not want: losing the race *is* the answer.
-            (call $wasi_cas_drop (i32.load offset=8 (local.get $ret)))
-            (call $some (i32.const 1)))            ;; Some false: lost
-          (else (i32.const 1))))                   ;; store-error -> None
-      (else (call $some (i32.const 3)))))          ;; Some true: created
+      (then (i32.const 1))                       ;; error -> None
+      (else (call $some
+        (if (result i32) (i32.load8_u offset=1 (local.get $ret))
+          (then (i32.const 3)) (else (i32.const 1)))))))
 
   (func (export "ffi_kv_create")
         (param $force i32) (param $key i32) (param $value i32)

@@ -23,6 +23,12 @@ gateway-component: check-wit
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_gateway.wasm -o build/gateway.component.wasm
 	wasm-tools validate build/gateway.component.wasm
 
+storage-component:
+	mkdir -p build
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-storage
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_storage.wasm -o build/storage.component.wasm
+	wasm-tools validate build/storage.component.wasm
+
 # The gateway vendors the pinned WASI copies plus `authentikate:config` and the
 # service's `api` interface, because `wit_bindgen::generate!` needs a literal
 # path and cannot stage sources the way host/build.rs does.  Only two of those
@@ -43,18 +49,19 @@ host-component: component crypto-components email-stdout-component
 # something the caller has to remember.  CI composes a downloaded Rocq
 # component with freshly built providers, and would otherwise need the list
 # kept in step with this file.
-compose-host: gateway-component
+compose-host: gateway-component storage-component
 	wac compose host/composition.wac \
 		-d authentikate:service=build/authentikate.component.wasm \
 		-d authentikate:argon2=build/argon2.component.wasm \
 		-d authentikate:ed25519=build/ed25519.component.wasm \
 		-d authentikate:email-stdout=build/email-stdout.component.wasm \
 		-d authentikate:gateway=build/gateway.component.wasm \
+		-d authentikate:storage=build/storage.component.wasm \
 		-o build/host.component.wasm
 	wasm-tools validate build/host.component.wasm
 
 test-host: compose-host
-	cargo test --locked
+	cargo test --locked -p authentikate-host -p authentikate-storage
 
 test-email-stdout: email-stdout-component
 	cargo test --locked -p authentikate-email
@@ -68,4 +75,4 @@ test-email: email-components
 rocq component test clean:
 	$(MAKE) -C components/service $@
 
-.PHONY: all rocq component test clean crypto-components email-stdout-component email-components gateway-component check-wit host-component compose-host test-host test-email-stdout test-email
+.PHONY: all rocq component test clean crypto-components email-stdout-component email-components gateway-component storage-component check-wit host-component compose-host test-host test-email-stdout test-email

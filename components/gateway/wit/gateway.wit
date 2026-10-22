@@ -2,7 +2,7 @@
 // the request target's form, the Host and Origin policy, which path is an API
 // route and which is a static asset, the method and media type, the body
 // limit, and the response security headers -- is decided here, inside a
-// component, and the host is left with the engine and the keyvalue provider.
+// component, and the host is left with the engine, storage preopen and configuration.
 //
 // Three imports, and the shape of that list is the point.  It forwards a byte
 // body to `authentikate:service/api`, reads the origin policy from

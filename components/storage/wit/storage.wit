@@ -1,0 +1,7 @@
+package authentikate:storage@0.1.0;
+
+// Immutable accounts, not a general-purpose mutable keyvalue implementation.
+// WASI filesystem and random imports are supplied by the wasi Rust bindings.
+world storage {
+    export accounts;
+}

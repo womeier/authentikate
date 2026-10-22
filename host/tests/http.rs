@@ -13,10 +13,11 @@ struct Server {
 }
 
 impl Server {
-    fn start(stdout: Stdio) -> Self {
+    fn start(stdout: Stdio, storage: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_authentikate-host"))
             .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
             .env("LISTEN", "127.0.0.1:0")
+            .env("STORAGE_DIR", storage)
             .env_remove("PUBLIC_ORIGIN")
             .env_remove("HOST_COMPONENT")
             .env("SIGNUP_EMAIL_FROM", "Authentikate <test@example.test>")
@@ -101,7 +102,8 @@ impl Drop for Server {
 
 #[test]
 fn real_http_and_stdout_email() {
-    let mut server = Server::start(Stdio::piped());
+    let storage = tempfile::tempdir().unwrap();
+    let mut server = Server::start(Stdio::piped(), storage.path());
     let (status, page) = server.raw(&format!(
         "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         server.address
@@ -182,7 +184,8 @@ fn stdout_failure_preserves_account() {
         .write(true)
         .open("/dev/full")
         .unwrap();
-    let server = Server::start(full.into());
+    let storage = tempfile::tempdir().unwrap();
+    let server = Server::start(full.into(), storage.path());
     let credentials = json!({"email":"stored@example.test", "password":"test-password"});
     server.post("/api/signup", credentials.clone(), 500);
     server.post("/api/signup", credentials.clone(), 409);
@@ -190,5 +193,26 @@ fn stdout_failure_preserves_account() {
     assert_eq!(
         server.post("/api/validate", json!({"token":login["token"]}), 200)["valid"],
         true
+    );
+}
+
+#[test]
+fn accounts_survive_host_restart_but_tokens_do_not() {
+    let storage = tempfile::tempdir().unwrap();
+    let credentials = json!({"email":"restart@example.test", "password":"persistent-password"});
+    let first = Server::start(Stdio::null(), storage.path());
+    first.post("/api/signup", credentials.clone(), 201);
+    let old = first.post("/api/login", credentials.clone(), 200);
+    drop(first);
+    let second = Server::start(Stdio::null(), storage.path());
+    second.post("/api/signup", credentials.clone(), 409);
+    let new = second.post("/api/login", credentials, 200);
+    assert_eq!(
+        second.post("/api/validate", json!({"token":new["token"]}), 200)["valid"],
+        true
+    );
+    assert_eq!(
+        second.post("/api/validate", json!({"token":old["token"]}), 200)["valid"],
+        false
     );
 }

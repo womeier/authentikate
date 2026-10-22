@@ -5,11 +5,7 @@ package authentikate:host@0.1.0;
 // One export: an HTTP handler.  Routing, the Host/Origin policy, the static
 // assets and the response headers are inside the component now, so the host
 // has no request-shaped surface left -- it moves bytes between a socket and
-// `wasi:http`, answers keyvalue calls, and supplies configuration.
-//
-// Both keyvalue interfaces: the service creates accounts through the atomic
-// compare-and-swap, not through bucket.set, so a host that implements only
-// `store` cannot run it.
+// `wasi:http`, grants a storage directory preopen, and supplies configuration.
 //
 // Two configuration interfaces rather than one, and the split is a capability
 // boundary, not tidiness.  `service` carries the signing seed and is imported
@@ -19,9 +15,12 @@ package authentikate:host@0.1.0;
 // could arrive.  Neither is `wasi:cli/environment`, which would be read
 // access to every variable in the process for a handful of named values.
 world web-host {
-    import wasi:keyvalue/store@0.2.0-draft2;
-    import wasi:keyvalue/atomics@0.2.0-draft2;
     import authentikate:config/service@0.1.0;
     import authentikate:config/policy@0.1.0;
     export wasi:http/incoming-handler@0.2.4;
+}
+
+// Test the storage provider directly, independently of HTTP admission control.
+world storage-test {
+    export authentikate:storage/accounts@0.1.0;
 }

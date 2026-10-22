@@ -198,15 +198,14 @@ if (!existsSync(`${out}/authentikate.component.wasm`)) {
 }
 execFileSync('wasm-tools', ['validate', `${out}/authentikate.component.wasm`], { stdio: 'inherit' });
 const wit = execFileSync('wasm-tools', ['component', 'wit', `${out}/authentikate.component.wasm`], { encoding: 'utf8' });
-for (const name of ['wasi:keyvalue/store@0.2.0-draft2', 'wasi:keyvalue/atomics@0.2.0-draft2',
+for (const name of ['authentikate:storage/accounts@0.1.0',
   'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0', 'authentikate:email/sender@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0']) assert.ok(wit.includes(`import ${name}`), name);
 assert.deepEqual([...wit.matchAll(/^\s*import ([^;]+);/gm)].map(m => m[1]).sort(), [
   'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
-  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft2',
-  'wasi:keyvalue/atomics@0.2.0-draft2',
+  'authentikate:email/sender@0.1.0', 'authentikate:storage/accounts@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
@@ -221,31 +220,25 @@ for (const endpoint of ['login', 'validate', 'signup']) {
 // in the exported interface to supply.
 assert.ok(!wit.includes('record config'));
 assert.ok(!wit.includes('main-function'));
-console.log('component: validates; only custom service API exported; exact clock, keyvalue, crypto, and email imports');
+console.log('component: validates; only custom service API exported; exact clock, accounts, crypto, and email imports');
 
 const core = new WebAssembly.Module(readFileSync(`${out}/authentikate.core.wasm`));
 assert.deepEqual([...new Set(WebAssembly.Module.imports(core).map(i => i.module))].sort(), [
   'authentikate:crypto/argon2@0.1.0', 'authentikate:crypto/ed25519@0.1.0',
-  'authentikate:email/sender@0.1.0', 'wasi:keyvalue/store@0.2.0-draft2',
-  'wasi:keyvalue/atomics@0.2.0-draft2',
+  'authentikate:email/sender@0.1.0', 'authentikate:storage/accounts@0.1.0',
   'authentikate:config/service@0.1.0',
   'wasi:clocks/wall-clock@0.2.0',
 ].sort());
 assert.deepEqual(WebAssembly.Module.imports(core).map(i => `${i.module}#${i.name}:${i.kind}`).sort(), [
   'authentikate:crypto/argon2@0.1.0#enroll:function', 'authentikate:crypto/argon2@0.1.0#verify:function',
   'authentikate:crypto/ed25519@0.1.0#sign:function', 'authentikate:crypto/ed25519@0.1.0#verify:function',
-  'authentikate:email/sender@0.1.0#send:function', 'wasi:keyvalue/store@0.2.0-draft2#open:function',
-  'wasi:keyvalue/store@0.2.0-draft2#[method]bucket.get:function',
-  // No bucket.set: the service has no overwrite primitive at all, and
-  // creation goes through the CAS operations below.
-  'wasi:keyvalue/atomics@0.2.0-draft2#[static]cas.new:function',
-  'wasi:keyvalue/atomics@0.2.0-draft2#[method]cas.current:function',
-  'wasi:keyvalue/atomics@0.2.0-draft2#swap:function',
-  'wasi:keyvalue/atomics@0.2.0-draft2#[resource-drop]cas:function',
+  'authentikate:email/sender@0.1.0#send:function',
+  'authentikate:storage/accounts@0.1.0#get:function',
+  'authentikate:storage/accounts@0.1.0#create:function',
   'wasi:clocks/wall-clock@0.2.0#now:function',
   // The adapter assembles `config` itself, so it imports the three things it
-  // needs to do that.  `import-key` and `public-key` are the whole reason the
-  // gateway no longer touches the signing seed.
+  // needs to do that. Only the service's adapter imports the shared key;
+  // the gateway never touches it and no public-key derivation exists.
   'authentikate:config/service@0.1.0#get:function',
   'authentikate:crypto/ed25519@0.1.0#import-key:function',
   'authentikate:crypto/ed25519@0.1.0#public-key:function',
@@ -260,11 +253,10 @@ let enrollError = false, writeError = false, allowEnrollment = false;
 let signError = false, signatureError = false;
 let sendError = false, clockSeconds = 0n, clockCalls = 0, configCalls = 0;
 let importKeyError = false;
-let opens = 0, gets = 0, hashes = 0, enrolls = 0, writes = 0;
+let gets = 0, hashes = 0, enrolls = 0, writes = 0;
 const emails = [], events = [];
 const store = new Map();
-const handles = new Map();
-let nextHandle = 20, interleave = null;
+let interleave = null;
 const view = () => new DataView(e.memory.buffer);
 const put = (p, n) => view().setUint32(p, n, true);
 const get = p => view().getUint32(p, true);
@@ -290,60 +282,35 @@ const imports = {
       put(ret + 8, 999999999);
     },
   },
-  'wasi:keyvalue/store@0.2.0-draft2': {
-    open(p, n, ret) { opens++; assert.equal(n, 0); put(ret, 0); put(ret + 4, 7); },
-    '[method]bucket.get'(handle, p, n, ret) {
-      gets++; assert.equal(handle, 7);
+  'authentikate:storage/accounts@0.1.0': {
+    get(p, n, ret) {
+      gets++;
       if (mode === 'outage') { failure(ret); return; }
       const value = store.get(bytes(p, n).toString());
       put(ret, 0);
       put(ret + 4, Number(Boolean(value)));
       if (value) list(ret, value, 8);
     },
-  },
-  // A real compare-and-swap, not a stub: a handle remembers the value its key
-  // held when it was opened, and a swap is refused if the key has moved since.
-  // That is what lets `interleave` below put another writer in between.
-  'wasi:keyvalue/atomics@0.2.0-draft2': {
-    '[static]cas.new'(handle, p, n, ret) {
-      assert.equal(handle, 7);
-      if (mode === 'outage') { failure(ret); return; }
-      const key = bytes(p, n).toString();
-      handles.set(nextHandle, { key, seen: store.get(key) });
-      put(ret, 0); put(ret + 4, nextHandle++);
-      if (interleave) { store.set(key, Buffer.from(interleave)); interleave = null; }
-    },
-    '[method]cas.current'(id, ret) {
-      const open = handles.get(id);
-      assert.ok(open, 'current must run on a live handle');
-      put(ret, 0); put(ret + 4, Number(Boolean(open.seen)));
-      if (open.seen) list(ret, open.seen, 8);
-    },
-    swap(id, p, n, ret) {
+    create(kp, kn, p, n, ret) {
       writes++;
-      const open = handles.get(id);
-      assert.ok(open, 'swap must run on a live handle');
-      handles.delete(id);  // swap consumes it
-      if (writeError) { put(ret, 1); put(ret + 4, 0); put(ret + 8, 0); put(ret + 12, 0); return; }
-      if (store.get(open.key) !== open.seen) {
-        handles.set(nextHandle, { key: open.key, seen: store.get(open.key) });
-        put(ret, 1); put(ret + 4, 1); put(ret + 8, nextHandle++);
-        return;
-      }
-      store.set(open.key, bytes(p, n));
+      const memory = new Uint8Array(e.memory.buffer);
+      memory[ret] = Number(writeError || mode === 'outage');
+      memory[ret + 1] = 0;
+      if (writeError || mode === 'outage') return;
+      const key = bytes(kp, kn).toString();
+      // A competing create may win after signup's initial read but before ours.
+      if (interleave) { store.set(key, Buffer.from(interleave)); interleave = null; }
+      if (store.has(key)) return;
+      store.set(key, Buffer.from(bytes(p, n)));
       events.push('write');
-      put(ret, 0);
-    },
-    '[resource-drop]cas'(id) {
-      assert.ok(handles.delete(id), 'a handle must be dropped exactly once, and only while live');
+      memory[ret + 1] = 1;
     },
   },
   'authentikate:config/service@0.1.0': {
     get(ret) {
       configCalls++;
       assert.equal(ret % 8, 0);
-      // A 32-byte seed of zeroes: the `public-key` mock below returns the same
-      // bytes, which is what `ed25519.verify` is asserted against.
+      // A 32-byte test key; both generation and verification use its handle.
       list(ret, Buffer.alloc(32), 0);
       list(ret, Buffer.from('issuer'), 8);
       view().setBigUint64(ret + 16, 0x100000001n, true);
@@ -524,7 +491,6 @@ const before = gets;
 mode = 'outage';
 assert.equal(request('validate', '{"token":"invalid"}').status, 200);
 assert.equal(gets, before, 'validate must not consult the store');
-assert.equal(opens, 1, 'sequential requests must retain the instance-local bucket handle');
 assert.equal(emails.length, 1, 'login and validate must not send email');
 mode = 'missing';
 store.delete('user@example.test');
@@ -540,20 +506,19 @@ assert.equal(request('signup', credentials).status, 409);
 assert.deepEqual([enrolls, writes, emails.length], beforeRetry, 'retry after send failure must not enroll, write, or send again');
 
 // The race itself.  `interleave` makes another writer take the key *after*
-// this request has read it as absent and opened its handle -- precisely the
-// window a get followed by a set cannot close.  The swap is refused, signup
+// this request has read it as absent -- precisely the
+// window a get followed by a set cannot close. Creation returns false, signup
 // answers 409, and the other writer's record is still there afterwards.
 store.delete('user@example.test');
 const winner = '{"email":"somebody-else"}';
 interleave = winner;
 const beforeRace = [writes, emails.length, events.length];
-assert.equal(request('signup', credentials).status, 409, 'a lost swap is a conflict, not a 500');
+assert.equal(request('signup', credentials).status, 409, 'a lost create is a conflict, not a 500');
 assert.equal(store.get('user@example.test').toString(), winner,
   'the loser of the race must not overwrite the winner');
-assert.equal(writes, beforeRace[0] + 1, 'the swap must have been attempted');
+assert.equal(writes, beforeRace[0] + 1, 'the create must have been attempted');
 assert.deepEqual([emails.length, events.length], beforeRace.slice(1),
   'a lost race must not send email or record a write');
-assert.equal(handles.size, 0, 'every CAS handle must have been consumed or dropped');
 
 // A seed Ed25519 refuses.  The gateway used to catch this when it assembled
 // `config`; now the adapter imports the key, so the 500 and its body are

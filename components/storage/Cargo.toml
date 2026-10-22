@@ -1,0 +1,13 @@
+[package]
+name = "authentikate-storage"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sha2 = "0.10"
+wasi = "=0.14.2"
+wit-bindgen = "0.46"

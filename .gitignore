@@ -43,3 +43,4 @@ node_modules/
 # Rust host and component build output.
 target/
 build/
+accounts/

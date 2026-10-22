@@ -96,7 +96,7 @@ run('wasm-opt', [join(out, 'linked.wasm'), '--enable-tail-call', '--remove-unuse
   '--remove-unused-module-elements', '-o', join(out, 'authentikate.core.wasm')]);
 const module = new WebAssembly.Module(readFileSync(join(out, 'authentikate.core.wasm')));
 const unexpected = WebAssembly.Module.imports(module).filter(i => ![
-  'wasi:keyvalue/store@0.2.0-draft2', 'wasi:keyvalue/atomics@0.2.0-draft2',
+  'authentikate:storage/accounts@0.1.0',
   'authentikate:crypto/argon2@0.1.0',
   'authentikate:crypto/ed25519@0.1.0',
   'authentikate:email/sender@0.1.0',
@@ -113,6 +113,8 @@ try {
   cpSync(join(root, 'components/email/wit'), join(wit, 'deps/email'), { recursive: true });
   mkdirSync(join(wit, 'deps/config'), { recursive: true });
   cpSync(join(root, 'wit/config.wit'), join(wit, 'deps/config/config.wit'));
+  mkdirSync(join(wit, 'deps/storage'), { recursive: true });
+  cpSync(join(root, 'wit/accounts.wit'), join(wit, 'deps/storage/accounts.wit'));
   if (existsSync(join(root, 'components/crypto/wit/deps'))) {
     cpSync(join(root, 'components/crypto/wit/deps'), join(wit, 'deps'), { recursive: true });
   }

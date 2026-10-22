@@ -12,8 +12,8 @@
 //! policy, routing, the static assets, the method and media-type checks, the
 //! body limit and read deadline, and the response security headers.  What
 //! stayed in the host: the engine, fuel and memory limits, admission control,
-//! and the `wasi:keyvalue` provider, which has to outlive a request because
-//! each request gets a fresh instance.
+//! and the storage directory preopen. The separate storage component preserves
+//! accounts on disk across fresh per-request instances.
 
 wit_bindgen::generate!({ world: "gateway", path: "wit", generate_all });
 

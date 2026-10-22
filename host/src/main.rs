@@ -1,9 +1,9 @@
-//! The host: an engine, a socket, a keyvalue provider, and configuration.
+//! The host: an engine, a socket, a storage preopen, and configuration.
 //!
 //! Everything request-shaped moved into `components/gateway`.  What is left
 //! is the part that cannot be a per-request component instance: the Wasmtime
-//! engine and its limits, admission control, the account map that has to
-//! outlive a request, and the signing seed and origin policy the operator
+//! engine and its limits, admission control, the storage directory, and the
+//! signing seed and origin policy the operator
 //! configured.  The host no longer routes, serves assets, sets response
 //! headers, decides a request's method or media type, or calls the service's
 //! `login`/`validate`/`signup` directly -- it hands the composed component an
@@ -14,16 +14,16 @@ use http_body_util::BodyExt;
 use hyper::{server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
 use std::{
-    collections::BTreeMap,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 use tokio::sync::Semaphore;
 use wasmtime::{
     Engine, Store, StoreLimits, StoreLimitsBuilder,
-    component::{Component, Linker, Resource, ResourceTable},
+    component::{Component, Linker, ResourceTable},
 };
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
     WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
     p2::{bindings::http::types::Scheme, body::HyperOutgoingBody},
@@ -33,10 +33,11 @@ use zeroize::Zeroizing;
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+#[cfg(test)]
+mod storage_tests;
 use bindings::{
     WebHost,
     authentikate::config::{policy, service as service_config},
-    wasi::keyvalue::{atomics, store as kv},
 };
 
 /// Everything the host configures, in the shape it hands out.  Split in two on
@@ -49,17 +50,6 @@ struct Settings {
 }
 
 const FUEL: u64 = 2_000_000_000;
-type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
-pub struct Bucket;
-
-/// A compare-and-swap handle: the key it was opened on, and the value that
-/// key held at the time.  `swap` writes only if the key still holds that
-/// value, which is how the service creates an account without a window
-/// between the read and the write.
-pub struct Cas {
-    key: String,
-    seen: Option<Vec<u8>>,
-}
 
 /// No outbound HTTP.  `wasmtime-wasi-http` is built without
 /// `default-send-request`, so there is no `send_request` to override and no
@@ -106,7 +96,6 @@ struct GuestState {
     http: WasiHttpCtx,
     hooks: NoOutboundHttp,
     table: ResourceTable,
-    records: Records,
     settings: Settings,
     limits: StoreLimits,
 }
@@ -151,157 +140,16 @@ impl policy::Host for GuestState {
     }
 }
 
-impl kv::Host for GuestState {
-    fn open(
-        &mut self,
-        identifier: String,
-    ) -> wasmtime::Result<Result<Resource<kv::Bucket>, kv::Error>> {
-        if !identifier.is_empty() {
-            return Ok(Err(kv::Error::NoSuchStore));
-        }
-        Ok(Ok(self.table.push(Bucket)?))
-    }
-}
-
-impl kv::HostBucket for GuestState {
-    fn get(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-    ) -> wasmtime::Result<Result<Option<Vec<u8>>, kv::Error>> {
-        self.table.get(&bucket)?;
-        Ok(Ok(self.records.lock().unwrap().get(&key).cloned()))
-    }
-    fn set(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-        value: Vec<u8>,
-    ) -> wasmtime::Result<Result<(), kv::Error>> {
-        self.table.get(&bucket)?;
-        self.records.lock().unwrap().insert(key, value);
-        Ok(Ok(()))
-    }
-    fn delete(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-    ) -> wasmtime::Result<Result<(), kv::Error>> {
-        self.table.get(&bucket)?;
-        self.records.lock().unwrap().remove(&key);
-        Ok(Ok(()))
-    }
-    fn exists(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-    ) -> wasmtime::Result<Result<bool, kv::Error>> {
-        self.table.get(&bucket)?;
-        Ok(Ok(self.records.lock().unwrap().contains_key(&key)))
-    }
-    fn list_keys(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        cursor: Option<String>,
-    ) -> wasmtime::Result<Result<kv::KeyResponse, kv::Error>> {
-        self.table.get(&bucket)?;
-        // draft2 cursors are keys, not offsets: resume strictly after the one
-        // handed back.  The map is ordered, so this is the whole tail.
-        let keys = self
-            .records
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|key| cursor.as_ref().is_none_or(|from| *key > from))
-            .cloned()
-            .collect();
-        Ok(Ok(kv::KeyResponse { keys, cursor: None }))
-    }
-    fn drop(&mut self, bucket: Resource<kv::Bucket>) -> wasmtime::Result<()> {
-        self.table.delete(bucket)?;
-        Ok(())
-    }
-}
-
-impl atomics::HostCas for GuestState {
-    fn new(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-    ) -> wasmtime::Result<Result<Resource<atomics::Cas>, kv::Error>> {
-        self.table.get(&bucket)?;
-        let seen = self.records.lock().unwrap().get(&key).cloned();
-        Ok(Ok(self.table.push(Cas { key, seen })?))
-    }
-    fn current(
-        &mut self,
-        cas: Resource<atomics::Cas>,
-    ) -> wasmtime::Result<Result<Option<Vec<u8>>, kv::Error>> {
-        Ok(Ok(self.table.get(&cas)?.seen.clone()))
-    }
-    fn drop(&mut self, cas: Resource<atomics::Cas>) -> wasmtime::Result<()> {
-        self.table.delete(cas)?;
-        Ok(())
-    }
-}
-
-impl atomics::Host for GuestState {
-    fn increment(
-        &mut self,
-        bucket: Resource<kv::Bucket>,
-        key: String,
-        delta: i64,
-    ) -> wasmtime::Result<Result<i64, kv::Error>> {
-        self.table.get(&bucket)?;
-        let mut records = self.records.lock().unwrap();
-        let counter: i64 = match records.get(&key) {
-            None => 0,
-            Some(value) => match std::str::from_utf8(value).ok().and_then(|v| v.parse().ok()) {
-                Some(counter) => counter,
-                None => return Ok(Err(kv::Error::Other("not a counter".into()))),
-            },
-        };
-        let Some(next) = counter.checked_add(delta) else {
-            return Ok(Err(kv::Error::Other("counter overflow".into())));
-        };
-        records.insert(key, next.to_string().into_bytes());
-        Ok(Ok(next))
-    }
-    /// The whole point of the interface: the comparison and the write happen
-    /// under one lock, so no other caller can land in between.  A swap that
-    /// loses gets a fresh handle rather than an error, because upstream means
-    /// it as an invitation to retry.
-    fn swap(
-        &mut self,
-        cas: Resource<atomics::Cas>,
-        value: Vec<u8>,
-    ) -> wasmtime::Result<Result<(), atomics::CasError>> {
-        let open = self.table.delete(cas)?;
-        let mut records = self.records.lock().unwrap();
-        let current = records.get(&open.key).cloned();
-        if current != open.seen {
-            drop(records);
-            let retry = self.table.push(Cas {
-                key: open.key,
-                seen: current,
-            })?;
-            return Ok(Err(atomics::CasError::CasFailed(retry)));
-        }
-        records.insert(open.key, value);
-        Ok(Ok(()))
-    }
-}
-
 struct Runtime {
     engine: Engine,
     component: Component,
     linker: Linker<GuestState>,
-    records: Records,
+    storage: PathBuf,
     settings: Settings,
 }
 
 impl Runtime {
-    fn new(path: &str, settings: Settings) -> Result<Self> {
+    fn new(path: &str, settings: Settings, storage: &Path) -> Result<Self> {
         let mut options = wasmtime::Config::new();
         options.consume_fuel(true);
         let engine = Engine::new(&options)?;
@@ -310,7 +158,7 @@ impl Runtime {
             .with_context(|| format!("Load {path}; build it with make host-component (or make compose-host for existing artifacts)"))?;
         // Refuse artifacts that ask the host for capabilities it does not mean
         // to grant.  The list is deliberately exhaustive: a composed artifact
-        // that wants the filesystem, the network or the environment is not the
+        // that wants arbitrary network or environment access is not the
         // one this host was written for, whatever else it does correctly.
         for (name, _) in component.component_type().imports(&engine) {
             let (interface, version) = name.split_once('@').unwrap_or((name, ""));
@@ -323,13 +171,13 @@ impl Runtime {
                 "wasi:io/poll",
                 "wasi:io/streams",
                 "wasi:http/types",
+                "wasi:filesystem/types",
+                "wasi:filesystem/preopens",
             ]
             .contains(&interface)
                 && ["0.2.0", "0.2.4"].contains(&version);
             ensure!(
                 [
-                    "wasi:keyvalue/store@0.2.0-draft2",
-                    "wasi:keyvalue/atomics@0.2.0-draft2",
                     "authentikate:config/service@0.1.0",
                     "authentikate:config/policy@0.1.0",
                 ]
@@ -341,8 +189,6 @@ impl Runtime {
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
         wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)?;
-        kv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
-        atomics::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         service_config::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
             |state| state,
@@ -352,18 +198,20 @@ impl Runtime {
             engine,
             component,
             linker,
-            records: Records::default(),
+            storage: storage.to_path_buf(),
             settings,
         })
     }
 
     fn instantiate(&self) -> Result<(Store<GuestState>, WebHost)> {
         let state = GuestState {
-            wasi: WasiCtxBuilder::new().inherit_stdout().build(),
+            wasi: WasiCtxBuilder::new()
+                .inherit_stdout()
+                .preopened_dir(&self.storage, "/accounts", FsPerms::ReadWrite)?
+                .build(),
             http: WasiHttpCtx::new(),
             hooks: NoOutboundHttp,
             table: ResourceTable::new(),
-            records: self.records.clone(),
             settings: self.settings.clone(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(128 * 1024 * 1024)
@@ -518,12 +366,12 @@ fn loopback_authorities(port: u16) -> Vec<String> {
 }
 
 fn configuration(port: u16, public_origin: Option<&str>) -> Result<Settings> {
-    let mut seed = Zeroizing::new([0u8; 32]);
-    getrandom::fill(seed.as_mut()).context("Generate signing seed")?;
+    let mut key = Zeroizing::new([0u8; 32]);
+    getrandom::fill(key.as_mut()).context("Generate HS256 key")?;
     let approved_origin = public_origin.map(approved_origin).transpose()?;
     Ok(Settings {
         service: service_config::Settings {
-            signing_seed: seed.to_vec(),
+            signing_seed: key.to_vec(),
             iss: "demo".into(),
             ttl: 600,
             email_from: std::env::var("SIGNUP_EMAIL_FROM")
@@ -556,13 +404,27 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let address = listener.local_addr()?;
     let settings = configuration(address.port(), public_origin.as_deref())?;
-    let runtime = Runtime::new(&path, settings)?;
+    let storage =
+        PathBuf::from(std::env::var_os("STORAGE_DIR").unwrap_or_else(|| "accounts".into()));
+    let mut directory = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    match directory.create(&storage) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && storage.is_dir() => (),
+        Err(error) => return Err(error).context("Create STORAGE_DIR"),
+    }
+    let runtime = Runtime::new(&path, settings, &storage)?;
     eprintln!(
         "Authentikate demo: {}",
         public_origin.unwrap_or_else(|| format!("http://{address}"))
     );
     eprintln!(
-        "Ephemeral demo: accounts and signing key are lost on restart. Welcome emails go to stdout."
+        "Accounts persist in {}. The signing key is lost on restart. Welcome emails go to stdout.",
+        storage.display()
     );
     let app = Arc::new(App {
         runtime,
@@ -597,12 +459,14 @@ mod tests {
 
     const COMPOSED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm");
 
-    fn app(settings: Settings) -> Arc<App> {
-        Arc::new(App {
-            runtime: Runtime::new(COMPOSED, settings).unwrap(),
+    fn app(settings: Settings) -> (Arc<App>, tempfile::TempDir) {
+        let storage = tempfile::tempdir().unwrap();
+        let app = Arc::new(App {
+            runtime: Runtime::new(COMPOSED, settings, storage.path()).unwrap(),
             gate: Arc::new(Semaphore::new(1)),
             slots: Arc::new(Semaphore::new(8)),
-        })
+        });
+        (app, storage)
     }
 
     fn demo() -> Settings {
@@ -656,8 +520,7 @@ mod tests {
     // Intentionally fails when the composed artifact is missing or stale.
     #[tokio::test(flavor = "multi_thread")]
     async fn composed_authentication_and_http_boundaries() {
-        let app = app(demo());
-        let records = app.runtime.records.clone();
+        let (app, storage) = app(demo());
 
         for path in ["/", "/style.css", "/app.js"] {
             let request = hyper::Request::builder()
@@ -820,7 +683,7 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
         }
 
-        // Two signups for one email race through the CAS; exactly one creates.
+        // Two signups for one email use atomic create; exactly one creates.
         let concurrent =
             json!({"email":"concurrent@example.test", "password":"a-local-demo-password"})
                 .to_string();
@@ -833,9 +696,16 @@ mod tests {
         assert_eq!(statuses, [201, 409]);
 
         {
-            let records = records.lock().unwrap();
+            let records: Vec<_> = std::fs::read_dir(storage.path())
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
             assert_eq!(records.len(), 2);
-            for record in records.values() {
+            for entry in records {
+                let bytes = std::fs::read(entry.path()).unwrap();
+                assert_eq!(&bytes[..8], b"AKSTORE1");
+                let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+                let record = &bytes[12 + length..];
                 assert!(!String::from_utf8_lossy(record).contains("a-local-demo-password"));
                 let record: Value = serde_json::from_slice(record).unwrap();
                 assert_eq!(record["memory_kib"], 19456);
@@ -851,7 +721,7 @@ mod tests {
     /// A configured origin is enforced end to end, not just in `configuration`.
     #[tokio::test(flavor = "multi_thread")]
     async fn configured_origin_refuses_loopback() {
-        let app = app(configuration(3000, Some("https://demo.example.test")).unwrap());
+        let (app, _storage) = app(configuration(3000, Some("https://demo.example.test")).unwrap());
         let (status, _) = request(&app, Method::GET, "/", "", &[]).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         let request = hyper::Request::builder()
@@ -876,7 +746,7 @@ mod tests {
     // absent path by orders of magnitude, not by a factor.
     #[tokio::test(flavor = "multi_thread")]
     async fn absent_account_still_pays_for_argon2() {
-        let app = app(demo());
+        let (app, _storage) = app(demo());
         let json = [(header::CONTENT_TYPE.as_str(), "application/json")];
         let enrolled = json!({"email":"timing@example.test","password":"a-local-demo-password"});
         post(&app, "/api/signup", enrolled, StatusCode::CREATED).await;
@@ -921,7 +791,7 @@ mod tests {
     async fn a_rejected_signing_seed_is_a_clean_500() {
         let mut settings = demo();
         settings.service.signing_seed = vec![0u8; 31];
-        let app = app(settings);
+        let (app, _storage) = app(settings);
         let (status, body) = request(
             &app,
             Method::POST,
