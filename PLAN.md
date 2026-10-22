@@ -22,9 +22,9 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Default Nix build | Checks proofs and adapter/runtime tests; installs core and component Wasm artifacts |
 | Bytes/base64 | MetaRocq bytestrings; local upstream instance and strict unpadded rocq-base64 `ByteString` wrapper, pinned at `28019c5c` |
 | Foreign calls | Seven registered primitives, void/global-result ABI, force-argument workaround for CertiRocq `6d34b50b` |
-| Component | Custom service WIT export; custom crypto and standard WASI keyvalue imports remain unresolved providers |
+| Component | Custom service WIT export; custom crypto and accounts imports remain unresolved providers |
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
-| Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
+| Web demo | Rust/Wasmtime host (`cargo run`), actual composed crypto/email/storage, file-backed accounts, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
 | Verification | Structural proofs and tests exist; `login_then_validate`, `accepted_implies_authenticated` and `signup_then_validate` are proved and `Print Assumptions` reports all three closed; unforgeability is assumed in `signing_oracle` and store create-read coherence and exclusivity in `store_creates`, neither proved, though forgery rejection (`no_valid_token_without_a_password`) follows from the oracle and nothing else, and account uniqueness (`signup_happens_once`) from the exclusivity alone; login's non-disclosure of existence and validation's independence of the store are proved assumption-free; no timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
@@ -39,7 +39,7 @@ nix develop --command make crypto-components
 make host-component
 cargo test --locked
 cargo run --locked
-cargo test --locked -p authentikate-argon2 -p authentikate-ed25519
+cargo test --locked -p authentikate-argon2 -p authentikate-hmac
 ```
 
 The Nix development shell provides a locked Fenix Rust toolchain with the
@@ -76,14 +76,14 @@ The Rust demo exposes the following HTTP routes:
   whether it is good.  A bad token is a `200` with `valid: false` rather than
   an error — it is a question, not a failure.
 
-JWT shape: compact JWS, `EdDSA`/Ed25519.  The earlier plan started at `HS256`
-on the grounds that one symmetric key is the simplest thing that can be made
-to work; that is no longer the shorter path, since the Ed25519 component
-already exists and HMAC-SHA256 does not.  Claims: `sub`, `iat`, `exp`, and an
-`iss` naming the service.
+JWT shape: compact JWS, `HS256`/HMAC-SHA-256 with a full 32-byte tag. A shared
+256-bit random key replaces Ed25519's private/public pair; both generation
+and verification use one opaque handle. Every holder can mint tokens, so
+independent public verification is intentionally not supported. Claims: `sub`,
+`iat`, `exp`, and an `iss` naming the service. Old EdDSA tokens are rejected.
 
 The algorithm is **not** read from the token header to select a verifier.  It
-is fixed at EdDSA in the code, which makes "a token claiming `alg: none` or
+is fixed at HS256 in the code, which makes "a token claiming `alg: none` or
 `HS256` is rejected" true by construction rather than by a check that can be
 got wrong.  This is the classic JWS break and it should cost nothing to be
 immune to it.
@@ -99,18 +99,18 @@ immune to it.
                               │   every decision                      │
                               │          │ registered primitives      │
                               │  components/service/adapters/         │
-                              │    argon2.wat, ed25519.wat             │
+                              │    argon2.wat, hmac.wat             │
                               │    store.wat                          │
                               │    service.wat                        │
                               └──────────┬────────────────────────────┘
                                          │ canonical ABI
                  +----------------+----------------+
-                 | custom crypto imports           | WASI keyvalue import
+                 | custom crypto imports           | accounts get/create import
                  v                                 v
-   WAC connects Rust Argon2 + Ed25519 components    in-memory Rust map
-   and stdout email directly to the service.       (WASI keyvalue resource)
+    WAC connects Rust Argon2 + HMAC-SHA-256 components    Rust storage component
+    and stdout email directly to the service.       (WASI filesystem preopen)
      Argon2 -> WASI random (fresh enrollment salts)
-     Ed25519 -> instance-local keys, host import-key provisioning
+     HMAC-SHA-256 -> instance-local keys, host import-key provisioning
      stdout email -> WASI stdout/I/O
 ```
 
@@ -118,7 +118,7 @@ The split: everything that is a decision lives in Rocq, everything that is a
 primitive lives in a provider. Rust provides transport, storage, clock, entropy,
 stdout and configuration, but no service crypto interfaces or forwarding. Note
 which side the stored record's *format* falls on — Rocq's, because
-`wasi:keyvalue` moves opaque bytes and `Store.decode` is what interprets
+`authentikate:storage/accounts` moves opaque bytes and `Store.decode` is what interprets
 them.  That is the main reason to prefer a blob store here over SQL columns:
 with SQL, the schema and the decoding both sit outside the verified
 perimeter. The timing design aims to keep secret operations behind the crypto
@@ -157,8 +157,8 @@ boundary; this is not a proof that the whole service is constant-time.
   Record crypto_ops := MkOps {
     argon2_verify  : Secret.t -> bytes -> argon2_params -> Secret.t -> option bool;
     argon2_enroll  : Secret.t -> option bytes;               (* public JSON *)
-    ed25519_sign   : Key.t -> bytes -> option bytes;         (* key handle, msg *)
-    ed25519_verify : bytes -> bytes -> bytes -> option bool  (* pk, msg, sig *)
+    hmac_sign   : Key.t -> bytes -> option bytes;         (* key handle, msg *)
+    hmac_verify : Key.t -> bytes -> bytes -> option bool  (* same handle, msg, tag *)
   }.
   ```
 
@@ -199,7 +199,7 @@ boundary; this is not a proof that the whole service is constant-time.
   bytes -> response`.  This is the whole service.  The clock is an
   argument, not an import: it keeps `handle` pure and makes the `exp` proofs
   trivial.  `config` carries what the host installs — the key handle, the
-  public key, the issuer, the TTL, and the dummy salt, tag and params that
+  issuer, the TTL, and the dummy salt, tag and params that
   rule 3 below needs.  The credential check is factored out as `login_check`,
   because the found and not-found cases having one code path is the whole of
   rule 3 and deserves to be readable on its own.
@@ -218,7 +218,7 @@ unary, so an `exp` around 1.8e9 would be 1.8e9 heap cells.
 The mechanism is `CertiRocq Register`, not unregistered axioms. The earlier
 upstream backend gap is resolved by the fork pinned at `6d34b50b` in
 `flake.nix`; the real service now compiles. Seven registrations cover Argon2
-verify/enroll, Ed25519 sign/verify, keyvalue get/create and `Secret.of_bytes`.
+verify/enroll, HMAC-SHA-256 sign/verify, accounts get/create and `Secret.of_bytes`.
 
 These imports return **void**, publishing the Rocq result through the shared
 mutable `result` global, with shared memory/allocation globals. The pinned
@@ -226,7 +226,7 @@ compiler's constant forcing adds a leading dummy argument before the real
 Rocq arguments. Explicit registration arities count it and adapters ignore it;
 without this workaround imports can be called too early with shifted arguments.
 
-Three adapters (`components/service/adapters/argon2.wat`, `components/service/adapters/ed25519.wat`,
+Three adapters (`components/service/adapters/argon2.wat`, `components/service/adapters/hmac.wat`,
 `components/service/adapters/store.wat`) bridge heap values to canonical ABI. `components/service/adapters/service.wat`
 provides canonical signup/login/validate wrappers, config/clock marshalling,
 curried closure calls and response lowering. Its seven FFI boundary wrappers
@@ -237,9 +237,9 @@ including error paths returning immediate `None`.
 with `wasm-merge`, removes link-only exports and unused builtins (checking
 they are unreferenced), prunes with `wasm-opt`, embeds authoritative WIT and
 runs `wasm-tools component new` and validation. The output still imports
-custom `authentikate:crypto/{argon2,ed25519}@0.1.0` and standard
-`wasi:keyvalue/{store,atomics}@0.2.0-draft2`. `make host-component` then uses the explicit
-`host/composition.wac` graph to connect the Rust crypto and stdout email components.
+custom `authentikate:crypto/{argon2,hmac}@0.1.0` and
+`authentikate:storage/accounts@0.1.0`. `make host-component` then uses the explicit
+`host/composition.wac` graph to connect Rust crypto, storage and stdout email components.
 The default `make`/Nix artifact remains the independently reusable service.
 
 The internal `wasm-merge` step is deliberately retained for now, separately from
@@ -308,31 +308,33 @@ remain worth recording:
   that loses it is transparent ascription (`<:`),
   after which any caller can unfold `Secret.t` to `bytes` and match on a
   password.  We register.  `Key.of_handle` needs none of this: `service.wat` builds
-  `cfg_key` from the handle `ed25519.import-key` returns, and the extracted
+  `cfg_key` from the handle `hmac.import-key` returns, and the extracted
   code only passes it along.  Nothing outside the service's own instantiation
   holds the seed.
 
 ### Rust host (`host/`, assets in `host/assets/`)
 
 `cargo run` loads `build/host.component.wasm`, composed with WAC from the service,
-Rust Argon2, Rust Ed25519 and stdout email components. No host-provided crypto
+Rust Argon2, Rust HMAC-SHA-256 and stdout email components. No host-provided crypto
 interfaces exist. The same signer/hash instances wired into the service are
-re-exported for seed provisioning, public-key derivation and dummy hashing.
+used only inside the service, whose adapter imports the shared key and builds
+the dummy Argon2 record. No public-key derivation or export exists.
 Bindings stage the authoritative WIT sources instead of copying crypto types.
 
 Each request gets a fresh composition to reclaim all Wasm heaps. An ephemeral
-host seed survives requests and is reimported into each signer; the host map
-preserves account records. One blocking worker executes component requests at
+host seed survives requests and is reimported into each signer; the storage component
+preserves account records on disk. One blocking worker executes component requests at
 a time, with bounded admission (eight including the active request). Signup
-no longer needs that serialization -- it creates through the host's CAS, which
-compares and writes under one mutex. Fuel and Wasm memory limits bound
+no longer needs that serialization -- it creates through the storage component's
+create primitive, publishing a complete, synced temporary record with an atomic hard link.
+Fuel and Wasm memory limits bound
 guest execution; they are not a production resource policy or timing theorem.
 
-The host provides WASI clock/random/stdout and keyvalue resources, but no guest
-filesystem, environment or network access. It enforces strict Host/Origin policy,
+The host provides WASI clock/random/stdout and a dedicated storage filesystem
+preopen, but no environment or network access. The gateway enforces strict Host/Origin policy,
 JSON content type, a 16 KiB streaming limit and a body read deadline. Loopback is
 the default; explicit `LISTEN`/`PUBLIC_ORIGIN` support controlled proxy tests.
-Accounts and keys vanish on restart. See `host/README.md` for commands and limits.
+Accounts persist; keys vanish on restart. See `host/README.md` for commands and limits.
 
 ### Rust crypto (`components/crypto/`)
 
@@ -346,10 +348,10 @@ package:
   returns public JSON with base64url salt/tag and numeric algorithm/cost fields.
   Salt generation stays outside Rocq; the public salt is stored and passed
   through Rocq, not kept secret.
-- `components/crypto/wit/ed25519.wit`, `components/crypto/ed25519/` — Ed25519 on `libcrux-ed25519`.
-  Exposes host provisioning via `import-key`, plus `public-key`, `sign` and
-  `verify`, the last of them strict in the
-  RFC 8032 sense. Checked against the RFC 8032 §7.1 vectors. Private keys
+- `components/crypto/wit/hmac.wit`, `components/crypto/hmac/` — HMAC-SHA-256 on `libcrux-hmac`.
+  Exposes provisioning via `import-key`, plus `sign` and `verify`. Both operations
+  use the same opaque handle. Checked against RFC 4231 HMAC-SHA-256 vectors and
+  a separate JWT HMAC implementation. Shared secrets
   remain in the provider instance's bounded key table; Rocq receives opaque
   u32 handles, never private-key bytes. Handles die with the instance, so a
   fresh Rust provider instance must be provisioned again. This provider
@@ -358,19 +360,22 @@ package:
 `make crypto-components` builds/componentizes both crates separately. They
 are neither flake packages nor included/composed by `nix build`.
 
-Ed25519 uses libcrux; Argon2 remains on RustCrypto because libcrux has no Argon2.
-The Ed25519 wrapper rejects small-order public keys and R points in addition to
-libcrux's canonical-encoding and signature checks. Wrong-length inputs return
-errors; invalid point encodings return `false`. Private seeds use zeroizing
-buffers, but libcrux 0.0.10 does not explicitly wipe internal expanded-key
-temporaries; this does not provide full secret erasure. The WIT function
-signatures and `Crypto.v` assumptions are unchanged.
+HMAC-SHA-256 uses pinned libcrux-hmac 0.0.9, whose implementation is safe Rust
+translated from HACL*-origin verified C; Argon2 remains on RustCrypto. The
+wrapper accepts exactly 32 random key bytes and full 32-byte tags; verification
+uses `subtle` constant-time equality. Wrong-sized inputs return errors, unequal
+tags return `false`. Imported and stored keys use zeroizing buffers, but
+internal library temporaries and ABI/host copies are not guaranteed wiped.
+`Crypto.v` now uses `Key.t` for both operations, with no public-key field in
+configuration. The correctness hypothesis uses one shared handle. The security
+oracle additionally requires that all holders of the shared key are authorized
+issuers; its idealized message-level statement is not a computational proof.
 Libcrux's guarantees must be scoped to the selected algorithm and implementation,
 not transferred to the wrapper, Wasm toolchain, or whole service by name.
 
 ## Persistence
 
-`wasi:keyvalue`, not SQL. The key is the email and the value is a JSON object.
+`authentikate:storage/accounts`, not SQL. The key is the email and the value is a JSON object.
 Rocq decides authentication and record interpretation; the host/provider
 remains trusted for storage behavior and durability.
 
@@ -385,9 +390,9 @@ feature it models is one this lookup does not use.  `wasi:sql` is a
 non-starter for a different reason: it is phase-one draft with no wasmtime
 implementation.
 
-So: a `get` by primary key for login, and a create-if-absent for signup —
-`cas.new`, `cas.current`, `swap` from `wasi:keyvalue/atomics`, not
-`bucket.set`, which cannot be create-only.
+So: a `get` by primary key for login, and an atomic create-if-absent for signup.
+The custom accounts interface matches the Rocq operations directly: no WASI
+keyvalue draft, buckets, CAS snapshots, retry handles, or mutable set operation.
 
 ```
 key    the email, verbatim, as a UTF-8 string
@@ -426,11 +431,10 @@ Decisions worth recording:
   are distinct — created, taken, refused — but the acknowledgment still says
   nothing about durability or temporal semantics.
 - **`store_ops` has no overwrite operation.** `kv_create` is the only writer,
-  and `bucket.set` is not imported, so "the service never overwrites a record"
-  is structural rather than a property of the control flow. The adapter builds
-  the create out of `cas.new`/`cas.current`/`swap`: a lost swap means somebody
-  else created the key, which is exactly the `409` answer, so the retry handle
-  WASI offers is dropped unused.
+  and the accounts interface exposes no set, so "the service never overwrites
+  a record" is structural rather than a property of the control flow. The adapter
+  maps a successful create to `Some true`, an existing key or lost race to
+  `Some false` (`409`), and an unavailable error to `None` (`500`).
 - **Signup checks the raw key**, not `Store.stored`: even corrupt or foreign
   existing values conflict with `409`. That read is now only an optimization —
   it avoids paying for an Argon2 enrollment that cannot be used — and
@@ -454,7 +458,7 @@ system.  What no design can say is that the store returned the record that
 was written for that email.
 
 The adapter, `components/service/adapters/store.wat`, has one wrinkle worth knowing: keys are
-`string` in `wasi:keyvalue`, so the canonical ABI *traps* on a key that is
+`string` in the accounts interface, so the canonical ABI *traps* on a key that is
 not well-formed UTF-8, and the email in a login body is attacker-controlled.
 It therefore validates per RFC 3629 — rejecting overlongs, surrogates and
 anything above U+10FFFF — and answers `Some None` for a key that fails, which
@@ -505,9 +509,9 @@ already proved:
 
 And one mechanical blocker: the read-modify-write must be atomic or the bound
 is vacuous — n concurrent requests all read the same count.
-`wasi:keyvalue/atomics` has `increment` and `cas`; a plain get-then-set does
-not. That interface is now imported for account creation, so the counter is a
-matter of using what is already wired in rather than of adding a capability.
+A plain get-then-set is insufficient. The accounts interface deliberately has
+no counters or general compare-and-swap, so backoff needs a new capability,
+not an extension smuggled into the immutable account store.
 
 ## Account creation
 
@@ -519,18 +523,18 @@ This does not give those effects a temporal or transactional proof.
 
 The sequence is raw `kv_get`, reject any existing value, enroll, validate and
 add email in Rocq, then create. Only `Some true` acknowledges creation (`201 {}`);
-`None` and `Some false` are `500`, as are enrollment or record validation
-failure. `created_requires_persistence` proves this structural implication,
+`Some false` is `409`; `None`, enrollment failure and record validation failure
+are `500`. `created_requires_persistence` proves this structural implication,
 not future durability or uniqueness. `components/service/theories/SignupTests.v`
 covers refusals and
 corrupt/mismatched existing records as well as success.
 
-Atomic create-if-absent is implemented, through `wasi:keyvalue/atomics`
-rather than an effect model: `cas.new` on the key, then `swap`, which the
-provider must refuse if the key moved in between. `store_ops` lost `kv_set`
-entirely, so overwriting is not expressible, and `signup_happens_once` proves
-uniqueness from the swap's exclusivity. What is not fixed is deployment: an
-asynchronous or multi-process store is only as exclusive as its CAS. The
+Atomic create-if-absent is implemented through the custom accounts interface
+rather than an effect model. The provider publishes a complete temporary file
+with a hard link; another creator cannot replace the final name. `store_ops`
+has no `kv_set`, so overwriting is not expressible, and `signup_happens_once`
+proves uniqueness from create exclusivity. What is not fixed is deployment: a
+multi-process store relies on its filesystem's atomicity and durability. The
 earlier write-intent/threaded-state design remains an alternative if a
 stronger effect model is needed. Generic `Store.encode` of an opaque user and
 a corresponding decode/encode theorem have not been added.
@@ -658,7 +662,7 @@ provider correctness, storage consistency or deployment security:
    `argon2_verify` returned `Some true` for that record's salt, parameters and
    tag.  The property the service exists for.  Proved, and axiom-free —
    including over the store, which is quantified rather than assumed.
-2. **Algorithm pinning.**  A token whose header names anything but `EdDSA` is
+2. **Algorithm pinning.**  A token whose header names anything but `HS256` is
    rejected.  True by construction, given the design decision above.
 3. **Credential failure shape.** There is a single `unauthorized` response
    for rejected credentials: wrong password, missing key, a record
@@ -723,7 +727,7 @@ provider correctness, storage consistency or deployment security:
    well-signed token stop validating.
 14. **An email is created at most once.** `signup_happens_once` proves that
    of two signups for the same email, at most one answers `Created`. It rests
-   on `create_is_exclusive` — the atomicity of the store's compare-and-swap —
+   on `create_is_exclusive` — the atomicity of the store's create primitive —
    and on nothing else: no Argon2 or signing spec, no bounds, and the two
    requests may carry different passwords and different clocks.
 
@@ -741,7 +745,7 @@ anything here can:
 ```coq
 Corollary no_valid_token_without_a_password :
   forall ops kv mail cfg now body c,
-    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    signing_oracle ops (cfg_key cfg) (minted ops kv cfg) ->
     (forall email password u,
        Store.stored kv email = Found u ->
        argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
@@ -766,8 +770,8 @@ normally — at the cost of one hypothesis that is not the provider's,
 
 Nothing here establishes replay or revocation properties.
 
-Needs a hypothesis from a `crypto_spec` bundle: that `ed25519_verify` accepts
-what `ed25519_sign` produced under the matching key. A JWT sign/verify round
+Needs a hypothesis from a `crypto_spec` bundle: that `hmac_verify` accepts
+what `hmac_sign` produced under the matching key. A JWT sign/verify round
 trip additionally needs serialization well-formedness and bounds; that full
 result is not yet proved.
 
@@ -776,7 +780,7 @@ The statement in `Proofs.v` is proved:
 ```coq
 Theorem login_then_validate :
   forall ops kv mail cfg now d email password body token,
-    crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    crypto_spec ops (cfg_key cfg) ->
     ok_string (cfg_iss cfg) ->
     (now + cfg_ttl cfg < 10 ^ 32)%N ->
     parse_request RtLogin body = Login email password ->
@@ -816,13 +820,13 @@ The converse — accepted implies minted implies authenticated — is proved, an
 needs an assumption `login_then_validate` does not:
 
 ```coq
-Record signing_oracle (ops : crypto_ops) (pk : bytes) (signed : bytes -> Prop) :=
+Record signing_oracle (ops : crypto_ops) (key : Key.t) (signed : bytes -> Prop) :=
   MkOracle { verify_only_signed : forall msg sg,
-    ed25519_verify ops pk msg sg = Some true -> signed msg }.
+    hmac_verify ops key msg sg = Some true -> signed msg }.
 
 Theorem accepted_implies_authenticated :
   forall ops kv mail cfg now body c,
-    signing_oracle ops (cfg_pubkey cfg) (minted ops kv cfg) ->
+    signing_oracle ops (cfg_key cfg) (minted ops kv cfg) ->
     ok_string (cfg_iss cfg) ->
     handle ops kv mail cfg now RtValidate body = Validity true (Some c) ->
     exists email password u login_body issued,
@@ -913,8 +917,8 @@ Corollary signup_then_validate :
   forall ops kv kv' mail cfg now now' d email password body,
     argon2_spec ops ->
     store_creates kv kv' ->
-    crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
-    (forall msg, ed25519_sign ops (cfg_key cfg) msg <> None) ->
+    crypto_spec ops (cfg_key cfg) ->
+    (forall msg, hmac_sign ops (cfg_key cfg) msg <> None) ->
     ok_string (cfg_iss cfg) ->
     (now' + cfg_ttl cfg < 10 ^ 32)%N ->
     (d < cfg_ttl cfg)%N ->
@@ -1000,7 +1004,7 @@ provider actually is atomic.
 turns "what are we actually trusting" into output rather than a comment, and
 it shrinks visibly as the lemmas land.
 
-Assumed, and not provable here: that Argon2 and Ed25519 are what their names
+Assumed, and not provable here: that Argon2 and HMAC-SHA-256 are what their names
 say, along with entropy, key provisioning, storage and runtime behavior.
 Four crypto operations and two store operations are abstracted in the pure
 records; the seven extraction registrations also include the secret identity.
@@ -1015,18 +1019,19 @@ proof.
 - Adapter/runtime tests cover the void/global-result ABI, ignored force
   argument, u32 handles, memory growth, all seven alignment boundaries,
   wrapper marshalling, actual extracted closures, sequential calls, failures,
-  signup persistence acknowledgments, create-if-absent over CAS (created,
-  taken, lost race, refused, handle accounting) and validation's storage
+  signup persistence acknowledgments, direct create-if-absent (created,
+  taken, lost race, refused), byte-sized result lowering and validation's storage
   independence.
   Crypto imports in these tests are mocks, not Rust or native cryptography.
 - `cargo test --locked` uses the actual WAC-composed service and Rust Wasm
-  Argon2/Ed25519/email. It checks signup/login/claims across fresh instances,
+  Argon2/HMAC-SHA-256/email. It checks signup/login/claims across fresh instances,
   tampering, malformed input, duplicate/concurrent signup, Host/Origin and body
   limits, real socket/chunked requests, stdout email and Linux stdout failure.
-  The host implements `atomics` over the same `BTreeMap`, comparing and
-  writing under one mutex, so two parallel signups answer 201 and 409.
-- Rust native unit tests total 14 (4 Argon2, 10 Ed25519), covering enrollment
-  format/verification and RFC vectors, invalid handles/inputs and strict
+  The storage component implements create-if-absent with atomic hard-link
+  publication. Direct provider tests race two OS processes and verify complete
+  concurrent reads; socket tests verify persistence across host restart.
+- Rust native unit tests cover Argon2 enrollment and HMAC-SHA-256 RFC vectors,
+  format/verification, invalid handles/inputs and strict
   rejection cases. Native enrollment tests supply salt to the helper; they
   do not exercise WASI randomness or prove entropy quality.
 - Desktop and mobile demo flows have been tested manually. This is separate
@@ -1054,17 +1059,12 @@ proof.
   table. A WIT resource could improve lifecycle/capability semantics, but is
   not required to remove private-key bytes from the Rocq heap. Key import,
   rotation, destruction and per-instance provisioning remain design concerns.
-- ~~Where do users live?~~ Answered: standard `wasi:keyvalue`, get by email
-  and create through `atomics`' CAS; the demo supplies an ephemeral Map. Store lookup timing is provider
+- ~~Where do users live?~~ Answered: custom accounts get by email
+  and atomic create; the demo supplies a file-backed storage component. Store lookup timing is provider
   behavior, not proved independent of key presence. Signup explicitly
   discloses existence, which is accepted; login dummy hashing does not
   eliminate all channels.
-- **Does the bucket need a name?**  `components/service/adapters/store.wat` opens the default
-  bucket with the empty identifier, because a named one needs its name as a
-  pointer into linear memory and a `data` segment in the adapter would write
-  at a fixed offset into the CertiRocq heap.  A named bucket wants the host
-  to place the string and hand over the pointer.
-- Key management: the demo generates an ephemeral key pair at startup;
+- Key management: the demo generates an ephemeral symmetric key at startup;
   Rust providers need host `import-key` provisioning per instance. Production
   key custody, durable storage, rotation and recovery are not implemented.
 
@@ -1076,12 +1076,12 @@ Completed foundations:
    bytestring migration; default service artifacts and build checks.
 2. Seven foreign registrations, three adapters and canonical runtime wrapper,
    including force-argument and heap-alignment workarounds, exercised in tests.
-3. Component merge/pruning/WIT embedding; custom crypto and standard keyvalue
+3. Component merge/pruning/WIT embedding; custom crypto and accounts
    imports. Optional Rust components build separately, not as Nix packages.
 4. All three Rocq operations, public enrollment JSON, acknowledged writes,
    structural proofs, base64 and conditional JSON/decimal round trips.
 5. Rust web demo with the extracted service, component-level Rust crypto/email
-   composition, per-instance key provisioning and ephemeral storage; HTTP tests.
+   composition, per-instance key provisioning and persistent file-backed storage; HTTP tests.
 6. CI workflow aligned with component builds, HTTP/Rust tests and Wasm artifact
    upload, with pull-request-safe cache configuration and local syntax validation.
 
@@ -1096,13 +1096,12 @@ Remaining work, in priority order:
    theorem of this shape. The nested JSON round trip is done
    (`validated_claims_reach_the_client`), so the response path is covered too.
 2. Define production storage/effect semantics and choose a provider that
-   honors the CAS. Create-if-absent is implemented (`cas.new`/`swap`, pinned
-   at an untagged `wasi:keyvalue` `main` commit, package version
-   `0.2.0-draft2`), the demo host implements it under a mutex, and
-   `tests/component.mjs` interleaves a second writer between `new` and `swap`
+   honors atomic creation. The custom accounts interface exposes get/create;
+   the storage component implements creation with hard-link publication, and
+   `tests/component.mjs` interleaves a second writer between lookup and creation
    to check that the loser gets a `409` without overwriting. What remains is
-   deployment: a real provider satisfying `store_creates`, durability, and the
-   pin following upstream once CAS is tagged. Account existence disclosure at
+   deployment: filesystem guarantees satisfying `store_creates` and crash durability.
+   Account existence disclosure at
    signup is accepted, so no confirmation-mail flow is planned.
 3. Define the threat/leakage model, choose Argon2 policy, implement timing
    measurements (`dudect`-style) and re-hash-on-login migration. No timing

@@ -7,8 +7,9 @@ An experimental authentication backend service providing the following endpoints
 
 The backend is a single Wasm component composed of the following individual components:
 - main logic: written in Rocq, compiled to a Wasm module by CertiRocq, and wrapped inside a Wasm component.
-- two crypto components: password hashing with RustCrypto's `argon2` crate, Ed25519 signatures from the `libcrux-ed25519` crate
+- two crypto components: password hashing with RustCrypto's `argon2` crate, HS256 token authentication with `libcrux-hmac`
 - email sending component: writes the email to stdout (could be swapped with an actual implementation)
+- storage component: immutable file-backed accounts, atomically published through WASI filesystem hard links
 
 
 ## Web Demo
@@ -48,13 +49,14 @@ service's world imports. The part an attacker talks to has no import through
 which a private key could arrive.
 
 That leaves the host with the engine and its limits, admission control, the
-account map, and configuration, which it supplies through two interfaces
+storage directory preopen, and configuration, which it supplies through two interfaces
 rather than one: `authentikate:config/service@0.1.0` carries the seed to the
 service, `authentikate:config/policy@0.1.0` carries the origin rules to the
 gateway, and the host is the only place the two meet. Neither is a grant of
 `wasi:cli/environment`, which would be read access to every variable in the
-process for a handful of named values. No guest filesystem, environment or network
-access is granted, and there is no outbound HTTP: `wasmtime-wasi-http` is built
+process for a handful of named values. Only the storage component imports
+filesystem access, restricted to `STORAGE_DIR` (default `accounts/`) mounted at
+`/accounts`. No environment or network access is granted, and there is no outbound HTTP: `wasmtime-wasi-http` is built
 without `default-send-request` and the host's `send_request` refuses.
 
 The parser supports a restricted JSON subset: objects, printable ASCII strings
@@ -91,25 +93,30 @@ synchronized host clock.
 
 ### Other Providers
 
-Storage uses the draft `wasi:keyvalue/store@0.2.0-draft2` interface together
-with its `atomics` compare-and-swap. Signup checks for an existing account,
+Storage uses `authentikate:storage/accounts@0.1.0`, whose only operations are
+`get` and atomic create-if-absent. Signup checks for an existing account,
 enrolls the password, creates the record only if the key is still absent, then
-sends a welcome email. The create is a `cas.new`/`swap` pair, so losing a race
-answers `409` instead of overwriting the winner; `bucket.set` is not imported
-at all, which is why a host implementing only `store` cannot run the service.
+sends a welcome email. Losing a create race answers `409` instead of overwriting
+the winner; no overwrite operation or resource handles are exposed at all.
 The stored record is printed by the Rocq core from the fields it read out of
 the Argon2 component's JSON, not from that JSON itself: exactly eight fields,
 no nested objects, no cost parameter wider than a `u32`, and a
 provider-supplied email is refused. Success (`201`) requires both an
 acknowledged create and email acceptance; known accounts return `409` without
 sending email. The initial read only avoids paying for an Argon2 enrollment
-that cannot be used; uniqueness rests on the swap, and so on the provider
-implementing compare-and-swap atomically. Write durability depends on the
-storage provider; the demo's in-memory store is not durable.
+that cannot be used; uniqueness rests on the create, and so on the provider
+implementing create-if-absent atomically. Write durability depends on the
+storage provider. The composed demo uses [components/storage](components/storage),
+which writes complete temporary files, syncs them, and atomically hard-links
+them to SHA-256-derived account paths before syncing the directory. Accounts
+survive requests and host restarts; the signing key does not. See its README
+for the disk envelope, filesystem assumptions, uncertain sync outcomes, and
+orphan-temporary cleanup. The host creates new storage directories with mode
+0700 on Unix; existing directories must already have appropriate permissions.
 
 Cryptography uses custom component interfaces in `components/crypto/wit/`: Argon2 enrollment
-and verification, and Ed25519 signing and verification. Signing uses opaque u32
-handles; private keys never enter the Rocq heap. Rust implementations can be
+and verification, and HMAC-SHA-256 generation and verification. Both HMAC operations
+use the same opaque u32 handle; secret keys never enter the Rocq heap. Rust implementations can be
 built separately in the Nix development shell, which includes the Rust
 `wasm32-unknown-unknown` target:
 
@@ -117,9 +124,18 @@ built separately in the Nix development shell, which includes the Rust
 nix develop --command make crypto-components
 ```
 
-The Ed25519 wrapper wipes imported and stored seeds, but libcrux 0.0.10 does not
-explicitly wipe its internal expanded-key temporaries. This is not a guarantee
-of full secret erasure.
+JWTs use only HS256 with the full 32-byte HMAC-SHA-256 tag. The component imports
+exactly 32 random key bytes and compares tags with `subtle` constant-time equality.
+There is no public key: anyone who can independently verify with this secret
+can also mint tokens. EdDSA, `none`, and other algorithm headers are rejected,
+not selected dynamically. Previously issued EdDSA tokens are not supported.
+
+`libcrux-hmac` 0.0.9 contains safe Rust translated from HACL*-origin verified C;
+the upstream proofs concern primitive memory safety, functional correctness and
+source-level secret independence. They do not cover this wrapper, the tag
+comparison, Wasm compilation or runtime timing. Imported and stored key buffers
+are zeroized, but library temporaries and ABI/host copies are not guaranteed
+wiped. See [the HMAC component](components/crypto/hmac).
 
 The service component imports these crypto interfaces rather than bundling an
 implementation. Argon2 enrollment uses `wasi:random/random@0.2.0` for fresh salts.
@@ -171,7 +187,7 @@ individual cases; this is the inventory.
   specification in Coq built for model-based testing of servers; it is not
   used here, and its HTTP/1.1 parser is the part `wasi:http` makes redundant.
 - **The service's adapter assembles its own configuration.** The 500 for a
-  seed Ed25519 refuses, the constant dummy salt, and the zero-filled dummy tag
+  seed HMAC-SHA-256 refuses, the constant dummy salt, and the zero-filled dummy tag
   whose length tracks `recommended-params` are all hand-written WebAssembly in
   `components/service/adapters/service.wat`, unproved like the rest of that
   glue. The differential tests in `tests/component.mjs` pin the assembled
@@ -182,15 +198,16 @@ individual cases; this is the inventory.
   into a component, which makes the artifact self-contained and the checks
   unit-testable without an engine, but `components/gateway` is ordinary Rust.
   Nothing in Rocq says that `/api/login` reaches `login`, that a foreign
-  `Origin` is refused, or that the security headers are set. Widening the Rocq
-  `handle` to take a method, a path and the headers it cares about, and to
-  return headers alongside the status and body, is what would bring these
-  under proof; see [TODO.md](TODO.md).
+  `Origin` is refused, or that the security headers are set. A separate proved
+  HTTP-policy component could bring these under proof without widening the
+  authentication service; see [TODO.md](TODO.md).
 - **Cryptographic hardness.** The security direction,
   `accepted_implies_authenticated`, is conditional on a signing-oracle
   hypothesis: that verification accepts only messages this service signed. That
-  is an assumption about Ed25519, not a theorem, and no amount of
-  implementation verification would discharge it. The other two crypto
+  is an idealized security assumption, not a theorem about HMAC. Every holder
+  of the shared secret can mint tokens, so the hypothesis also requires that
+  no other issuer is provisioned with it. Implementation verification alone
+  does not discharge that deployment assumption. The other two crypto
   hypotheses assume only *correctness* — that sign-then-verify and
   enroll-then-verify agree — and say nothing about unforgeability.
 - **Timing.** No constant-time property is established anywhere. The `Secret`
@@ -202,9 +219,9 @@ individual cases; this is the inventory.
 - **Time and entropy.** The clock, as described above. Salt freshness depends on
   `wasi:random/random@0.2.0` and the demo's signing seed on the host's
   `getrandom`; neither is proved to be unpredictable.
-- **Host-supplied configuration.** The signing-key handle, its public half, the
+- **Host-supplied configuration.** The shared-key handle, the
   issuer, the TTL and the dummy salt, tag and cost parameters all arrive from
-  outside. A mismatched public key, a signing key shared across deployments, or
+  outside. A signing key shared across deployments or
   dummy parameters that do not match what stored records carry are all outside
   what the proofs can see.
 - **Rate limiting, replay and revocation.** No throttling is connected:
@@ -214,7 +231,8 @@ individual cases; this is the inventory.
   a deployment can reach will stop a fresh, well-signed token from validating.
 - **Transport and operations.** There is no TLS; the demo listens on loopback,
   with `LISTEN`/`PUBLIC_ORIGIN` for a trusted proxy. Key custody, rotation,
-  recovery, durable storage, backup and audit logging are not implemented.
+  recovery tooling, backup and audit logging are not implemented. Account
+  durability relies on the storage filesystem's sync guarantees.
 - **Supply chain.** The Nix pins (the CertiRocq fork, `rocq-base64`), the Cargo
   lockfile, and the `womeier.cachix.org` binary cache — which the macOS demo
   path fetches prebuilt components from rather than building them.
@@ -247,24 +265,25 @@ individual cases; this is the inventory.
   bounded admission, fuel and a 128 MiB memory ceiling, a fresh composition per
   request, ephemeral seed generation with per-instance key import, startup
   derivation of the dummy salt, password and parameters, and the static demo
-  assets. It also implements `wasi:keyvalue`'s `store` and `atomics` over a
-  single `BTreeMap`: that implementation, comparing and writing under one
-  mutex, is what discharges the storage hypotheses for the demo, and it is not
-  durable.
+  assets. Storage is a separate component; the host grants only its dedicated
+  directory preopen rather than implementing keyvalue operations.
 - **Argon2 component** (`components/crypto/argon2/`) — RustCrypto's `argon2`,
   trusted for verification correctness, for the quality of the salt it draws
   from `wasi:random`, for `recommended-params`, and for returning the tag
   already base64url-encoded, which is what keeps encoded secret bytes out of
   Rocq. Enrollment selects Argon2id; verification hashes under the parameters
   read back from the stored record.
-- **Ed25519 component** (`components/crypto/ed25519/`) — libcrux, trusted for
-  signature correctness and strict verification, and for the key table that
-  keeps private keys out of the Rocq heap behind opaque `u32` handles. Seed
-  wiping is partial, as noted above.
+- **HMAC-SHA-256 component** (`components/crypto/hmac/`) -- libcrux's HACL*-origin
+  implementation, the unproved wrapper and constant-time comparison, and the
+  key table keeping shared secrets out of the Rocq heap behind opaque `u32`
+  handles. Key wiping is partial, as noted above; the provisioning host retains
+  the secret, and the demo still generates a new key on restart.
 - **Email component** (`components/email/`) — writes the message to stdout.
   Acceptance is not delivery, and the welcome message carries the fact that an
   account exists onto whatever path the mail takes.
-- **Storage provider** — any provider other than the demo host must implement
-  `cas.new`, `cas.current` and `swap` atomically, or signup's uniqueness is
-  lost. Durability, and whether a lookup's duration depends on whether the key
-  is present, are both provider behaviour.
+- **Storage component** (`components/storage/`) -- unproved Rust, SHA-256 key
+  hashing, and WASI/filesystem hard-link and sync semantics form the concrete
+  basis for the storage hypotheses. The interface exposes only get/create;
+  publication must be atomic or signup's uniqueness is lost. Durability and
+  lookup timing remain provider/filesystem behaviour, and local modification
+  of account files is outside the threat model.

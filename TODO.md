@@ -1,5 +1,10 @@
 # Deferred Work
 
+- [ ] Preserve authentication-token validity across restarts by persisting the
+  HMAC signing key, rather than generating a new one on every host startup.
+  Create it atomically on first run with narrowly scoped filesystem access and
+  restrictive permissions; concurrent starts must use the same winning key.
+  Persist the key, not individual JWTs. Keep key rotation and expiry explicit.
 - [ ] Replace `components/service/build.mjs`'s internal `wasm-merge` step with explicit
   component-model wiring of the generated core module and adapters. Retain the
   current merge for now; Rust crypto/email providers already use component-level
@@ -10,73 +15,41 @@
   `max(required_bytes, 65536)` and update static headroom accounting accordingly.
 - [ ] Once the helper semantics are fixed, simplify adapter allocation glue to
   use the exported helper and add allocation/growth regression tests.
-- [ ] Move the host's `wasi:keyvalue/store` implementation into a separate storage
-  component and wire it into the service through `host/composition.wac`. Preserve
-  account state across fresh per-request component instances, preferably with a
-  file-backed store and narrowly scoped host-granted filesystem access; an
-  in-memory provider would require a separate, long-lived instance. Signup no
-  longer depends on that serialization -- it creates through the atomic CAS --
-  but a file-backed provider still has to implement `cas`/`swap` atomically.
-  `wasi:filesystem`'s `open-at` with `create | exclusive` is `O_CREAT|O_EXCL`,
-  which is create-if-absent atomically at the OS level, so it discharges
-  `store_creates`'s exclusivity across processes rather than within one host --
-  a stronger basis for `signup_happens_once` than the current mutex. The
-  service never overwrites a record, so only the `seen = None` case of `swap`
-  needs implementing; the rest can refuse. One correction to make before
-  writing it: `create | exclusive` on the final path claims the *name*
-  atomically but not the contents, since the bytes go in afterwards, which
-  reopens exactly the claim-then-write window that disqualifies the
-  `increment` route below. The fix is the standard one -- write the whole
-  record into a uniquely named temporary (`wasi:random` for the name), then
-  `link-at` it to the account path, which fails with `exist` if the address is
-  taken. `link-at` is the atomic claim *and* the content is already there when
-  it succeeds, so `create_then_get` and `create_is_exclusive` are discharged
-  by one syscall and a failed claim leaves no trace. That is also the
-  structural reason `increment` cannot be fixed the same way: a counter has
-  nowhere to put the record, so its claim is separable by construction.
-  Note that key-to-path encoding becomes attacker-facing surface -- email
-  addresses contain `/`, `.` and case, and path length is bounded -- so the
-  path should be a hash of the key rather than the key.
-  `wasi:filesystem` is not in the `wasi:http/proxy` world, so the question was
-  whether `wasmtime serve` can supply it at all. It can: wasmtime 50's
-  `serve.rs` repurposes `-S cli` as "enable all WASI interfaces instead of
-  just those in the proxy world" (`add_wasmtime_wasi_to_linker`, then only the
-  HTTP interfaces on top), and `serve` shares `RunCommon::configure_wasip2`,
-  so `--dir` preopens apply. `wasmtime serve -S cli --dir ...` is the target
-  invocation. Doing this plus folding
-  `authentikate:gateway/settings` into a config component (with the signing
-  seed generated into that same directory from `wasi:random` on first run,
-  rather than baked in at build time) would leave `wasi:filesystem` as the only
-  non-proxy import and delete the host rather than shrink it.
-  - Rejected alternative, recorded because it is non-obvious enough to be
-    reinvented: build create-if-absent out of `wasi:keyvalue/atomics.increment`
-    by incrementing a per-email claim key and treating a returned `1` as
-    winning the race. It is a correct atomic test-and-set and exactly one
-    caller ever sees `1`, so create-at-most-once survives. What does not is the
-    atomicity of claim and write: with `cas`/`swap` the record *is* what is
-    written atomically, while claim-then-`set` has a window in which the key is
-    taken and no account exists, so a crash or a refused write leaves the
-    address permanently unclaimable and unrecoverable without leases. Failed
-    attempts also increment, making the counter attacker-driven storage growth,
-    and wasmtime's draft is `delta: u64 -> result<u64>` against this repo's
-    `i64 -> i64`, so adopting it means editing `service.wit` and the
-    attacker-facing `store.wat`. This matters because it is the only route to
-    plain `wasmtime serve`: that subcommand does link `wasi-keyvalue` and
-    `wasi-config` providers behind `-S`, but its vendored `atomics` is an
-    earlier draft with `increment` alone and no `cas` resource at all, so the
-    composed artifact cannot link against it as written.
-- [ ] Bring routing and the Host/Origin policy under proof by widening the Rocq
-  `handle`: take a method, a path and the headers it depends on, and return
-  headers alongside the status and body. Today `components/gateway` makes
-  those decisions in ordinary Rust -- unit-tested natively, but unproved -- and
-  the static assets are constants it serves itself. Candidate theorems:
-  only `POST` reaches `handle`, a foreign `Origin` is always refused, the
-  security headers are on every response, and the asset routes are constant.
-  The cost is that the `.wat` dispatch glue in
-  `components/service/adapters/service.wat` grows, because `config` and the
-  request record both have to be lowered; that glue is hand-written and
-  unproved, so this trades a Rust-sized gap for a smaller Wasm-sized one rather
-  than closing it outright.
+- [ ] Extract `authentikate:config/service` and `authentikate:config/policy` into
+  a config component, with the HMAC key generated atomically into persistent
+  storage from `wasi:random` on first run. This is separate from the completed
+  storage extraction: the signing key remains ephemeral and the custom config
+  imports still require the host. Wasmtime 50's `serve -S cli` enables the full
+  WASI linker and honors `--dir` preopens, so the target is
+  `wasmtime serve -S cli --dir <storage>::/accounts ...` once config is composed.
+  The custom accounts interface is already resolved inside the composition;
+  no runtime keyvalue provider or atomics draft is needed.
+  Rejected alternative: `atomics.increment` on a per-email claim counter plus
+  `set` preserves one winner but separates the claim from writing the record.
+  A crash leaves a permanently claimed, empty account, and failed attempts grow
+  attacker-controlled counters. Unlike a temporary record published by hard link,
+  a counter has nowhere to put the value before claiming it.
+- [ ] Bring routing and the Host/Origin policy under proof in a separate Rocq
+  HTTP component, rather than widening the authentication service's `handle`.
+  Today `components/gateway` makes those decisions in ordinary Rust --
+  unit-tested natively, but unproved -- and serves constant static assets.
+  The new component would import `authentikate:service/api` and
+  `authentikate:config/policy`, but not signing configuration; the service's
+  body-only API and authentication proofs stay unchanged. Give it the method,
+  request target, authority and relevant header values (preserving duplicate
+  Origins), and return headers alongside status and body. Keep streaming,
+  deadlines and body-size enforcement in the gateway, with a proved preflight
+  decision so forbidden requests and asset routes need no body read. Route
+  gateway-generated errors, including timeouts and oversized bodies, through
+  the proved response finalizer too. Candidate theorems: authentication
+  operations are invoked only for `POST` on their matching API routes;
+  disallowed authorities and foreign or duplicate Origins are rejected before
+  authentication; every finalized response has the security headers; accepted
+  asset routes return fixed bytes, with an empty body for `HEAD`. The new
+  component needs its own hand-written, unproved lowering glue, rather than
+  expanding `components/service/adapters/service.wat`. The gateway must still
+  faithfully pass metadata, obey preflight decisions and emit returned headers:
+  this isolates and potentially shrinks the trust gap, not closes it outright.
 
 - [ ] Reduce the gateway's vendored WIT further. Splitting `world service` out
   of `api.wit` took `components/gateway/wit/deps` from fifteen files to eight
@@ -109,7 +82,7 @@
   compile `Json.v` and `JsonProofs.v` against the JSON half alone.
 - [ ] If the component model is ever mechanized to cover this artifact, layer it
   deliberately. The shipped thing is a composition -- `host/composition.wac`
-  wires the service to the Argon2, Ed25519 and stdout-email components -- so
+  wires the service to the Argon2, HMAC-SHA-256 and stdout-email components -- so
   wac-style linking belongs inside the mechanization, not beyond it: a theorem
   about one component in isolation says nothing about what runs. Three layers,
   and the decision is which of them get Iris.
