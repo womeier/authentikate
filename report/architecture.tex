@@ -252,7 +252,7 @@
   \source{tests/email.mjs}{Provider tests}
 };
 
-% External standards, optional email provider, and important behavioral limits.
+% External standards and important behavioral limits.
 \node[external] (limits) at (0,-26) {
   \textbf{Important behavioral limits}\par
   Signup is get/enroll/create/send.  The create is atomic, the sequence is
@@ -287,24 +287,11 @@
 };
 \node[external] (emailwasi) at (33,-26) {
   \textbf{Email host capabilities} \hfill Host implementation\par
-  Stdout: \ty{output-stream.write(bytes) -> result<(),error>}\par
-  Lettermint: WASI environment, HTTP, I/O and clock capabilities.\par
-  \ty{HTTP handle(request,options) -> result<future,error>}\par\smallskip
-  \trusted{} Filesystem/network/stream behavior is external.\par
+  Stdout: \ty{blocking-write-and-flush(bytes) -> result<(),error>}\par\smallskip
+  \trusted{} Output-stream behavior is external.\par
   \source{components/email/src/lib.rs}{Consumer / generated bindings}\quad
   \source{components/email/README.md}{Capability configuration}\par
   \source{tests/email.mjs}{Mocked capability tests, not live delivery}
-};
-\node[inactive] (lettermint) at (44,-26) {
-  \textbf{Alternative Lettermint email component} \hfill Rust\par
-  Same custom sender interface as stdout.\par
-  \ty{send(message) -> result<(),error>}\par
-  \ty{HTTPS POST api.lettermint.co/v1/send}\par\smallskip
-  Tests use mocked WASI / HTTP; no live delivery proof.
-  Not the web demo provider; not covered by the stdout-only CI path.\par
-  \links{components/email/src/lib.rs}{components/service/adapters/email.wat}\par
-  \source{components/email/wit/email.wit}{Interface}\quad
-  \source{components/email/README.md}{Backend selection}
 };
 
 % Draw connectors behind the cards so optional paths cannot obscure text.
@@ -327,12 +314,10 @@
   \draw[flow] (edadapter.south) -- ++(0,-.9) -| (edrust.north);
   \draw[flow] (storeadapter.south) -- ++(0,-1.1) -| (map.north);
   \draw[flow] (emailadapter.south) -- ++(0,-.45) -| (stdoutemail.north);
-  \draw[optional] (emailadapter.east) -- ++(11.4,0) |- (lettermint.east);
   \draw[flow] (argonrust.south) -- (random.north);
   \draw[optional] (storeadapter.south) -- ++(0,-.45) -- ++(-.8,0)
     |- (kvstandard.west);
   \draw[flow] (stdoutemail.south) -- ++(0,-.45) -| (emailwasi.north);
-  \draw[flow] (lettermint.west) -- (emailwasi.east);
 \end{scope}
 
 \node[anchor=north west,text width=54cm,font=\footnotesize] at (0,-32) {

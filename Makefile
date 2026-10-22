@@ -12,11 +12,6 @@ email-stdout-component:
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-stdout.component.wasm
 	wasm-tools validate build/email-stdout.component.wasm
 
-email-components: email-stdout-component
-	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-email --no-default-features --features lettermint
-	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_email.wasm -o build/email-lettermint.component.wasm
-	wasm-tools validate build/email-lettermint.component.wasm
-
 gateway-component: check-wit
 	mkdir -p build
 	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-gateway
@@ -65,14 +60,9 @@ test-host: compose-host
 
 test-email-stdout: email-stdout-component
 	cargo test --locked -p authentikate-email
-	node --test-name-pattern=stdout tests/email.mjs --stdout
-
-test-email: email-components
-	cargo test --locked -p authentikate-email
-	cargo test --locked -p authentikate-email --no-default-features --features lettermint
 	node tests/email.mjs
 
 rocq component test clean:
 	$(MAKE) -C components/service $@
 
-.PHONY: all rocq component test clean crypto-components email-stdout-component email-components gateway-component storage-component check-wit host-component compose-host test-host test-email-stdout test-email
+.PHONY: all rocq component test clean crypto-components email-stdout-component gateway-component storage-component check-wit host-component compose-host test-host test-email-stdout

@@ -1,10 +1,4 @@
-//! One interface, built with exactly one backend. Host capabilities use WASI 0.2.
-
-#[cfg(any(
-    all(feature = "stdout", feature = "lettermint"),
-    not(any(feature = "stdout", feature = "lettermint"))
-))]
-compile_error!("select exactly one email backend: stdout or lettermint");
+//! JSON-line email output using WASI 0.2 stdout and streams.
 
 wit_bindgen::generate!({ world: "email-provider", path: "wit" });
 
@@ -62,92 +56,15 @@ fn write(stream: &wasi::io::streams::OutputStream, bytes: &[u8]) -> Result<(), E
     Ok(())
 }
 
-#[cfg(feature = "lettermint")]
-fn token(value: Option<String>) -> Result<String, Error> {
-    value
-        .filter(|s| !s.is_empty() && s.bytes().all(|b| (33..=126).contains(&b)))
-        .ok_or_else(|| {
-            Error::Configuration("LETTERMINT_PROJECT_TOKEN is missing or invalid".into())
-        })
-}
-
-#[cfg(feature = "lettermint")]
-fn accepted(status: u16) -> Result<(), Error> {
-    if (200..300).contains(&status) {
-        Ok(())
-    } else {
-        Err(Error::Rejected(status))
-    }
-}
-
 impl Guest for Component {
     fn send(email: Message) -> Result<(), Error> {
         let payload = payload(&email)?;
-        #[cfg(feature = "stdout")]
-        {
-            let mut record = json!({"backend": "stdout", "email": payload});
-            if let Some(key) = email.idempotency_key {
-                record["idempotency_key"] = json!(key);
-            }
-            let line = format!("{record}\n");
-            write(&wasi::cli::stdout::get_stdout(), line.as_bytes())
+        let mut record = json!({"backend": "stdout", "email": payload});
+        if let Some(key) = email.idempotency_key {
+            record["idempotency_key"] = json!(key);
         }
-        #[cfg(feature = "lettermint")]
-        {
-            use wasi::http::{outgoing_handler, types::*};
-
-            let credential = token(
-                wasi::cli::environment::get_environment()
-                    .into_iter()
-                    .find(|(name, _)| name == "LETTERMINT_PROJECT_TOKEN")
-                    .map(|(_, value)| value),
-            )?;
-            let mut headers = vec![
-                ("content-type".into(), b"application/json".to_vec()),
-                ("accept".into(), b"application/json".to_vec()),
-                ("x-lettermint-token".into(), credential.into_bytes()),
-            ];
-            if let Some(key) = email.idempotency_key {
-                headers.push(("idempotency-key".into(), key.into_bytes()));
-            }
-            let headers = Fields::from_list(&headers)
-                .map_err(|_| Error::Configuration("invalid request headers".into()))?;
-            let request = OutgoingRequest::new(headers);
-            request.set_method(&Method::Post).unwrap();
-            request.set_scheme(Some(&Scheme::Https)).unwrap();
-            request.set_authority(Some("api.lettermint.co")).unwrap();
-            request.set_path_with_query(Some("/v1/send")).unwrap();
-            let body = request.body().unwrap();
-            let options = RequestOptions::new();
-            options
-                .set_connect_timeout(Some(30_000_000_000))
-                .map_err(|_| Error::Configuration("connect timeout unsupported".into()))?;
-            options
-                .set_first_byte_timeout(Some(30_000_000_000))
-                .map_err(|_| Error::Configuration("first-byte timeout unsupported".into()))?;
-            options
-                .set_between_bytes_timeout(Some(30_000_000_000))
-                .map_err(|_| Error::Configuration("between-byte timeout unsupported".into()))?;
-            // Dispatch before writing: a large body may need the host to drain it.
-            let response = outgoing_handler::handle(request, Some(options))
-                .map_err(|_| Error::Transport("HTTP request failed".into()))?;
-            let stream = body.write().unwrap();
-            write(&stream, payload.to_string().as_bytes())?;
-            drop(stream);
-            OutgoingBody::finish(body, None)
-                .map_err(|_| Error::Transport("HTTP request body failed".into()))?;
-            let pollable = response.subscribe();
-            let response = loop {
-                if let Some(result) = response.get() {
-                    break result
-                        .map_err(|_| Error::Transport("HTTP response already consumed".into()))?
-                        .map_err(|_| Error::Transport("HTTP request failed".into()))?;
-                }
-                pollable.block();
-            };
-            // Do not return provider bodies: they may echo credentials or personal data.
-            accepted(response.status())
-        }
+        let line = format!("{record}\n");
+        write(&wasi::cli::stdout::get_stdout(), line.as_bytes())
     }
 }
 
@@ -200,17 +117,5 @@ mod tests {
         email = message();
         email.text = "x".repeat(1024 * 1024);
         assert!(payload(&email).is_err());
-    }
-
-    #[cfg(feature = "lettermint")]
-    #[test]
-    fn credentials_and_provider_status() {
-        assert!(token(None).is_err());
-        assert!(token(Some("\r\nsecret".into())).is_err());
-        assert_eq!(token(Some("secret".into())).unwrap(), "secret");
-        assert!(accepted(202).is_ok());
-        for status in [302, 401, 403, 422, 429, 500] {
-            assert!(matches!(accepted(status), Err(Error::Rejected(s)) if s == status));
-        }
     }
 }
