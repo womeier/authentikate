@@ -256,8 +256,38 @@ assumed:
 | byte `v` | immediate `2v+1` |
 | `false` / `true` | immediate `1` / `3` |
 | `None` / `Some x` | immediate `1` / pointer to `[tag=0 @0, x @4]` |
+| `N0` / `Npos p` | immediate `1` / pointer to `[tag=0 @0, p @4]` |
+| `xH` / `xI p` / `xO p` | immediate `1` / `[tag=0 @0, p @4]` / `[tag=1 @0, p @4]` |
 | closure | `[tag @0, func_idx @4, env @8]`, env `1` when closed |
 | compiled function | `(param env i32) (param arg i32)`, result into the `result` global |
+
+Tags follow constructor declaration order among the boxed constructors, which
+is where the `positive` row is easy to get backwards: `BinNums` declares `xI`
+before `xO`, so the *one* bit is tag 0 and the *zero* bit is tag 1. `$read_N`
+in `argon2.wat` and `$positive` in `service.wat` both depend on that, and only
+`tests/component.mjs` would catch it if either drifted.
+
+`PrimInt63` for the numeric boundary was considered and declined. It would
+collapse `$read_N` and `$N`/`$positive` into a single load and a single store,
+since a primitive integer is boxed as a cell holding the i64 rather than as a
+chain of bit cells. Three costs outweigh that. The hand-written obligation
+moves rather than disappears, from "this walk matches `BinNums.positive`" to
+"this cell matches the backend's primitive layout" -- smaller, but exercised by
+one helper instead of by every list, pair and option the adapters already
+touch. `Uint63`'s operations are axiomatized, so the eight `Print Assumptions`
+calls would stop reporting the global context closed: a differentially tested
+loop traded for axioms plus a dependence on the backend's primitive support.
+And it leaves the expensive glue alone -- `$lower`, `$lift_bytes` and
+`$list_len` over `bytes` cons cells are where the per-request cost and the
+attacker-facing surface are, and those want a primitive array, which is not on
+offer. Two pieces survive the decline. Five of the six `$read_N` call sites are
+Argon2 cost parameters, where `Store.public_of_json`'s fits-in-u32 check is
+what makes the truncation sound; the sixth is the response status, which is one
+of five values, so as a small inductive it would extract to an immediate and
+retire that call site for free -- and `Proofs.v` gets easier, because status
+comparison becomes constructor equality. The standing case for `PrimInt63` is
+`decimal_of_N`'s fuel rather than the glue, where a 19-digit ceiling would
+retire the response-path theorems' `10^32` bounds.
 
 One trap worth recording: foreign byte results can exceed generated heap
 headroom. A bytestring costs 12 bytes per nonempty cell, so adapters grow
@@ -277,8 +307,10 @@ remain worth recording:
   (publish the real argument in `result`, ignoring the force dummy); the fix
   that loses it is transparent ascription (`<:`),
   after which any caller can unfold `Secret.t` to `bytes` and match on a
-  password.  We register.  `Key.of_handle` needs none of this: the host builds
-  `cfg_key` and the extracted code only passes it along.
+  password.  We register.  `Key.of_handle` needs none of this: `service.wat` builds
+  `cfg_key` from the handle `ed25519.import-key` returns, and the extracted
+  code only passes it along.  Nothing outside the service's own instantiation
+  holds the seed.
 
 ### Rust host (`host/`, assets in `host/assets/`)
 
@@ -575,6 +607,13 @@ What is not covered, stated plainly rather than left to be discovered:
   rejects escapes). There is no analysis proving that these are the only
   observable channels. A concrete leakage policy and threat model are still
   needed rather than treating attacker-supplied passwords as public.
+- **Numeric representation shows through in duration.**  `N` is a heap-chased
+  bit list, so arithmetic and conversion cost track the value's magnitude
+  rather than a fixed width.  Nothing secret currently flows through it --
+  the cost parameters, the response status and `exp` are all public -- but
+  that is a property of the current data flow, not an enforced boundary, and
+  it is a reason to keep secrets out of the numeric path rather than to reach
+  for a machine integer.
 - **The engine is not under our control.**  An optimising JIT, whether
   wasmtime's or Node's, may introduce timing behaviour that no property of
   the module predicts. Neither generated-code nor runtime-level timing
