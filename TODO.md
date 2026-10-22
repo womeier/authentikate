@@ -58,6 +58,28 @@
     `wasi-config` providers behind `-S`, but its vendored `atomics` is an
     earlier draft with `increment` alone and no `cas` resource at all, so the
     composed artifact cannot link against it as written.
+- [ ] Bring routing and the Host/Origin policy under proof by widening the Rocq
+  `handle`: take a method, a path and the headers it depends on, and return
+  headers alongside the status and body. Today `components/frontend` makes
+  those decisions in ordinary Rust -- unit-tested natively, but unproved -- and
+  the static assets are constants it serves itself. Candidate theorems:
+  only `POST` reaches `handle`, a foreign `Origin` is always refused, the
+  security headers are on every response, and the asset routes are constant.
+  The cost is that the `.wat` dispatch glue in
+  `components/service/adapters/service.wat` grows, because `config` and the
+  request record both have to be lowered; that glue is hand-written and
+  unproved, so this trades a Rust-sized gap for a smaller Wasm-sized one rather
+  than closing it outright.
+
+- [ ] Reduce the front-end's vendored WIT. `components/frontend/wit/deps`
+  carries copies of `service.wit`, the crypto and email interfaces and the
+  keyvalue draft because `wit_bindgen::generate!` needs a literal path and
+  cannot stage sources the way `host/build.rs` does. `make check-wit` fails on
+  drift, which is a guard rather than a fix. Two versions of `wasi:clocks`
+  coexist there as a result -- the service's `wall-clock@0.2.0` and
+  `wasi:http`'s `monotonic-clock@0.2.4` -- which is why the front-end refers to
+  `wasi::clocks0_2_4`.
+
 - [ ] Consider extracting the JSON layer as a standalone Rocq library
   (`rocq-json`): the parser, canonical printer, accessors, `parse_print`,
   `parse_json_ok`, `get_str_ok` and the fuel measure, over a lower layer with

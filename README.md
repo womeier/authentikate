@@ -29,9 +29,28 @@ On Linux, the cache is optional and missing components can build locally.
 
 The service exports `authentikate:service/api@0.1.0` with `signup`, `login`,
 and `validate`. Each accepts a typed configuration record and a JSON request
-body as bytes, and returns a status code and JSON body as bytes. The HTTP host
-supplies configuration; clients send only the request body. See
+body as bytes, and returns a status code and JSON body as bytes. Clients send
+only the request body. See
 [service.wit](components/service/wit/service.wit).
+
+The composed artifact exports `wasi:http/incoming-handler@0.2.4`, and the HTTP
+front-end in [components/frontend](components/frontend) is what implements it:
+it decides the request target's form, applies the Host/Origin policy, routes,
+serves the three static assets, checks the method and media type, enforces the
+16 KiB body limit and the 15-second read deadline, sets the response security
+headers, and assembles the `config` record the service needs. It parses no
+JSON, inspects no credential and holds no key -- `config` carries an opaque
+Ed25519 handle, and signing happens in the crypto component. WAC wires the
+front-end to the *same* Argon2 and Ed25519 instances as the service, which is
+what makes that handle valid in the service's view and the dummy cost
+parameters the ones real records are enrolled under.
+
+That leaves the host with the engine and its limits, admission control, the
+account map, and configuration, which it supplies through
+`authentikate:frontend/settings@0.1.0` -- a typed six-field record rather than a
+grant of `wasi:cli/environment`. No guest filesystem, environment or network
+access is granted, and there is no outbound HTTP: `wasmtime-wasi-http` is built
+without `default-send-request` and the host's `send_request` refuses.
 
 The parser supports a restricted JSON subset: objects, printable ASCII strings
 without escapes, non-negative integers, and booleans. String keys and values
@@ -133,6 +152,27 @@ individual cases; this is the inventory.
 - **The engine.** wasmtime's optimising JIT and its implementation of the
   component model's canonical ABI, plus jco and Node in the JavaScript test
   suites. None of these is verified against a mechanised Wasm semantics.
+- **HTTP parsing and the request/response mapping.** Moving to
+  `wasi:http/incoming-handler` added hyper's HTTP/1.1 parser and
+  `wasmtime-wasi-http`'s mapping from wire bytes onto `incoming-request`,
+  `fields` and the body streams, in exchange for deleting the host's own
+  request handling. The front-end therefore never sees a request line: it is
+  handed a method, a `path-with-query` and an authority that something else
+  decided. One consequence is visible in the tests -- `wasmtime-wasi-http`
+  takes the authority from the URI in preference to the `Host` header, so an
+  absolute-form target is refused by the Host/Origin policy (403) rather than
+  by the origin-form check (400). [coq-http](https://github.com/liyishuai/coq-http)
+  is the natural yardstick for exactly this layer, being an HTTP/1.1
+  specification in Coq built for model-based testing of servers; it is not
+  used here, and its HTTP/1.1 parser is the part `wasi:http` makes redundant.
+- **Routing and the origin policy are not proved.** They moved from the host
+  into a component, which makes the artifact self-contained and the checks
+  unit-testable without an engine, but `components/frontend` is ordinary Rust.
+  Nothing in Rocq says that `/api/login` reaches `login`, that a foreign
+  `Origin` is refused, or that the security headers are set. Widening the Rocq
+  `handle` to take a method, a path and the headers it cares about, and to
+  return headers alongside the status and body, is what would bring these
+  under proof; see [TODO.md](TODO.md).
 - **Cryptographic hardness.** The security direction,
   `accepted_implies_authenticated`, is conditional on a signing-oracle
   hypothesis: that verification accepts only messages this service signed. That
