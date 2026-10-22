@@ -210,6 +210,12 @@ Proof.
   apply byte_dec_bl in E. congruence.
 Qed.
 
+Lemma bytes_eqb_refl (s : bytes) : bytes_eqb s s = true.
+Proof.
+  induction s as [| b s IH]; [ reflexivity |].
+  cbn. now rewrite (byte_dec_lb (@Logic.eq_refl byte b)), IH.
+Qed.
+
 (* Splitting at a separator that occurs nowhere else.  [split_on] is the only
    thing standing between a token and its three segments, so it is worth
    knowing exactly. *)

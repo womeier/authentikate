@@ -26,7 +26,7 @@ is retained where useful; completed mechanisms are distinguished from goals.
 | Rust providers | `make crypto-components`; `make host-component` builds/composes them with the service and stdout email using WAC; not Nix packages |
 | Web demo | Rust Axum/Wasmtime host (`cargo run`), actual composed crypto/email, in-memory WASI keyvalue, fresh composition per request |
 | CI | Workflow builds/tests components, composes Rust providers, runs Rust HTTP tests and uploads Wasm artifacts; remote result not yet verified |
-| Verification | Structural proofs and tests exist; `login_then_validate` remains admitted; no whole-service security or timing proof |
+| Verification | Structural proofs and tests exist; `login_then_validate` is proved and `Print Assumptions` reports it closed; no whole-service unforgeability or timing proof |
 | Still missing | Atomic creation, connected backoff, OpenAPI/client generation, timing tests and production hardening |
 
 Commands from the repository root:
@@ -629,32 +629,46 @@ what `ed25519_sign` produced under the matching key. A JWT sign/verify round
 trip additionally needs serialization well-formedness and bounds; that full
 result is not yet proved.
 
-The existing statement in `Proofs.v` is still admitted:
+The statement in `Proofs.v` is proved:
 
 ```coq
 Theorem login_then_validate :
-  forall ops kv cfg now d email password body token,
+  forall ops kv mail cfg now d email password body token,
     crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    ok_string (cfg_iss cfg) ->
+    (now + cfg_ttl cfg < 10 ^ 32)%N ->
     parse_request RtLogin body = Login email password ->
-    handle ops kv cfg now RtLogin body = Token token ->
+    handle ops kv mail cfg now RtLogin body = Token token ->
     (d < cfg_ttl cfg)%N ->
     exists c,
-      handle ops kv cfg (now + d) RtValidate
+      handle ops kv mail cfg (now + d) RtValidate
         (Json.print (JObj [(lit "token", JStr token)])) = Validity true (Some c)
       /\ c_sub c = email.
-Admitted.
 ```
 
-The intended conclusion is that a token minted for an email and validated
-before expiry yields claims naming that email; this is not established. The flat
-JSON and decimal lemmas already exist in `JsonProofs.v`; it is obsolete to
-say the only missing piece is a JSON lemma. The current theorem quantifies
-over arbitrary email/issuer bytes and unbounded `N` timestamps/TTL, whereas
-the printer/parser round trip requires `ok_string` and decimal values below
-`10^32`. Establish suitable claim/config well-formedness assumptions (or
-change the implementation/statement), prove the bounds including `now + ttl`,
-and then connect JSON, base64, token splitting, signing and freshness lemmas.
-No claim is made that the current unrestricted statement is provable.
+A token minted for an email and validated before expiry yields claims naming
+that email. `Print Assumptions` reports it closed under the global context:
+the cryptographic assumption travels in `crypto_spec` as a hypothesis of the
+theorem rather than as an axiom of the development.
+
+The two added hypotheses are not provable and are the host's to satisfy when
+it installs the configuration. The printer does not escape, so the issuer must
+be printable ASCII; the numeral round trip is bounded, so `now + ttl` must fit
+in 32 decimal digits. The earlier unrestricted statement quantified over
+arbitrary issuer bytes and unbounded timestamps, and admitted inputs the
+serializer cannot round trip.
+
+Beyond the lemmas that already existed, it needed parser soundness
+(`parse_json_ok` and `get_str_ok`: every string `parse` returns is printable,
+quote-free and backslash-free, which is also the no-injection argument),
+`ok_string` closure under append and base64url so that a token can travel
+inside the JSON object `validate` takes, and `claims_round_trip`, which
+discharges `parse_print_obj`'s four side conditions for a claim set.
+
+This is correctness, not security. It says tokens this service mints are
+accepted; it says nothing about what is rejected. The converse — accepted
+implies minted implies authenticated — needs a second `crypto_spec` field
+saying that only signed messages verify, and is the next proof worth having.
 
 `Print Assumptions login_then_validate` already runs in the proof file. That
 turns "what are we actually trusting" into output rather than a comment, and
@@ -742,9 +756,10 @@ Completed foundations:
 
 Remaining work, in priority order:
 
-1. Close the proof/spec gap honestly: add or derive claim/config string
-   well-formedness and decimal bounds, revisit the unrestricted theorem,
-   connect existing lemmas and remove `login_then_validate`'s admission.
+1. Prove the security direction: add a `verify_only_signed` field to
+   `crypto_spec` and establish that an accepted token was minted by this
+   service, and hence that some login verified a credential for its subject.
+   `login_then_validate` is proved, but it is correctness only.
    Keep `Print Assumptions`; do not conflate correctness with unforgeability.
 2. Define production storage/effect semantics and atomic create-if-absent;
    test concurrent writers beyond the synchronous demo. Decide whether account

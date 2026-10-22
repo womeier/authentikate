@@ -3,9 +3,12 @@
 (*                                                                            *)
 (*  The structural properties first, because they need no assumption about     *)
 (*  cryptography at all -- they are facts about the shape of [handle], and     *)
-(*  they are the ones a reader of this service cares about.  The end-to-end    *)
-(*  statement is at the bottom, [Admitted], so that the claim is in the repo   *)
-(*  and checkable long before the proof is.                                   *)
+(*  they are the ones a reader of this service cares about.  The end-to-end   *)
+(*  statement is at the bottom, and proved: what it rests on besides          *)
+(*  [crypto_spec] is two conditions on the configuration the host installs    *)
+(*  -- a printable issuer and a bounded expiry -- stated as hypotheses        *)
+(*  because neither is a property of [handle].  It is a correctness result    *)
+(*  and not a security one; see the note above [crypto_spec].                 *)
 (*                                                                            *)
 (*  Two things listed as properties in an earlier draft are *not* theorems     *)
 (*  and should not be dressed up as any:                                      *)
@@ -24,7 +27,7 @@
 
 From Stdlib Require Import List NArith Lia Bool Arith Wf_nat
   Strings.Byte Strings.String.
-From Authentikate Require Import Bytes Base64 Json Crypto Claims
+From Authentikate Require Import Bytes Base64 Json JsonProofs Crypto Claims
   Store Jwt Api.
 
 Import ListNotations.
@@ -347,6 +350,77 @@ Corollary base64_round_trip :
   forall bs, Base64.decode (Base64.encode bs) = Some bs.
 Proof. exact Base64.decode_encode. Qed.
 
+(* ---- base64url output is printable ASCII -------------------------------- *)
+
+(* [encode_no_dot] above is one byte's worth of this.  The general fact is
+   what a token needs: every byte base64url produces is printable and is
+   neither a quote nor a backslash, so a token can travel inside the JSON
+   object [validate] takes without escaping -- which the printer could not do
+   for it. *)
+Lemma encode_ok_byte : forall bs b,
+  bytes_In b (Base64.encode bs) -> ok_byteb b = true.
+Proof.
+  intros bs b Hin.
+  unfold bytes_In, Base64.encode, ByteString.encode in Hin.
+  change (In b (BS.print (BS.parse
+    (Base64.Base64.encode Alphabet.url (BS.print bs))))) in Hin.
+  rewrite Base64.print_parse in Hin.
+  pose proof (Base64.Base64.encode_charset Alphabet.url (BS.print bs)) as Hchars.
+  apply Forall_forall with (x := b) in Hchars; [| exact Hin].
+  destruct Hchars as [Hchar | Hpad].
+  - vm_compute in Hchar.
+    repeat (destruct Hchar as [<- | Hchar]; [ reflexivity |]). contradiction.
+  - subst. reflexivity.
+Qed.
+
+Lemma ok_string_encode : forall bs, ok_string (Base64.encode bs).
+Proof.
+  intros bs. apply ok_string_pointwise. intros b. apply encode_ok_byte.
+Qed.
+
+Lemma ok_byteb_dot : ok_byteb dot = true.
+Proof. reflexivity. Qed.
+
+Lemma ok_string_header_b64 : ok_string Jwt.header_b64.
+Proof. unfold Jwt.header_b64. apply ok_string_encode. Qed.
+
+(* Stated over three variables rather than inlined into the token, and it has
+   to be: [Jwt.header_b64] is a closed term, so a unifier allowed to look
+   inside [BS.append] evaluates the whole base64 encoding of the header and
+   then matches against the resulting byte chain.  Opaque arguments keep the
+   append first-order. *)
+Lemma ok_string_dotted : forall a b c,
+  ok_string a -> ok_string b -> ok_string c ->
+  ok_string (BS.append (BS.append a (BS.String dot b)) (BS.String dot c)).
+Proof.
+  intros a b c Ha Hb Hc.
+  apply ok_string_append.
+  - apply ok_string_append;
+      [ exact Ha | apply ok_string_String; [ exact ok_byteb_dot | exact Hb ] ].
+  - apply ok_string_String; [ exact ok_byteb_dot | exact Hc ].
+Qed.
+
+(* So a minted token is a printable string: three base64url segments and the
+   two dots between them. *)
+Lemma sign_ok_string : forall ops k c t,
+  Jwt.sign ops k c = Some t -> ok_string t.
+Proof.
+  intros ops k c t H. unfold Jwt.sign in H. cbv zeta in H.
+  destruct (ed25519_sign ops k (Jwt.signing_input Jwt.header_b64
+    (Base64.encode (Json.print (Claims.to_json c))))) as [sg |] eqn:Es;
+    [| discriminate].
+  (* [injection] would hand back the token with the header's base64 evaluated,
+     which is the same blowup again.  Writing the equation out keeps the term
+     folded; conversion accepts the two spellings. *)
+  assert (E : t = BS.append (Jwt.signing_input Jwt.header_b64
+    (Base64.encode (Json.print (Claims.to_json c))))
+    (BS.String dot (Base64.encode sg)))
+    by (injection H as E'; symmetry; exact E').
+  rewrite E. unfold Jwt.signing_input.
+  apply ok_string_dotted;
+    [ exact ok_string_header_b64 | apply ok_string_encode | apply ok_string_encode ].
+Qed.
+
 (* ---- the trust boundary, as a hypothesis -------------------------------- *)
 
 (* The whole of what is assumed about Ed25519, and worth reading carefully for
@@ -360,22 +434,186 @@ Record crypto_spec (ops : crypto_ops) (k : Key.t) (pk : bytes) : Prop :=
       ed25519_verify ops pk msg sg = Some true
   }.
 
+(* ---- the pieces of the end-to-end statement ----------------------------- *)
+
+(* The email a login was asked for is safe to serialize.  This is where the
+   parser's soundness is spent: [ok_string] on a string that came out of a
+   request body is what rules out an email closing one claim and opening
+   another. *)
+Lemma login_email_ok : forall body email password,
+  parse_request RtLogin body = Login email password -> ok_string email.
+Proof.
+  intros body email password H. unfold parse_request in H.
+  destruct (Json.parse body) as [j |] eqn:Ej; [| discriminate].
+  destruct (Json.get_str (lit ("email"%string)) j) as [e |] eqn:Ee;
+    [| discriminate].
+  destruct (Json.get_str (lit ("password"%string)) j) as [pw |] eqn:Epw;
+    [| discriminate].
+  injection H as E1 E2. rewrite <- E1.
+  eapply parse_get_str_ok; [ exact Ej | exact Ee ].
+Qed.
+
+(* [login_check_token] says a token implies a verified credential; this says
+   which token it is. *)
+Lemma login_check_token_sign :
+  forall ops cfg found email now password t,
+    login_check ops cfg found email now password = Token t ->
+    Jwt.sign ops (cfg_key cfg)
+      (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)) = Some t.
+Proof.
+  intros ops cfg found email now password t.
+  unfold login_check. cbv zeta.
+  destruct found as [u |]; cbv beta iota.
+  - destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+      as [[|] |] eqn:Ha;
+      [ destruct (Jwt.sign ops (cfg_key cfg) _) as [t' |] eqn:Hs | | ];
+      intros H; try discriminate.
+    injection H as E. now rewrite <- E.
+  - destruct (argon2_verify ops password (cfg_dummy_salt cfg)
+                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+      intros H; discriminate.
+Qed.
+
+Lemma login_token_sign :
+  forall ops kv mail cfg now body email password token,
+    parse_request RtLogin body = Login email password ->
+    handle ops kv mail cfg now RtLogin body = Token token ->
+    Jwt.sign ops (cfg_key cfg)
+      (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)) = Some token.
+Proof.
+  intros ops kv mail cfg now body email password token Hp Ht.
+  unfold handle in Ht. rewrite Hp in Ht.
+  destruct (Store.stored kv email) as [u | |].
+  - eapply login_check_token_sign. exact Ht.
+  - rewrite login_check_none in Ht. discriminate.
+  - discriminate.
+Qed.
+
+(* The token's three segments, recovered.  [Jwt.sign] appends the signature to
+   the signing input, so the dots end up associated the other way from what
+   [split_on_three] wants. *)
+Lemma split_sign_shape : forall h p s,
+  ~ bytes_In dot h -> ~ bytes_In dot p -> ~ bytes_In dot s ->
+  split_on dot (BS.append (BS.append h (BS.String dot p)) (BS.String dot s))
+    = [h; p; s].
+Proof.
+  intros h p s Hh Hp Hs.
+  rewrite <- bytes_append_assoc. cbn [BS.append].
+  now apply split_on_three.
+Qed.
+
+(* Claims survive printing.  The four conditions [parse_print_obj] asks for,
+   discharged: the keys are literals, the strings come from the parser and the
+   configuration, and the two timestamps are bounded. *)
+Lemma claims_round_trip : forall c,
+  ok_string (c_sub c) -> ok_string (c_iss c) ->
+  (c_iat c < 10 ^ 32)%N -> (c_exp c < 10 ^ 32)%N ->
+  Json.parse (Json.print (Claims.to_json c)) = Some (Claims.to_json c).
+Proof.
+  intros [sub iss iat exp] Hsub Hiss Hiat Hexp.
+  cbn [c_sub c_iss c_iat c_exp] in Hsub, Hiss, Hiat, Hexp.
+  unfold Claims.to_json. cbn [c_sub c_iss c_iat c_exp].
+  apply parse_print_obj.
+  - cbn [Datatypes.length]. lia.
+  - apply Forall_cons; [ split; [ ok_literal | exact Hsub ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact Hiss ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact Hiat ] |].
+    apply Forall_cons; [ split; [ ok_literal | exact Hexp ] |].
+    apply Forall_nil.
+  - cbn. repeat split; (reflexivity || exact I).
+Qed.
+
+(* Verification, over opaque segments.  Stated this way for the same reason as
+   [ok_string_dotted]: [Jwt.header_b64] is closed, and a unifier allowed
+   inside it computes the header's base64 instead of matching. *)
+Lemma verify_parts : forall ops pk h p s sg c,
+  bytes_eqb h Jwt.header_b64 = true ->
+  ~ bytes_In dot h -> ~ bytes_In dot p -> ~ bytes_In dot s ->
+  Base64.decode s = Some sg ->
+  ed25519_verify ops pk (BS.append h (BS.String dot p)) sg = Some true ->
+  Base64.decode p = Some (Json.print (Claims.to_json c)) ->
+  Json.parse (Json.print (Claims.to_json c)) = Some (Claims.to_json c) ->
+  Jwt.verify ops pk
+    (BS.append (BS.append h (BS.String dot p)) (BS.String dot s)) = Some c.
+Proof.
+  intros ops pk h p s sg c Hh Hdh Hdp Hds Hs Hv Hp Hrt.
+  unfold Jwt.verify, Jwt.signing_input.
+  rewrite split_sign_shape by assumption.
+  cbv beta iota. rewrite Hh. cbv beta iota.
+  rewrite Hs. cbv beta iota.
+  rewrite Hv. cbv beta iota.
+  rewrite Hp. cbv beta iota.
+  rewrite Hrt. cbv beta iota.
+  apply of_json_to_json.
+Qed.
+
+(* A minted token verifies, and yields the claims it was minted from. *)
+Lemma verify_sign : forall ops cfg c t,
+  crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+  Json.parse (Json.print (Claims.to_json c)) = Some (Claims.to_json c) ->
+  Jwt.sign ops (cfg_key cfg) c = Some t ->
+  Jwt.verify ops (cfg_pubkey cfg) t = Some c.
+Proof.
+  intros ops cfg c t Hspec Hrt H.
+  unfold Jwt.sign in H. cbv zeta in H.
+  destruct (ed25519_sign ops (cfg_key cfg) (Jwt.signing_input Jwt.header_b64
+    (Base64.encode (Json.print (Claims.to_json c))))) as [sg |] eqn:Es;
+    [| discriminate].
+  assert (E : t = BS.append (Jwt.signing_input Jwt.header_b64
+    (Base64.encode (Json.print (Claims.to_json c))))
+    (BS.String dot (Base64.encode sg)))
+    by (injection H as E'; symmetry; exact E').
+  rewrite E. unfold Jwt.signing_input.
+  eapply verify_parts.
+  - apply bytes_eqb_refl.
+  - apply encode_no_dot.
+  - apply encode_no_dot.
+  - apply encode_no_dot.
+  - apply base64_round_trip.
+  - apply (sign_verifies ops (cfg_key cfg) (cfg_pubkey cfg) Hspec).
+    unfold Jwt.signing_input in Es. exact Es.
+  - apply base64_round_trip.
+  - exact Hrt.
+Qed.
+
+(* The request body [validate] is handed, parsed back.  A token is printable
+   ASCII, so the one-field object it travels in round trips. *)
+Lemma parse_token_request : forall token,
+  ok_string token ->
+  parse_request RtValidate
+    (Json.print (JObj [(lit ("token"%string), JStr token)])) = Validate token.
+Proof.
+  intros token Hok. unfold parse_request.
+  rewrite parse_print_obj.
+  - reflexivity.
+  - cbn [Datatypes.length]. lia.
+  - apply Forall_cons; [ split; [ ok_literal | exact Hok ] |]. apply Forall_nil.
+  - cbn. repeat split; (reflexivity || exact I).
+Qed.
+
 (* ---- the end-to-end statement ------------------------------------------- *)
 
 (* A token minted for an email and validated before it expires yields claims
    naming that email.
 
-   What this needs:
-     - [base64_round_trip], proved above
-     - [encode_no_dot] and [split_on_three], proved above
-     - [of_json_to_json], proved above
-     - [Json.parse (Json.print j) = Some j] for well-formed [j], which is the
-       one piece still missing
-     - [crypto_spec], assumed
-     - [now + d < now + cfg_ttl cfg], which is [lia]. *)
+   Two hypotheses are not provable and so are stated.  The issuer has to be a
+   printable ASCII string, because the printer does not escape, and
+   [now + cfg_ttl cfg] has to fit in 32 decimal digits, because the numeral
+   round trip is bounded.  Both are the host's to satisfy when it installs the
+   configuration; neither is a property of [handle].
+
+   What this rests on besides them:
+     - [login_email_ok], so the email prints back
+     - [claims_round_trip], the JSON round trip applied to a claim set
+     - [verify_sign]: [base64_round_trip], [encode_no_dot], [split_on_three]
+       and [of_json_to_json]
+     - [crypto_spec], assumed: signing produces a verifiable signature
+     - [d < cfg_ttl cfg], which is [lia]. *)
 Theorem login_then_validate :
   forall ops kv mail cfg now d email password body token,
     crypto_spec ops (cfg_key cfg) (cfg_pubkey cfg) ->
+    ok_string (cfg_iss cfg) ->
+    (now + cfg_ttl cfg < 10 ^ 32)%N ->
     parse_request RtLogin body = Login email password ->
     handle ops kv mail cfg now RtLogin body = Token token ->
     (d < cfg_ttl cfg)%N ->
@@ -384,8 +622,35 @@ Theorem login_then_validate :
         (Json.print (JObj [(lit ("token"%string), JStr token)]))
         = Validity true (Some c)
       /\ c_sub c = email.
-Admitted.
+Proof.
+  intros ops kv mail cfg now d email password body token
+    Hspec Hiss Hbound Hp Ht Hd.
+  assert (Hemail : ok_string email) by (eapply login_email_ok; exact Hp).
+  assert (Hsign : Jwt.sign ops (cfg_key cfg)
+    (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)) = Some token)
+    by (eapply login_token_sign; [ exact Hp | exact Ht ]).
+  assert (Hrt : Json.parse (Json.print (Claims.to_json
+    (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg))))
+    = Some (Claims.to_json (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)))).
+  { apply claims_round_trip; cbn [c_sub c_iss c_iat c_exp];
+      [ exact Hemail | exact Hiss | lia | exact Hbound ]. }
+  assert (Hver : Jwt.verify ops (cfg_pubkey cfg) token
+    = Some (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)))
+    by (eapply verify_sign; [ exact Hspec | exact Hrt | exact Hsign ]).
+  exists (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)).
+  split; [| reflexivity].
+  unfold handle.
+  rewrite (parse_token_request token
+    (sign_ok_string ops (cfg_key cfg) _ token Hsign)).
+  rewrite Hver. unfold Claims.fresh. cbn [c_iss c_exp].
+  rewrite bytes_eqb_refl.
+  replace ((now + d) <? (now + cfg_ttl cfg))%N with true
+    by (symmetry; apply N.ltb_lt; lia).
+  reflexivity.
+Qed.
 
-(* The honesty check: this prints what the end-to-end claim still rests on.
-   One axiom, the [Admitted] above, until the JSON round trip lands. *)
+(* The honesty check: this prints what the end-to-end claim rests on.  It
+   should report no axioms -- the cryptographic assumption travels in
+   [crypto_spec], as a hypothesis of the theorem rather than as an axiom of
+   the development. *)
 Print Assumptions login_then_validate.

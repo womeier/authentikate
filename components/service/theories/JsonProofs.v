@@ -9,20 +9,23 @@
 (*  the fuel bookkeeping and the trailing-remainder generalisation out of     *)
 (*  it.                                                                       *)
 (*                                                                            *)
-(*  What is proved so far is the bottom of that: decimal numerals round       *)
-(*  trip, and [parse_value] reads back a printed string or a printed number.  *)
-(*  Both are stated with an arbitrary remainder after the value, because in   *)
-(*  an object a value is always followed by a comma or a brace -- that        *)
-(*  remainder is what the field-level lemma will thread through.              *)
+(*  It is built from the bottom: decimal numerals round trip, and             *)
+(*  [parse_value] reads back a printed string, number or boolean -- each      *)
+(*  stated with an arbitrary remainder after the value, because in an object  *)
+(*  a value is always followed by a comma or a brace.  Then the field list,   *)
+(*  whose induction carries [parse_fields]'s accumulator and the              *)
+(*  distinctness of the keys it has already seen.  [print]'s object case      *)
+(*  uses an inner [fix go] rather than a top-level function, so a             *)
+(*  [print_fields] is defined here and shown to agree with it.                *)
 (*                                                                            *)
-(*  Still to come: the field list.  [print]'s object case uses an inner [fix  *)
-(*  go] rather than a top-level function, so that needs a [print_fields]      *)
-(*  defined here and shown to agree with it, and then an induction carrying   *)
-(*  [parse_fields]'s accumulator and the distinctness of the keys it has      *)
-(*  already seen.                                                             *)
+(*  The last section runs the other way, and is the one with security         *)
+(*  content: every string [parse] returns is printable, quote-free and        *)
+(*  backslash-free.  So a string that arrived in a request body can be        *)
+(*  printed back into a claim set without escaping, and an email cannot       *)
+(*  close one claim and open another.                                         *)
 (******************************************************************************)
 
-From Stdlib Require Import List NArith ZArith Lia Strings.Byte Strings.String.
+From Stdlib Require Import Bool List NArith ZArith Lia Strings.Byte Strings.String.
 From Authentikate Require Import Bytes Json.
 
 Import ListNotations.
@@ -469,4 +472,250 @@ Proof.
   rewrite <- (bytes_append_empty (print (JObj fs))).
   rewrite (parse_value_obj fs 15 BS.EmptyString) by assumption.
   reflexivity.
+Qed.
+
+(* ---- [ok_string], byte by byte ------------------------------------------ *)
+
+(* The three conjuncts of [ok_string] are one condition on every byte, and
+   restating them that way is what makes the predicate usable from both ends:
+   the parser establishes it one byte at a time, and for a literal key it is
+   settled by conversion. *)
+Definition ok_byteb (b : byte) : bool :=
+  andb (negb (Byte.eqb b quote))
+       (andb (negb (Byte.eqb b backslash)) (printable_ascii b)).
+
+Lemma ok_byteb_quote (b : byte) : ok_byteb b = true -> b <> quote.
+Proof. intros H E. subst. vm_compute in H. discriminate. Qed.
+
+Lemma ok_byteb_backslash (b : byte) : ok_byteb b = true -> b <> backslash.
+Proof. intros H E. subst. vm_compute in H. discriminate. Qed.
+
+Lemma ok_byteb_printable (b : byte) :
+  ok_byteb b = true -> printable_ascii b = true.
+Proof.
+  unfold ok_byteb. intros H.
+  apply andb_true_iff in H as [_ H]. now apply andb_true_iff in H as [_ H].
+Qed.
+
+Lemma ok_string_pointwise (s : bytes) :
+  (forall b, bytes_In b s -> ok_byteb b = true) <-> ok_string s.
+Proof.
+  split.
+  - intros H. split; [| split].
+    + intros Hin. exact (ok_byteb_quote quote (H quote Hin) eq_refl).
+    + intros Hin. exact (ok_byteb_backslash backslash (H backslash Hin) eq_refl).
+    + intros b Hin. now apply ok_byteb_printable, H.
+  - intros [Hq [Hb Ha]] c Hin. unfold ok_byteb.
+    rewrite byte_eqb_false by (intro E; subst; now apply Hq).
+    rewrite byte_eqb_false by (intro E; subst; now apply Hb).
+    cbn [negb andb]. now apply Ha.
+Qed.
+
+Fixpoint ok_stringb (s : bytes) : bool :=
+  match s with
+  | BS.EmptyString => true
+  | BS.String b rest => andb (ok_byteb b) (ok_stringb rest)
+  end.
+
+Lemma ok_stringb_pointwise : forall s b,
+  ok_stringb s = true -> bytes_In b s -> ok_byteb b = true.
+Proof.
+  induction s as [| c s IH]; intros b H Hin.
+  - destruct Hin.
+  - cbn in H. apply andb_true_iff in H as [Hc Hs].
+    unfold bytes_In in Hin. cbn in Hin.
+    destruct Hin as [<- | Hin]; [ exact Hc | now apply (IH b) ].
+Qed.
+
+(* Which is how a literal key discharges its side condition: [ok_stringb] of a
+   concrete string is a closed computation. *)
+Lemma ok_stringb_ok (s : bytes) : ok_stringb s = true -> ok_string s.
+Proof.
+  intros H. apply ok_string_pointwise. intros b. now apply ok_stringb_pointwise.
+Qed.
+
+Ltac ok_literal := apply ok_stringb_ok; vm_compute; reflexivity.
+
+Lemma ok_string_empty : ok_string BS.EmptyString.
+Proof. ok_literal. Qed.
+
+Lemma ok_string_String (b : byte) (s : bytes) :
+  ok_byteb b = true -> ok_string s -> ok_string (BS.String b s).
+Proof.
+  intros Hb Hs. apply ok_string_pointwise. intros c Hin.
+  unfold bytes_In in Hin. cbn in Hin.
+  destruct Hin as [<- | Hin]; [ exact Hb |].
+  now apply (proj2 (ok_string_pointwise s) Hs).
+Qed.
+
+Lemma ok_string_append (a b : bytes) :
+  ok_string a -> ok_string b -> ok_string (BS.append a b).
+Proof.
+  intros Ha Hb. apply ok_string_pointwise. intros c Hc.
+  apply bytes_In_append in Hc as [Hc | Hc].
+  - now apply (proj2 (ok_string_pointwise a) Ha).
+  - now apply (proj2 (ok_string_pointwise b) Hb).
+Qed.
+
+(* ---- what the parser returns -------------------------------------------- *)
+
+(* [ok_string] for every string anywhere in the result.  This is the half of
+   the round trip that runs the other way: [parse_print_obj] says a
+   well-formed object survives printing, and this says the parser only ever
+   produces well-formed strings -- so a string that arrived in a request body
+   can be printed back into a claim set without escaping.  Which is also the
+   no-injection argument: an email cannot carry a quote, so it cannot close
+   one claim and open another. *)
+Inductive json_ok : json -> Prop :=
+  | json_ok_str : forall s, ok_string s -> json_ok (JStr s)
+  | json_ok_num : forall n, json_ok (JNum n)
+  | json_ok_bool : forall v, json_ok (JBool v)
+  | json_ok_obj : forall fs, fields_ok fs -> json_ok (JObj fs)
+with fields_ok : list (bytes * json) -> Prop :=
+  | fields_ok_nil : fields_ok []
+  | fields_ok_cons : forall k v rest,
+      ok_string k -> json_ok v -> fields_ok rest -> fields_ok ((k, v) :: rest).
+
+Lemma fields_ok_inv : forall k v rest,
+  fields_ok ((k, v) :: rest) -> ok_string k /\ json_ok v /\ fields_ok rest.
+Proof. intros k v rest H. inversion H; subst. auto. Qed.
+
+Lemma fields_ok_app : forall fs gs,
+  fields_ok fs -> fields_ok gs -> fields_ok (fs ++ gs).
+Proof.
+  induction fs as [| [k v] fs IH]; intros gs Hf Hg; [ exact Hg |].
+  apply fields_ok_inv in Hf as [Hk [Hv Hrest]].
+  cbn [app]. apply fields_ok_cons; [ exact Hk | exact Hv | now apply IH ].
+Qed.
+
+(* [parse_fields] returns [rev acc ++ fs], so the accumulator has to come back
+   out of the reversal. *)
+Lemma fields_ok_rev : forall fs, fields_ok fs -> fields_ok (rev fs).
+Proof.
+  induction fs as [| [k v] fs IH]; intros H; [ exact fields_ok_nil |].
+  apply fields_ok_inv in H as [Hk [Hv Hrest]].
+  cbn [rev]. apply fields_ok_app; [ now apply IH |].
+  apply fields_ok_cons; [ exact Hk | exact Hv | exact fields_ok_nil ].
+Qed.
+
+Lemma ok_string_rev_empty : ok_string (bytes_rev BS.EmptyString).
+Proof. exact ok_string_empty. Qed.
+
+(* Every byte [parse_string] accepts passed all three of its tests, so the
+   accumulator it reverses is well-formed if it started that way. *)
+Lemma parse_string_ok : forall input acc s rest,
+  ok_string (bytes_rev acc) ->
+  parse_string input acc = Some (s, rest) ->
+  ok_string s.
+Proof.
+  induction input as [| b input IH]; intros acc s rest Hacc H; [ discriminate |].
+  cbn [parse_string] in H.
+  destruct (Byte.eqb b quote) eqn:Eq.
+  - injection H as E1 E2. subst. exact Hacc.
+  - destruct (Byte.eqb b backslash) eqn:Eb; [ discriminate |].
+    destruct (printable_ascii b) eqn:Ep; [| discriminate].
+    apply (IH (BS.String b acc) s rest); [| exact H].
+    rewrite bytes_rev_cons. apply ok_string_append; [ exact Hacc |].
+    apply ok_string_String; [| exact ok_string_empty].
+    unfold ok_byteb. now rewrite Eq, Eb, Ep.
+Qed.
+
+(* The two parsers are mutually recursive on one fuel, so their soundness is
+   one induction on that fuel and a conjunction. *)
+Lemma parse_ok : forall fuel,
+  (forall input j rest, parse_value fuel input = Some (j, rest) -> json_ok j) /\
+  (forall input acc fs rest,
+     fields_ok acc ->
+     parse_fields fuel input acc = Some (fs, rest) -> fields_ok fs).
+Proof.
+  induction fuel as [| fuel [IHv IHf]].
+  - split; intros; discriminate.
+  - split.
+    + intros input j rest H. cbn [parse_value] in H.
+      destruct (skip_ws input) as [| b r]; [ discriminate |].
+      destruct (Byte.eqb b quote) eqn:Eq.
+      * destruct (parse_string r BS.EmptyString) as [[s r'] |] eqn:Es;
+          [| discriminate].
+        injection H as E1 E2. subst. apply json_ok_str.
+        eapply parse_string_ok; [ exact ok_string_rev_empty | exact Es ].
+      * destruct (Byte.eqb b lbrace) eqn:El.
+        -- destruct (parse_fields fuel r []) as [[fs r'] |] eqn:Ef;
+             [| discriminate].
+           injection H as E1 E2. subst. apply json_ok_obj.
+           eapply IHf; [ exact fields_ok_nil | exact Ef ].
+        -- destruct (strip_prefix (lit ("true"%string)) (BS.String b r)) as [r' |];
+             [ injection H as E1 E2; subst; apply json_ok_bool |].
+           destruct (strip_prefix (lit ("false"%string)) (BS.String b r)) as [r' |];
+             [ injection H as E1 E2; subst; apply json_ok_bool |].
+           destruct (digit_val b) as [v |]; [| discriminate].
+           destruct (take_digits (BS.String b r) BS.EmptyString) as [ds r'].
+           destruct (N_of_decimal ds) as [n |]; [| discriminate].
+           injection H as E1 E2. subst. apply json_ok_num.
+    + intros input acc fs rest Hacc H. cbn [parse_fields] in H.
+      destruct (skip_ws input) as [| b r]; [ discriminate |].
+      destruct (Byte.eqb b rbrace) eqn:Er.
+      * injection H as E1 E2. subst. now apply fields_ok_rev.
+      * destruct (Byte.eqb b quote) eqn:Eq; [| discriminate].
+        destruct (parse_string r BS.EmptyString) as [[k r1] |] eqn:Ek;
+          [| discriminate].
+        destruct (has_key k acc) eqn:Ehk; [ discriminate |].
+        destruct (skip_ws r1) as [| c r2]; [ discriminate |].
+        destruct (Byte.eqb c colon) eqn:Ec; [| discriminate].
+        destruct (parse_value fuel r2) as [[v r3] |] eqn:Ev; [| discriminate].
+        destruct (skip_ws r3) as [| d r4]; [ discriminate |].
+        assert (Hk : ok_string k)
+          by (eapply parse_string_ok; [ exact ok_string_rev_empty | exact Ek ]).
+        assert (Hv : json_ok v) by (eapply IHv; exact Ev).
+        destruct (Byte.eqb d comma) eqn:Ed.
+        -- destruct (skip_ws r4) as [| e r5]; [ discriminate |].
+           destruct (Byte.eqb e quote) eqn:Ee; [| discriminate].
+           eapply IHf; [| exact H].
+           apply fields_ok_cons; [ exact Hk | exact Hv | exact Hacc ].
+        -- destruct (Byte.eqb d rbrace) eqn:Erb; [| discriminate].
+           (* [cbn] has already pushed the reversal through the cons, so the
+              goal is [rev acc ++ [(k, v)]] rather than [rev ((k, v) :: acc)]. *)
+           injection H as E1 E2. subst.
+           apply fields_ok_app; [ now apply fields_ok_rev |].
+           apply fields_ok_cons; [ exact Hk | exact Hv | exact fields_ok_nil ].
+Qed.
+
+Theorem parse_json_ok : forall body j, Json.parse body = Some j -> json_ok j.
+Proof.
+  intros body j H. unfold Json.parse in H.
+  destruct (parse_value 16 body) as [[j' r] |] eqn:E; [| discriminate].
+  destruct (skip_ws r); [| discriminate].
+  injection H as E1. subst.
+  eapply (proj1 (parse_ok 16)). exact E.
+Qed.
+
+Lemma field_json_ok : forall fs k v,
+  fields_ok fs -> field k fs = Some v -> json_ok v.
+Proof.
+  induction fs as [| [k' v'] fs IH]; intros k v H Hf; [ discriminate |].
+  apply fields_ok_inv in H as [Hk [Hv Hrest]].
+  cbn [field] in Hf. destruct (bytes_eqb k k').
+  - injection Hf as E. subst. exact Hv.
+  - now apply (IH k).
+Qed.
+
+(* The form the service needs: a string read out of a parsed request body is
+   safe to print. *)
+Theorem get_str_ok : forall j k s,
+  json_ok j -> Json.get_str k j = Some s -> ok_string s.
+Proof.
+  intros j k s Hj H. unfold Json.get_str, Json.get in H.
+  destruct j as [| | | fs]; try discriminate.
+  destruct (field k fs) as [v |] eqn:Ef; [| discriminate].
+  destruct v as [s' | | |]; try discriminate.
+  injection H as E. rewrite <- E.
+  assert (Hfs : fields_ok fs) by (inversion Hj; assumption).
+  pose proof (field_json_ok fs k (JStr s') Hfs Ef) as Hv.
+  inversion Hv; assumption.
+Qed.
+
+Corollary parse_get_str_ok : forall body j k s,
+  Json.parse body = Some j -> Json.get_str k j = Some s -> ok_string s.
+Proof.
+  intros body j k s Hp Hg.
+  eapply get_str_ok; [ eapply parse_json_ok; exact Hp | exact Hg ].
 Qed.
