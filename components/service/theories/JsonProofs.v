@@ -1,13 +1,13 @@
 (******************************************************************************)
 (*  What the JSON round trip is made of                                       *)
 (*                                                                            *)
-(*  The end-to-end statement in Proofs.v needs [parse (print j) = Some j],    *)
-(*  but only for the two shapes that actually occur: a claim set, and the     *)
-(*  one-field object a token travels in.  So there is no general round trip   *)
-(*  here and no well-formedness predicate over [json] -- restricting to flat  *)
-(*  objects whose values are strings and numbers is what keeps the nesting,   *)
-(*  the fuel bookkeeping and the trailing-remainder generalisation out of     *)
-(*  it.                                                                       *)
+(*  The statements in Proofs.v need [parse (print j) = Some j], and they need  *)
+(*  it at two depths: a claim set or the one-field object a token travels in, *)
+(*  and the validation response, which carries a claim set inside it.  So    *)
+(*  the round trip here is the general one -- [parse_print], over a           *)
+(*  well-formedness predicate [value_ok] and a fuel measure [value_fuel]      *)
+(*  that both recurse through objects -- and the flat statement most of the   *)
+(*  development uses is a corollary of it rather than a separate proof.       *)
 (*                                                                            *)
 (*  It is built from the bottom: decimal numerals round trip, and             *)
 (*  [parse_value] reads back a printed string, number or boolean -- each      *)
@@ -338,9 +338,10 @@ Qed.
 
 (* ---- what a round-trippable object looks like --------------------------- *)
 
-(* Flat objects only.  [JObj] is excluded rather than handled: nesting would
-   force the fuel bookkeeping and a remainder generalisation through
-   [parse_value], and neither shape this service prints is nested. *)
+(* The flat case first, because it is the one most of this service prints: a
+   value that is not an object at all.  Nesting is handled below, and
+   [parse_print_obj] -- the statement the rest of the development uses -- is
+   recovered from the nested theorem rather than proved twice. *)
 Definition leaf_ok (v : json) : Prop :=
   match v with
   | JStr s => ok_string s
@@ -364,114 +365,225 @@ Fixpoint keys_fresh (fs : list (bytes * json)) (acc : list (bytes * json))
   | kv :: rest => has_key (fst kv) acc = false /\ keys_fresh rest (kv :: acc)
   end.
 
-Lemma parse_value_leaf : forall fuel v rest,
-  leaf_ok v -> no_digit_next rest ->
-  parse_value (S fuel) (BS.append (print v) rest) = Some (v, rest).
+(* ---- how much fuel a value needs ---------------------------------------- *)
+
+(* [parse_value] and [parse_fields] share one fuel counter and decrement it
+   both per nesting level and per field, so "deep enough" and "wide enough"
+   are not separate conditions: what a value costs is a single number, and
+   this is it.  An object costs one for itself plus what its field list
+   costs; a field list costs one for the field plus the worst of its value
+   and its tail.
+
+   Written with an inner [let fix] for the same reason [print] is: the guard
+   checker will not take a mutual [Fixpoint] whose two halves decrease on
+   [json] and on [list (bytes * json)].  [fields_fuel] is the same recursion
+   spelled at the top level, and [value_fuel_obj] says they agree -- by
+   conversion, which is luck of the same kind as [print_JObj]'s. *)
+Fixpoint value_fuel (j : json) : nat :=
+  match j with
+  | JObj fs =>
+      S (let fix go (l : list (bytes * json)) : nat :=
+           match l with
+           | [] => 1%nat
+           | (_, v) :: rest => S (Nat.max (value_fuel v) (go rest))
+           end
+         in go fs)
+  | _ => 1%nat
+  end.
+
+Fixpoint fields_fuel (fs : list (bytes * json)) : nat :=
+  match fs with
+  | [] => 1%nat
+  | (_, v) :: rest => S (Nat.max (value_fuel v) (fields_fuel rest))
+  end.
+
+Lemma value_fuel_obj : forall fs, value_fuel (JObj fs) = S (fields_fuel fs).
+Proof. reflexivity. Qed.
+
+Lemma value_fuel_pos : forall j, (1 <= value_fuel j)%nat.
+Proof. intros [| | | fs]; cbn; lia. Qed.
+
+Lemma fields_fuel_pos : forall fs, (1 <= fields_fuel fs)%nat.
+Proof. intros [| [k v] fs]; cbn; lia. Qed.
+
+(* ---- what survives printing, at any depth -------------------------------- *)
+
+(* [leaf_ok] and [field_ok], generalised through the object case: strings are
+   printable and escape-free, numbers fit the numeral round trip, and every
+   object -- however deep -- has well-formed keys that are fresh in its own
+   field list.  Freshness is per object rather than global: two different
+   objects may each carry a [sub], and the parser only ever compares a key
+   against the siblings it has already read. *)
+Inductive value_ok : json -> Prop :=
+  | value_ok_str : forall s, ok_string s -> value_ok (JStr s)
+  | value_ok_num : forall n, n < 10 ^ 32 -> value_ok (JNum n)
+  | value_ok_bool : forall b, value_ok (JBool b)
+  | value_ok_obj : forall fs,
+      value_fields_ok fs -> keys_fresh fs [] -> value_ok (JObj fs)
+with value_fields_ok : list (bytes * json) -> Prop :=
+  | value_fields_nil : value_fields_ok []
+  | value_fields_cons : forall k v rest,
+      ok_string k -> value_ok v -> value_fields_ok rest ->
+      value_fields_ok ((k, v) :: rest).
+
+Lemma value_fields_inv : forall k v rest,
+  value_fields_ok ((k, v) :: rest) ->
+  ok_string k /\ value_ok v /\ value_fields_ok rest.
+Proof. intros k v rest H. inversion H; subst. auto. Qed.
+
+(* ---- the round trip, by induction on the fuel ---------------------------- *)
+
+(* The two halves have to be proved together, because the parser's two
+   functions call each other; the induction is on [fuel] rather than on the
+   value, since that is the argument every one of those calls decreases.  At
+   fuel zero both halves are vacuous: [value_fuel] and [fields_fuel] are at
+   least one.
+
+   The field half carries the accumulator, and says [rev acc ++ fs], which is
+   the shape [parse_fields] builds: it reverses what it has collected and
+   appends what is left. *)
+Lemma parse_print_fuel : forall fuel,
+  (forall j rest,
+     value_ok j -> (value_fuel j <= fuel)%nat -> no_digit_next rest ->
+     parse_value fuel (BS.append (print j) rest) = Some (j, rest))
+  /\ (forall fs acc rest,
+     value_fields_ok fs -> (fields_fuel fs <= fuel)%nat -> keys_fresh fs acc ->
+     parse_fields fuel (BS.append (print_fields fs) (BS.String rbrace rest)) acc
+       = Some (rev acc ++ fs, rest)).
 Proof.
-  intros fuel v rest Hv Hr. destruct v as [s | n | b | fs].
-  - cbn [print]. now apply parse_value_str.
-  - cbn [print]. now apply parse_value_num.
-  - now apply parse_value_bool.
-  - now exfalso.
+  induction fuel as [| f [IHv IHf]].
+  - split.
+    + intros j rest Hok Hfu Hrest. exfalso. pose proof (value_fuel_pos j). lia.
+    + intros fs acc rest Hok Hfu Hk. exfalso.
+      pose proof (fields_fuel_pos fs). lia.
+  - split.
+    + intros j rest Hok Hfu Hrest.
+      destruct j as [s | n | b | fs].
+      * inversion Hok; subst. cbn [print]. now apply parse_value_str.
+      * inversion Hok; subst. cbn [print]. now apply parse_value_num.
+      * now apply parse_value_bool.
+      * inversion Hok as [| | | fs' Hfs Hk]; subst.
+        rewrite value_fuel_obj in Hfu.
+        rewrite print_JObj. cbn [BS.append].
+        rewrite <- bytes_append_assoc. cbn [BS.append].
+        cbn -[parse_fields print_fields].
+        rewrite IHf by (lia || assumption).
+        cbn [rev app]. reflexivity.
+    + intros fs acc rest Hok Hfu Hk.
+      destruct fs as [| [k v] fs'].
+      * cbn [print_fields BS.append]. cbn -[has_key]. now rewrite app_nil_r.
+      * apply value_fields_inv in Hok as [Hkok [Hvok Hok']].
+        destruct Hk as [Hacc Hk]. cbn [fst snd] in Hacc.
+        cbn [fields_fuel] in Hfu.
+        destruct fs' as [| p fs''].
+        -- (* the last field: a brace follows the value, not a comma *)
+           rewrite print_fields_one_app.
+           assert (Hpv : parse_value f (BS.append (print v) (BS.String rbrace rest))
+                         = Some (v, BS.String rbrace rest))
+             by (apply IHv; [ exact Hvok | lia | reflexivity ]).
+           (* [cbn] normalises [rbrace] and friends to their byte literals in
+              the goal, so the hypotheses have to be normalised the same way
+              or the rewrites find nothing. *)
+           cbn -[parse_value print] in Hpv.
+           cbn -[parse_string parse_value print].
+           rewrite parse_string_print by exact Hkok.
+           cbn [bytes_rev BS.rev BS.append].
+           rewrite Hacc.
+           cbn -[parse_value print].
+           rewrite Hpv. cbn [rev]. reflexivity.
+        -- (* a comma, and then the next key has to open with a quote -- the
+              parser's own no-trailing-comma check, which is why the tail is
+              kept opaque here and only its head byte is supplied. *)
+           rewrite print_fields_cons_app.
+           remember (BS.append (print_fields (p :: fs'')) (BS.String rbrace rest))
+             as R eqn:HR.
+           destruct (print_fields_cons_head p fs'' (BS.String rbrace rest))
+             as [tl Htl].
+           assert (Hsk : skip_ws R = BS.String quote tl)
+             by (rewrite HR, Htl; apply skip_ws_head; reflexivity).
+           assert (Hpv : parse_value f (BS.append (print v) (BS.String comma R))
+                         = Some (v, BS.String comma R))
+             by (apply IHv; [ exact Hvok | lia | reflexivity ]).
+           cbn -[parse_value print] in Hpv. cbn -[skip_ws] in Hsk.
+           cbn -[parse_string parse_value print].
+           rewrite parse_string_print by exact Hkok.
+           cbn [bytes_rev BS.rev BS.append].
+           rewrite Hacc.
+           cbn -[parse_value print].
+           rewrite Hpv.
+           (* [skip_ws] stays unblocked so it reduces past the concrete comma,
+              and then sticks on [R] of its own accord. *)
+           cbn -[parse_fields parse_value].
+           rewrite Hsk. cbn -[parse_fields parse_value]. subst R.
+           rewrite IHf by (cbn [fields_fuel] in *; (lia || assumption)).
+           cbn [rev]. now rewrite <- app_assoc.
 Qed.
 
-(* ---- the field list, parsed back ---------------------------------------- *)
+(* ---- and the theorem --------------------------------------------------- *)
 
-(* The induction that carries the accumulator.  [rev acc ++ fs] is the shape
-   [parse_fields] builds: it reverses what it has collected and appends what
-   is left, so the statement has to say that rather than just [fs]. *)
-Lemma parse_fields_print : forall fs fuel acc rest,
-  (List.length fs < fuel)%nat ->
-  Forall field_ok fs ->
-  keys_fresh fs acc ->
-  parse_fields fuel (BS.append (print_fields fs) (BS.String rbrace rest)) acc
-    = Some (rev acc ++ fs, rest).
+(* [parse] fixes the fuel at 16 and rejects trailing bytes, so the budget is
+   a number here rather than a parameter.  Sixteen is not much: a claim set
+   inside a validation response costs nine. *)
+Theorem parse_print : forall j,
+  value_ok j -> (value_fuel j <= 16)%nat -> Json.parse (print j) = Some j.
 Proof.
-  induction fs as [| [k v] fs IH]; intros fuel acc rest Hf Hok Hk.
-  - destruct fuel as [| fuel]; [ cbn in Hf; lia | ].
-    cbn [print_fields BS.append]. cbn -[has_key].
-    now rewrite app_nil_r.
-  - cbn [Datatypes.length] in Hf.
-    destruct fuel as [| fuel]; [ lia | ].
-    destruct fuel as [| g]; [ lia | ].
-    destruct Hk as [Hacc Hk].
-    apply Forall_inv_tail in Hok as Hok'.
-    apply Forall_inv in Hok. destruct Hok as [Hkok Hvok]. cbn [fst snd] in *.
-    (* Freeze the inner fuel.  No [cbn] blocklist can stop the recursive call
-       from unfolding -- inside the body it is a de Bruijn reference to the
-       [fix], not the constant [parse_fields] -- but the [fix] only reduces
-       when its fuel argument is a constructor, so keeping that argument a
-       variable does what the blocklist cannot.  The [parse_value] step then
-       gets its [S _] back in a side proof, where it does no harm. *)
-    remember (S g) as f eqn:HF.
-    destruct fs as [| p fs'].
-    + (* the last field: a brace follows the value, not a comma *)
-      rewrite print_fields_one_app.
-       assert (Hpv : parse_value f (BS.append (print v) (BS.String rbrace rest))
-                     = Some (v, BS.String rbrace rest))
-        by (rewrite HF; apply parse_value_leaf; [ exact Hvok | reflexivity ]).
-      (* [cbn] normalises [rbrace] and friends to their byte literals in the
-         goal, so the hypotheses have to be normalised the same way or the
-         rewrites find nothing. *)
-      cbn -[parse_value print] in Hpv.
-      cbn -[parse_string parse_value print].
-      rewrite parse_string_print by exact Hkok. cbn [bytes_rev BS.rev BS.append].
-      rewrite Hacc.
-      cbn -[parse_value print].
-      rewrite Hpv. cbn [rev]. reflexivity.
-    + (* a comma, and then the next key has to open with a quote -- the
-         parser's own no-trailing-comma check, which is why the tail is kept
-         opaque here and only its head byte is supplied. *)
-      rewrite print_fields_cons_app.
-      remember (BS.append (print_fields (p :: fs')) (BS.String rbrace rest)) as R eqn:HR.
-      destruct (print_fields_cons_head p fs' (BS.String rbrace rest)) as [tl Htl].
-      assert (Hsk : skip_ws R = BS.String quote tl)
-        by (rewrite HR, Htl; apply skip_ws_head; reflexivity).
-       assert (Hpv : parse_value f (BS.append (print v) (BS.String comma R))
-                     = Some (v, BS.String comma R))
-        by (rewrite HF; apply parse_value_leaf; [ exact Hvok | reflexivity ]).
-      cbn -[parse_value print] in Hpv. cbn -[skip_ws] in Hsk.
-      cbn -[parse_string parse_value print].
-      rewrite parse_string_print by exact Hkok. cbn [bytes_rev BS.rev BS.append].
-      rewrite Hacc.
-      cbn -[parse_value print].
-      rewrite Hpv.
-      (* [skip_ws] stays unblocked so it reduces past the concrete comma, and
-         then sticks on [R] of its own accord. *)
-      cbn -[parse_fields parse_value].
-      rewrite Hsk. cbn -[parse_fields parse_value]. subst R.
-      rewrite IH by (cbn [Datatypes.length] in *; (lia || assumption)).
-      cbn [rev]. now rewrite <- app_assoc.
-Qed.
-
-(* ---- and the object ----------------------------------------------------- *)
-
-Lemma parse_value_obj : forall fs fuel rest,
-  (List.length fs < fuel)%nat ->
-  Forall field_ok fs ->
-  keys_fresh fs [] ->
-  parse_value (S fuel) (BS.append (print (JObj fs)) rest) = Some (JObj fs, rest).
-Proof.
-  intros fs fuel rest Hf Hok Hk.
-  rewrite print_JObj. cbn [BS.append]. rewrite <- bytes_append_assoc. cbn [BS.append].
-  cbn -[parse_fields print_fields].
-  rewrite parse_fields_print by assumption.
+  intros j Hok Hfu. unfold Json.parse.
+  rewrite <- (bytes_append_empty (print j)).
+  rewrite (proj1 (parse_print_fuel 16)) by (assumption || exact I).
   reflexivity.
 Qed.
 
-(* The round trip, for the objects this service actually prints.  [parse]
-   fixes the fuel at 16 and rejects trailing bytes, so the field count is
-   bounded here rather than left as a parameter. *)
+(* ---- the flat case, recovered ------------------------------------------- *)
+
+Lemma leaf_ok_value_ok : forall v, leaf_ok v -> value_ok v.
+Proof.
+  intros [s | n | b | fs] H.
+  - now apply value_ok_str.
+  - now apply value_ok_num.
+  - apply value_ok_bool.
+  - now exfalso.
+Qed.
+
+Lemma leaf_fuel : forall v, leaf_ok v -> value_fuel v = 1%nat.
+Proof.
+  intros [s | n | b | fs] H;
+    [ reflexivity | reflexivity | reflexivity | now exfalso ].
+Qed.
+
+Lemma fields_value_ok : forall fs, Forall field_ok fs -> value_fields_ok fs.
+Proof.
+  induction fs as [| [k v] fs IH]; intros H; [ apply value_fields_nil |].
+  apply Forall_inv_tail in H as Ht. apply Forall_inv in H as [Hk Hv].
+  cbn [fst snd] in Hk, Hv.
+  apply value_fields_cons;
+    [ exact Hk | now apply leaf_ok_value_ok | now apply IH ].
+Qed.
+
+(* A flat object's whole cost is its field count, which is what makes the
+   fifteen-field bound below the same condition it always was. *)
+Lemma fields_fuel_flat : forall fs,
+  Forall field_ok fs -> fields_fuel fs = S (List.length fs).
+Proof.
+  induction fs as [| [k v] fs IH]; intros H; [ reflexivity |].
+  apply Forall_inv_tail in H as Ht. apply Forall_inv in H as [Hk Hv].
+  cbn [fst snd] in Hv.
+  cbn [fields_fuel Datatypes.length]. rewrite IH by exact Ht.
+  rewrite leaf_fuel by exact Hv. lia.
+Qed.
+
+(* The round trip for a flat object, which is what most of the development
+   asks for.  The statement is unchanged from when this was proved directly;
+   only its proof is now two lines of the general one. *)
 Theorem parse_print_obj : forall fs,
   (List.length fs < 15)%nat ->
   Forall field_ok fs ->
   keys_fresh fs [] ->
   Json.parse (print (JObj fs)) = Some (JObj fs).
 Proof.
-  intros fs Hf Hok Hk. unfold Json.parse.
-  rewrite <- (bytes_append_empty (print (JObj fs))).
-  rewrite (parse_value_obj fs 15 BS.EmptyString) by assumption.
-  reflexivity.
+  intros fs Hf Hok Hk.
+  apply parse_print.
+  - apply value_ok_obj; [ now apply fields_value_ok | exact Hk ].
+  - rewrite value_fuel_obj, fields_fuel_flat by exact Hok. lia.
 Qed.
 
 (* ---- [ok_string], byte by byte ------------------------------------------ *)
