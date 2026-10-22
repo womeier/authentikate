@@ -106,3 +106,112 @@ The standard WIT declarations used by the build are pinned in `components/servic
 
 A custom [version](https://github.com/womeier/certirocq/tree/imports) of CertiRocq is used.
 It has experimental support for foreign function calls resolved via Wasm module imports.
+
+
+## Trusted Computing Base
+
+What the proofs in [Proofs.v](components/service/theories/Proofs.v) establish is
+deliberately narrow: structural properties of the Rocq functions, universally
+quantified over records of crypto, storage and email operations, with every
+`Print Assumptions` closed under the global context. Everything listed below is
+outside that — trusted, tested, or assumed — and is collected here so the
+boundary can be read rather than inferred. [PLAN.md](PLAN.md) argues the
+individual cases; this is the inventory.
+
+### General
+
+- **The proofs are about the Rocq core, not about the module that runs.** The
+  pinned CertiRocq's correctness does not extend across foreign calls: a
+  registered `Axiom` has no evaluation rule in the source language, so no
+  theorem relates `Api.handle` to the emitted Wasm. The seven registrations in
+  [extraction.v](components/service/theories/extraction.v) are where the chain
+  is cut, and it is cut deliberately.
+- **Post-compilation rewriting.** `components/service/build.mjs` merges the
+  extracted core with hand-written adapters, removes link-only exports, prunes
+  with `wasm-opt`, embeds WIT and runs `wasm-tools component new`. Every one of
+  those steps transforms the module after the compiler is done with it.
+- **The engine.** wasmtime's optimising JIT and its implementation of the
+  component model's canonical ABI, plus jco and Node in the JavaScript test
+  suites. None of these is verified against a mechanised Wasm semantics.
+- **Cryptographic hardness.** The security direction,
+  `accepted_implies_authenticated`, is conditional on a signing-oracle
+  hypothesis: that verification accepts only messages this service signed. That
+  is an assumption about Ed25519, not a theorem, and no amount of
+  implementation verification would discharge it. The other two crypto
+  hypotheses assume only *correctness* — that sign-then-verify and
+  enroll-then-verify agree — and say nothing about unforgeability.
+- **Timing.** No constant-time property is established anywhere. The `Secret`
+  seal is a source-level discipline; the JSON parser runs over the password
+  before it can be sealed; Argon2id's addressing is data-dependent by design;
+  and the engine may add behaviour no property of the module predicts.
+  `login_hides_existence` is a statement about response *values*, not
+  durations, and no `dudect`-style measurement exists yet.
+- **Time and entropy.** The clock, as described above. Salt freshness depends on
+  `wasi:random/random@0.2.0` and the demo's signing seed on the host's
+  `getrandom`; neither is proved to be unpredictable.
+- **Host-supplied configuration.** The signing-key handle, its public half, the
+  issuer, the TTL and the dummy salt, tag and cost parameters all arrive from
+  outside. A mismatched public key, a signing key shared across deployments, or
+  dummy parameters that do not match what stored records carry are all outside
+  what the proofs can see.
+- **Rate limiting, replay and revocation.** No throttling is connected:
+  `Backoff.v` proves its bounds and is deliberately unwired, so online password
+  guessing is limited only by Argon2's cost. Tokens are bearer tokens with an
+  `exp` and nothing else, and `validate_ignores_the_store` proves that no state
+  a deployment can reach will stop a fresh, well-signed token from validating.
+- **Transport and operations.** There is no TLS; the demo listens on loopback,
+  with `LISTEN`/`PUBLIC_ORIGIN` for a trusted proxy. Key custody, rotation,
+  recovery, durable storage, backup and audit logging are not implemented.
+- **Supply chain.** The Nix pins (the CertiRocq fork, `rocq-base64`), the Cargo
+  lockfile, and the `womeier.cachix.org` binary cache — which the macOS demo
+  path fetches prebuilt components from rather than building them.
+
+### Per component
+
+- **Rocq service core** (`components/service/theories/`) — the verified part,
+  with three things still trusted inside it. The seven FFI axioms are the
+  first. The second is the `Secret` seal: it survives erasure only because
+  `Secret.of_bytes` is registered as a foreign *identity*, so the guarantee
+  rests on that adapter actually being the identity. The third is that no
+  strength floor is enforced on stored Argon2 cost parameters —
+  `Store.public_of_json` checks only that each fits a `u32`, so a record naming
+  a trivial cost would be verified at that cost. Separately, the JSON parser's
+  fuel is fixed at 16, which makes a sufficiently nested body a rejection
+  rather than a parse.
+- **Wasm FFI adapters** (`components/service/adapters/*.wat`) — hand-written,
+  unproved, and exercised only by `tests/ffi-adapters.mjs`. They encode the
+  backend's value representation, which was probed from its output rather than
+  derived from a theorem; they restore four-byte heap alignment after
+  byte-oriented foreign allocations; they grow memory themselves rather than
+  trusting the headroom the backend leaves; and they call curried closures by
+  hand. `store.wat` additionally carries the RFC 3629 validator that stands
+  between an attacker-controlled email and the canonical ABI's trap on
+  ill-formed UTF-8, which makes it the most security-relevant unproved code
+  here.
+- **Rust host** (`host/`) — roughly a thousand lines of unverified Rust outside
+  the component: route dispatch from `/api/*`, the 16 KiB streaming body limit
+  and read deadline, the JSON content-type check and the Host/Origin policy,
+  bounded admission, fuel and a 128 MiB memory ceiling, a fresh composition per
+  request, ephemeral seed generation with per-instance key import, startup
+  derivation of the dummy salt, password and parameters, and the static demo
+  assets. It also implements `wasi:keyvalue`'s `store` and `atomics` over a
+  single `BTreeMap`: that implementation, comparing and writing under one
+  mutex, is what discharges the storage hypotheses for the demo, and it is not
+  durable.
+- **Argon2 component** (`components/crypto/argon2/`) — RustCrypto's `argon2`,
+  trusted for verification correctness, for the quality of the salt it draws
+  from `wasi:random`, for `recommended-params`, and for returning the tag
+  already base64url-encoded, which is what keeps encoded secret bytes out of
+  Rocq. Enrollment selects Argon2id; verification hashes under the parameters
+  read back from the stored record.
+- **Ed25519 component** (`components/crypto/ed25519/`) — libcrux, trusted for
+  signature correctness and strict verification, and for the key table that
+  keeps private keys out of the Rocq heap behind opaque `u32` handles. Seed
+  wiping is partial, as noted above.
+- **Email component** (`components/email/`) — writes the message to stdout.
+  Acceptance is not delivery, and the welcome message carries the fact that an
+  account exists onto whatever path the mail takes.
+- **Storage provider** — any provider other than the demo host must implement
+  `cas.new`, `cas.current` and `swap` atomically, or signup's uniqueness is
+  lost. Durability, and whether a lookup's duration depends on whether the key
+  is present, are both provider behaviour.
