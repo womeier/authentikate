@@ -825,4 +825,61 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
+
+    // Argon2 has to run even when the account does not exist.  [login_check]
+    // in Api.v hashes before it tests whether the lookup found anything, and
+    // [login_check_none] in Proofs.v proves the answer is [Unauthorized]
+    // either way -- which is exactly the licence a semantics-preserving
+    // optimizer needs to delete the call, since timing is not in the
+    // observable semantics it preserves.  Today the call survives because
+    // CertiRocq has no pass that would drop it and wasm-opt is not asked to
+    // optimize, but no proof in this repository rules it out and nothing else
+    // here would fail if a toolchain bump started doing it.  Hence a
+    // measurement, with a generous threshold: eliminating the hash drops the
+    // absent path by orders of magnitude, not by a factor.
+    #[test]
+    fn absent_account_still_pays_for_argon2() {
+        let runtime = Runtime::new(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../build/host.component.wasm"),
+            "Authentikate <hello@example.test>".into(),
+        )
+        .unwrap();
+        let enrolled = br#"{"email":"timing@example.test","password":"a-local-demo-password"}"#;
+        assert_eq!(
+            runtime.request("signup", enrolled).unwrap().status(),
+            StatusCode::CREATED
+        );
+        let known = br#"{"email":"timing@example.test","password":"wrong"}"#;
+        let absent = br#"{"email":"absent@example.test","password":"wrong"}"#;
+        let sample = |body: &[u8]| {
+            let start = std::time::Instant::now();
+            assert_eq!(
+                runtime.request("login", body).unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+            start.elapsed()
+        };
+        // Interleaved and taken at the median, so that machine load drifting
+        // under the test hits both paths alike.
+        let (mut found, mut missing) = (Vec::new(), Vec::new());
+        for _ in 0..5 {
+            found.push(sample(known));
+            missing.push(sample(absent));
+        }
+        found.sort();
+        missing.sort();
+        let (found, missing) = (found[2], missing[2]);
+        assert!(
+            found >= Duration::from_millis(1),
+            "a wrong password against a stored record took {found:?}: the \
+             comparison below has nothing to compare against, so the cost \
+             parameters or the Argon2 provider are not doing the work"
+        );
+        assert!(
+            missing * 4 >= found,
+            "login for an absent account took {missing:?} against {found:?} for \
+             a wrong password on a stored one: the dummy hash is not running, so \
+             a login's duration discloses whether an account exists"
+        );
+    }
 }
