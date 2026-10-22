@@ -2,6 +2,7 @@
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.crane.url = "github:ipetkov/crane";
   inputs.fenix = {
     url = "github:nix-community/fenix";
     inputs.nixpkgs.follows = "nixpkgs";
@@ -16,6 +17,7 @@
       self,
       nixpkgs,
       fenix,
+      crane,
       rocq-base64,
     }:
     let
@@ -155,6 +157,8 @@
             "Makefile"
             "components/service/Makefile"
             "components/service/_RocqProject"
+            "tests/ffi-adapters.mjs"
+            "tests/component.mjs"
           ]
           ||
             builtins.any
@@ -178,7 +182,6 @@
                 # The host-to-component configuration contract, staged into the
                 # service's WIT tree by build.mjs.
                 "wit"
-                "tests"
               ]
           || (
             type == "directory"
@@ -186,6 +189,7 @@
               "components"
               "components/crypto"
               "components/email"
+              "tests"
             ]
           );
       };
@@ -242,13 +246,39 @@
         rustc = rustToolchain;
       };
 
-      hostSrc = lib.fileset.toSource {
-        root = ./.;
-        fileset = lib.fileset.unions [
-          ./Cargo.toml
-          ./Cargo.lock
+      workspace = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace;
+      rustSrc =
+        files:
+        lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions (
+            [
+              ./Cargo.toml
+              ./Cargo.lock
+            ]
+            ++ map (member: ./. + "/${member}/Cargo.toml") workspace.members
+            ++ files
+          );
+        };
+
+      # Keep every workspace manifest for --locked resolution, but not unrelated
+      # implementations. Cargo still needs a target for each unused member.
+      rustPostPatch = lib.concatMapStringsSep "\n" (member: ''
+        if [ ! -d ${member}/src ]; then
+          mkdir -p ${member}/src
+          cp ${pkgs.writeText "empty-rust-target.rs" "fn main() {}\n"} ${member}/src/${
+            if member == "host" then "main" else "lib"
+          }.rs
+        fi
+      '') workspace.members;
+
+      # Cache this Linux-built output for all hosts, including macOS.
+      authentikate-host-component = rustPlatform.buildRustPackage {
+        pname = "authentikate-host-component";
+        version = "0.1.0";
+        src = rustSrc [
           ./Makefile
-          ./host
+          ./host/composition.wac
           ./components/crypto
           ./components/email
           ./components/gateway
@@ -256,13 +286,7 @@
           ./components/service/wit
           ./wit
         ];
-      };
-
-      # Cache this Linux-built output for all hosts, including macOS.
-      authentikate-host-component = rustPlatform.buildRustPackage {
-        pname = "authentikate-host-component";
-        version = "0.1.0";
-        src = hostSrc;
+        postPatch = rustPostPatch;
         cargoLock.lockFile = ./Cargo.lock;
         nativeBuildInputs = [
           pkgs.wasm-tools
@@ -285,59 +309,75 @@
         '';
       };
 
-      mkLocal =
+      mkHost =
         pkgs:
         let
-          hostRustPlatform = pkgs.makeRustPlatform {
-            cargo = mkRustToolchain pkgs.stdenv.hostPlatform.system;
-            rustc = mkRustToolchain pkgs.stdenv.hostPlatform.system;
+          craneLib = (crane.mkLib pkgs).overrideToolchain (mkRustToolchain pkgs.stdenv.hostPlatform.system);
+          commonArgs = {
+            pname = "authentikate-host";
+            version = "0.1.0";
+            src = rustSrc [
+              ./host
+              ./components/gateway/wit
+              ./components/service/wit
+              ./wit
+            ];
+            postPatch = rustPostPatch;
+            cargoExtraArgs = "--locked -p authentikate-host";
+            cargoBuildExtraArgs = "--all-targets";
           };
+          # Dummy workspace targets keep this cache independent of host sources
+          # and WIT. Include test dependencies so flake checks reuse them too.
+          cargoArtifacts = craneLib.buildDepsOnly (
+            commonArgs
+            // {
+              doCheck = true;
+            }
+          );
         in
-        hostRustPlatform.buildRustPackage {
-          pname = "authentikate-local";
-          version = "0.1.0";
-          src = hostSrc;
-          cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [
-            "-p"
-            "authentikate-host"
-          ];
-          cargoTestFlags = [
-            "-p"
-            "authentikate-host"
-          ];
-          nativeBuildInputs = [
-            pkgs.makeWrapper
-          ];
+        craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            passthru = { inherit cargoArtifacts; };
+            # Integration tests use the composed component and run as a separate
+            # flake check, so component changes do not rebuild the native binary.
+            doCheck = false;
 
-          preBuild = ''
-            mkdir -p build
-            cp ${authentikate-host-component}/host.component.wasm build/
-            cp ${authentikate-host-component}/storage.component.wasm build/
-          '';
+            meta = {
+              description = "Local authentication demo with persistent accounts and stdout email";
+              mainProgram = "authentikate-host";
+              license = lib.licenses.mit;
+              platforms = [
+                system
+                "aarch64-darwin"
+              ];
+            };
+          }
+        );
 
-          postInstall = ''
+      mkLocal =
+        pkgs:
+        pkgs.symlinkJoin {
+          name = "authentikate-local";
+          paths = [ (mkHost pkgs) ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          postBuild = ''
             mkdir -p $out/share/authentikate
-            cp build/host.component.wasm $out/share/authentikate/
+            ln -s ${authentikate-host-component}/host.component.wasm $out/share/authentikate/host.component.wasm
             makeWrapper $out/bin/authentikate-host $out/bin/authentikate-local \
               --set HOST_COMPONENT $out/share/authentikate/host.component.wasm \
               --set-default STORAGE_DIR ./run
           '';
-
-          meta = {
-            description = "Local authentication demo with persistent accounts and stdout email";
+          meta = (mkHost pkgs).meta // {
             mainProgram = "authentikate-local";
-            license = lib.licenses.mit;
-            platforms = [
-              system
-              "aarch64-darwin"
-            ];
           };
         };
 
       authentikate-local = mkLocal pkgs;
       darwinPackages = lib.genAttrs [ "aarch64-darwin" ] (system: {
         authentikate-local = mkLocal (import nixpkgs { inherit system; });
+        authentikate = mkLocal (import nixpkgs { inherit system; });
       });
 
       authentikate-production = pkgs.writeShellScriptBin "authentikate-production" ''
@@ -396,6 +436,9 @@
           inherit authentikate-wasm;
           inherit authentikate-local authentikate-production;
           inherit authentikate-host-component;
+          authentikate = authentikate-local;
+          authentikate-host = mkHost pkgs;
+          authentikate-host-deps = (mkHost pkgs).cargoArtifacts;
           # The heavy prebuilt dependency, exposed so CI can fetch it
           # substitute-only before building anything:
           #   nix build --max-jobs 0 .#CertiRocq
@@ -411,6 +454,10 @@
 
       apps =
         (lib.mapAttrs (_: packages: {
+          authentikate = {
+            type = "app";
+            program = lib.getExe packages.authentikate;
+          };
           authentikate-local = {
             type = "app";
             program = lib.getExe packages.authentikate-local;
@@ -418,6 +465,10 @@
         }) darwinPackages)
         // {
           ${system} = {
+            authentikate = {
+              type = "app";
+              program = lib.getExe authentikate-local;
+            };
             authentikate-local = {
               type = "app";
               program = lib.getExe authentikate-local;
@@ -430,7 +481,17 @@
         };
 
       # The proofs are checked by building, so building is the test suite.
-      checks.${system}.build = authentikate-wasm;
+      checks.${system} = {
+        build = authentikate-wasm;
+        host = (mkHost pkgs).overrideAttrs {
+          doCheck = true;
+          preCheck = ''
+            mkdir -p build
+            cp ${authentikate-host-component}/host.component.wasm build/
+            cp ${authentikate-host-component}/storage.component.wasm build/
+          '';
+        };
+      };
 
       devShells.${system} = {
         default = pkgs.mkShell {

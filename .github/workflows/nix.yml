@@ -36,6 +36,13 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cachix push womeier dev-profile
 
+      - name: Build compiled host dependencies
+        run: nix build --print-build-logs .#authentikate-host-deps --out-link host-deps
+
+      - name: Cache compiled host dependencies
+        if: github.event_name != 'pull_request'
+        run: cachix push womeier host-deps
+
       # The derivation checks Rocq proofs, primitive adapters and extracted runtime.
       - name: Build and test service component
         run: nix build --print-build-logs
@@ -64,8 +71,7 @@ jobs:
         run: |
           nix develop --command make crypto-components compose-host
           nix develop --command cargo fmt --all -- --check
-          nix develop --command cargo check --locked
-          nix develop --command cargo test --locked
+          nix flake check --print-build-logs
           nix develop --command cargo test --locked -p authentikate-storage
 
       - uses: actions/upload-artifact@v4
