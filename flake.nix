@@ -98,8 +98,6 @@
         }
       );
 
-      inherit (rocqPackages) base64 base64-bytestring;
-
       # CertiRocq's own sources at one pinned commit of the womeier fork
       # (github.com/womeier/CertiRocq), used both as the package's src and as
       # the place its Nix build recipe is pulled from below.
@@ -197,7 +195,7 @@
         nativeBuildInputs = [
           rocqPackages.coq
           CertiRocq
-          base64-bytestring
+          rocqPackages.base64-bytestring
           pkgs.nodejs
           pkgs.wasm-tools
           pkgs.binaryen
@@ -438,7 +436,6 @@
           # (It substitutes from womeier.cachix.org when the store path
           # matches; otherwise it rebuilds from the fork.)
           inherit CertiRocq;
-          inherit base64 base64-bytestring;
           inherit jco;
           rust-toolchain = rustToolchain;
           inherit report;
@@ -493,7 +490,7 @@
             rocqPackages.rocq-core
             rocqPackages.coq
             CertiRocq
-            base64-bytestring
+            rocqPackages.base64-bytestring
             rocqPackages.stdlib
             rocqPackages.coq-lsp
             pkgs.gnumake
