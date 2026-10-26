@@ -3,6 +3,7 @@
 
 ;; Bump allocation preserves the adapters' alignment, growth and OOM behavior.
 ;; CertiRocq's Eprim headroom cannot hold byte strings at 12 bytes per cell.
+;; TODO: simplify by exporting grow_mem_if_necessary publicly in CertiRocq's Wasm backend
 (func $alloc (param $n i32) (param $align i32) (result i32)
   (local $p i32) (local $end i32) (local $have i32) (local $pages i32)
   (local.set $p
