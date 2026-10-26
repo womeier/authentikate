@@ -335,7 +335,7 @@ Proof.
   unfold bytes_In, Base64.encode, ByteString.encode in Hin.
   change (In dot (BS.print (BS.parse
     (Base64.Base64.encode Alphabet.url (BS.print bs))))) in Hin.
-  rewrite Base64.print_parse in Hin.
+  rewrite InstanceBytestring.print_parse in Hin.
   pose proof (Base64.Base64.encode_charset Alphabet.url (BS.print bs)) as Hchars.
   apply Forall_forall with (x := dot) in Hchars; [| exact Hin].
   destruct Hchars as [Hchar | Hpad]; [| discriminate].
@@ -364,7 +364,7 @@ Proof.
   unfold bytes_In, Base64.encode, ByteString.encode in Hin.
   change (In b (BS.print (BS.parse
     (Base64.Base64.encode Alphabet.url (BS.print bs))))) in Hin.
-  rewrite Base64.print_parse in Hin.
+  rewrite InstanceBytestring.print_parse in Hin.
   pose proof (Base64.Base64.encode_charset Alphabet.url (BS.print bs)) as Hchars.
   apply Forall_forall with (x := b) in Hchars; [| exact Hin].
   destruct Hchars as [Hchar | Hpad].

@@ -38,33 +38,16 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1792506237,
-        "narHash": "sha256-Q/8KLB6jNfpaUN1HAedE/u/Et9feE/zYSsutBLKrCFk=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "5adc50831c259f87faeb09ddf930d43597197473",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixpkgs-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "rocq-base64": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1792676787,
-        "narHash": "sha256-g/bXzhDsY6kKF/ADZ/C2Mv4QjGKE6SALoGhsF48ZRsI=",
+        "lastModified": 1792857872,
+        "narHash": "sha256-uA90bp4i3tqJDsHs8swVm5eB3z+1Z7x3sgk6C6B/7kw=",
         "owner": "womeier",
-        "repo": "rocq-base64",
-        "rev": "28019c5caf11c188f982a24a1e24f879a9ec667c",
+        "repo": "nixpkgs",
+        "rev": "bc27a0a10b7f6da40b9c9c69cb4296521790a5a9",
         "type": "github"
       },
       "original": {
         "owner": "womeier",
-        "repo": "rocq-base64",
+        "repo": "nixpkgs",
         "type": "github"
       }
     },
@@ -72,8 +55,7 @@
       "inputs": {
         "crane": "crane",
         "fenix": "fenix",
-        "nixpkgs": "nixpkgs",
-        "rocq-base64": "rocq-base64"
+        "nixpkgs": "nixpkgs"
       }
     },
     "rust-analyzer-src": {

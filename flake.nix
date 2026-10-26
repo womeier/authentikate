@@ -1,15 +1,14 @@
 {
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  # The womeier fork of nixpkgs: it carries the rocq-base64 packages
+  # (rocqPackages.base64 and the MetaRocq bridge base64-bytestring), which
+  # upstream nixpkgs does not have yet.
+  inputs.nixpkgs.url = "github:womeier/nixpkgs";
   inputs.crane.url = "github:ipetkov/crane";
   inputs.fenix = {
     url = "github:nix-community/fenix";
     inputs.nixpkgs.follows = "nixpkgs";
-  };
-  inputs.rocq-base64 = {
-    url = "github:womeier/rocq-base64";
-    flake = false;
   };
 
   outputs =
@@ -18,7 +17,6 @@
       nixpkgs,
       fenix,
       crane,
-      rocq-base64,
     }:
     let
       # Build the portable Wasm artifacts on Linux; Darwin only builds the host.
@@ -100,12 +98,7 @@
         }
       );
 
-      base64 =
-        (rocqPackages.callPackage "${rocq-base64}/.nix/rocq-overlays/base64/default.nix" { }).overrideAttrs
-          (old: {
-            version = "unstable-${builtins.substring 0 8 rocq-base64.rev}";
-            src = rocq-base64;
-          });
+      inherit (rocqPackages) base64 base64-bytestring;
 
       # CertiRocq's own sources at one pinned commit of the womeier fork
       # (github.com/womeier/CertiRocq), used both as the package's src and as
@@ -204,7 +197,7 @@
         nativeBuildInputs = [
           rocqPackages.coq
           CertiRocq
-          base64
+          base64-bytestring
           pkgs.nodejs
           pkgs.wasm-tools
           pkgs.binaryen
@@ -445,7 +438,7 @@
           # (It substitutes from womeier.cachix.org when the store path
           # matches; otherwise it rebuilds from the fork.)
           inherit CertiRocq;
-          inherit base64;
+          inherit base64 base64-bytestring;
           inherit jco;
           rust-toolchain = rustToolchain;
           inherit report;
@@ -500,7 +493,7 @@
             rocqPackages.rocq-core
             rocqPackages.coq
             CertiRocq
-            base64
+            base64-bytestring
             rocqPackages.stdlib
             rocqPackages.coq-lsp
             pkgs.gnumake
