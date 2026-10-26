@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # Immutable Account Storage
 
 This Rust component exports `authentikate:storage/accounts@0.1.0`, defined in

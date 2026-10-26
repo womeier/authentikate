@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # Building the report
 
 Run the watcher from the repository root:
@@ -23,3 +25,9 @@ Restart an already running watcher to enable rebuilds on `.bib` changes.
 Whenever a WIT interface changes, update `architecture.tex` in the same change
 so the component diagram stays consistent with the implementation. Simplified
 signatures may omit details, but must preserve argument and result semantics.
+
+The overview in `composed-component.tex` shows the final component. Its listing
+in `composed-interface.tex` contains the root-world output of
+`wasm-tools component wit build/host.component.wasm`, with imports grouped and
+dependency definitions omitted. When composition changes, rebuild with
+`make compose-host` and refresh that listing and the overview as needed.

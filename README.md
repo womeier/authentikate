@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # authentikate
 
 An experimental authentication backend with signup, login and JWT validation.

@@ -84,9 +84,9 @@
 \draw[message] (19,-14.8) -- (20.5,-14.8) -- (20.5,-15.25) -- (19,-15.25);
 \node[note] at (22,-14.65) {
   \textbf{6. Mint the token.}\par
-  \source{components/service/theories/Jwt.v}{Pinned EdDSA header; claims \code{sub,iss,iat,exp}}.
-  \source{components/service/adapters/ed25519.wat}{Sign with the opaque key handle}.
-  Password and private key are not included in the JWT.
+  \source{components/service/theories/Jwt.v}{Pinned HS256 header; claims \code{sub,iss,iat,exp}}.
+  \source{components/service/adapters/hmac.wat}{Sign with the opaque key handle using HMAC-SHA-256}.
+  Password and shared secret are not included in the JWT.
 };
 \draw[reply] (19,-16.65) -- node[msglabel,above] {
   \code{200 OK}\quad\code{{"token": "header.payload.signature"}}

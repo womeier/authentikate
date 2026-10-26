@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # Stdout email provider
 
 The component exports `authentikate:email/sender@0.1.0` (see [WIT](wit/email.wit)).

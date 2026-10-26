@@ -1,0 +1,39 @@
+\begingroup
+\newcommand{\overviewicon}[3]{\hfill
+  \source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#2.pdf}
+    {\includegraphics[height=#3]{icons/#2.pdf}}
+    {\includegraphics[height=#3]{report/icons/#2.pdf}}}}}
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[
+  part/.style={draw=blue!45!black,rounded corners=3pt,line width=.65pt,
+    fill=blue!4,text width=5.6cm,minimum height=1.15cm,
+    inner sep=8pt,align=left,font=\footnotesize},
+  shell/.style={draw=blue!45!black,rounded corners=4pt,line width=.9pt,
+    fill=blue!1,inner sep=12pt}
+]
+\node[align=left,text width=12.8cm,font=\small] (title) at (0,0) {
+  \textbf{Final Wasm component}\hfill\code{build/host.component.wasm}
+};
+\node[part] (gateway) at (-3.4,-1.2) {
+  \textbf{HTTP gateway}\overviewicon{components/gateway/src/lib.rs}{rust-logo-black}{3.1ex}\par\code{authentikate:gateway}
+};
+\node[part] (service) at (3.4,-1.2) {
+  \textbf{Authentication service}\overviewicon{components/service/theories/Api.v}{rocq-icon-black}{2.6ex}\par\code{authentikate:service}
+};
+\node[part] (argon2) at (-3.4,-2.8) {
+  \textbf{Password hashing}\overviewicon{components/crypto/argon2/src/lib.rs}{rust-logo-black}{3.1ex}\par\code{authentikate:crypto/argon2}
+};
+\node[part] (hmac) at (3.4,-2.8) {
+  \textbf{Signature}\overviewicon{components/crypto/hmac/src/lib.rs}{rust-logo-black}{3.1ex}\par\code{authentikate:crypto/hmac}
+};
+\node[part] (storage) at (-3.4,-4.4) {
+  \textbf{Account storage}\overviewicon{components/storage/src/lib.rs}{rust-logo-black}{3.1ex}\par\code{authentikate:storage}
+};
+\node[part] (email) at (3.4,-4.4) {
+  \textbf{Email sending}\overviewicon{components/email/src/lib.rs}{rust-logo-black}{3.1ex}\par\code{authentikate:email}
+};
+\begin{scope}[on background layer]
+  \node[shell,fit=(title)(gateway)(service)(argon2)(hmac)(storage)(email)] {};
+\end{scope}
+\end{tikzpicture}}
+\endgroup

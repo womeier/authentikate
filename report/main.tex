@@ -90,16 +90,29 @@ Today, CertiRocq's Wasm backend~\cite{certicoqwasm-cpp2025} generates a Wasm (co
 Explain the approach, design, and implementation.
 
 \section{Architecture}
-Figure~\ref{fig:architecture} shows the Wasm components and their interfaces.
+Figure~\ref{fig:composed-component} shows the final composed Wasm component.
+The listing below reports its external imports and exports.
+Figure~\ref{fig:architecture} shows the subcomponents and their interfaces.
 Figure~\ref{fig:login-flow} traces the login request and its possible
 outcomes.
 
+\begin{figure}[!ht]
+\centering
+\input{composed-component.tex}
+\caption{The composed Wasm component and its six subcomponents.}
+\label{fig:composed-component}
+\end{figure}
+\par\bigskip
+\input{composed-interface.tex}
+\clearpage
+
 \begin{figure}[p]
 \centering
-\resizebox{\linewidth}{!}{\input{architecture.tex}}
+\resizebox{0.94\linewidth}{!}{\input{architecture.tex}}
 \caption{Wasm component architecture. Only component-level boundaries are shown.}
 \label{fig:architecture}
 \end{figure}
+\clearpage
 
 \begin{landscape}
 \begin{figure}[p]

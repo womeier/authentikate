@@ -40,6 +40,15 @@ files; neither needs shell escape or SVG conversion during the LaTeX build.
 - Unmodified downloaded source preserved as `rocq-icon-orange.original.svg`.
 - Changes in `rocq-icon-black.svg`: fill `#ff540a` replaced with `#000000`, plus a final newline. Path geometry and viewBox are unchanged. Converted to PDF.
 
+## WASI Mark
+
+The architecture diagram uses a bold sans-serif typographic `WASI` label, not
+an official logo or a traced approximation. The official site <https://wasi.dev/>
+and its source repository <https://github.com/bytecodealliance/wasi.dev> were
+checked on 2026-10-26 (revision `1fe167069fb999656a2cd645d84a0c1cd335b799`).
+The logo supplied there is `static/img/wasi.png`; no vector logo was found in
+that repository. No upstream WASI image is redistributed here.
+
 ## Reproduce PDFs
 
 Run from `report/`. These commands use librsvg 2.62.3 from the existing project's

@@ -5,38 +5,49 @@
   \source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#3.pdf}
     {\includegraphics[height=\iconheight]{icons/#3.pdf}}
     {\includegraphics[height=\iconheight]{report/icons/#3.pdf}}}}\par\nobreak
-  {\fontsize{9}{11}\selectfont\source{#2}{\nolinkurl{#4}}\par}\vspace{\baselineskip}}
+  {\fontsize{9}{11}\selectfont\source{#2}{\textcolor{blue!65!black}{\underline{\nolinkurl{#4}}}}\par}\vspace{\baselineskip}}
+% A narrower host-import tab shares the card's bottom edge.
+\newcommand{\wasitab}[2]{%
+  \node[wasi tab,anchor=north] (#1-wasi)
+    at ($(#1.south)+(0,.02)$) {\begin{tabular}{@{}l@{}}\textsf{\textbf{WASI}}\enspace #2\end{tabular}};}
 \begin{tikzpicture}[
   x=1cm,y=1cm,
   card/.style={draw=blue!45!black,rounded corners=3pt,line width=.65pt,
     fill=blue!4,text width=5.8cm,minimum height=2.5cm,
     inner sep=9pt,align=left,font=\footnotesize,anchor=north},
   service/.style={card,text width=10cm},
+  wasi tab/.style={draw=blue!45!black,rounded corners=2pt,line width=.65pt,
+    fill=blue!9,inner sep=5pt,align=left,font=\fontsize{8}{10}\selectfont},
   flow/.style={-{Latex[length=2.5mm]},line width=.8pt,draw=black!65},
   edge label/.style={font=\footnotesize,fill=white,inner sep=3pt,align=center}
 ]
 \node[card,text width=10cm,minimum height=1.8cm] (gateway) at (0,0) {
   \textbf{HTTP gateway}\componentlinks{components/gateway/src/lib.rs}{components/gateway/wit/gateway.wit}{rust-logo-black}{authentikate:gateway}\par\smallskip
   \textbf{handle}\ty{(request, response-out)}\par
-  \code{wasi:http/incoming-handler}
+  (from \code{wasi:http/incoming-handler})
 };
+\wasitab{gateway}{\code{http/types}, \code{io/streams}, \code{io/poll},
+  \code{io/error},\\ \code{clocks/monotonic-clock}}
 
-\node[service] (service) at ($(gateway.south)+(0,-1)$) {
+\node[service] (service) at ($(gateway-wasi.south)+(0,-.85)$) {
   \textbf{Authentication service}\componentlinks{components/service/theories/Api.v}{components/service/wit/world.wit}{rocq-icon-black}{authentikate:service}\par\smallskip
+  \ty{record response { status: u32, body: bytes }}\par\vspace{\baselineskip}
   \textbf{signup}\ty{(body: bytes) -> response}\par
   \textbf{login}\ty{(body: bytes) -> response}\par
   \textbf{validate}\ty{(body: bytes) -> response}
 };
+\wasitab{service}{\code{clocks/wall-clock}}
 
-\coordinate (provider-bus) at ($(service.south)+(0,-.6)$);
-\node[card] (argon2) at ($(provider-bus)+(-3.6,-.6)$) {
+\coordinate (provider-bus) at ($(service-wasi.south)+(0,-.4)$);
+\node[card] (argon2) at ($(provider-bus)+(-3.6,-.45)$) {
   \textbf{Password hashing}\componentlinks{components/crypto/argon2/src/lib.rs}{components/crypto/wit/argon2.wit}{rust-logo-black}{authentikate:crypto/argon2}\par\smallskip
   \textbf{hash}\ty{(password: bytes)}\par
   \ty{-> result<{salt, hash}, error>}\par\smallskip
   \textbf{verify}\ty{(password, salt, hash)}\par
   \ty{  -> result<bool, error>}
 };
-\node[card] (hmac) at ($(provider-bus)+(3.6,-.6)$) {
+\wasitab{argon2}{\code{random/random}}
+\node[card] (hmac) at ($(provider-bus)+(3.6,-.45)$) {
   \textbf{Signature}\componentlinks{components/crypto/hmac/src/lib.rs}{components/crypto/wit/hmac.wit}{rust-logo-black}{authentikate:crypto/hmac}\par\smallskip
   \textbf{import-key}\ty{(secret: bytes)}\par
   \ty{  -> result<u32, error>}\par\smallskip
@@ -45,7 +56,7 @@
   \textbf{verify}\ty{(key, msg, tag)}\par
   \ty{  -> result<bool, error>}
 };
-\node[fit=(argon2)(hmac),inner sep=0pt] (crypto-row) {};
+\node[fit=(argon2)(argon2-wasi)(hmac),inner sep=0pt] (crypto-row) {};
 \coordinate (storage-bus) at ($(crypto-row.south)+(0,-.45)$);
 \node[card] (storage) at ($(storage-bus)+(-3.6,-.45)$) {
   \textbf{Account storage}\componentlinks{components/storage/src/lib.rs}{components/storage/wit/storage.wit}{rust-logo-black}{authentikate:storage}\par\smallskip
@@ -54,28 +65,34 @@
   \mbox{\textbf{create}\ty{(key: string, value: bytes)}}\par
   \ty{  -> result<(), error>}
 };
+\wasitab{storage}{\code{filesystem/preopens},\\
+  \code{filesystem/types}, \code{random/random}}
 \node[card] (email) at ($(storage-bus)+(3.6,-.45)$) {
-  \textbf{Email provider}\componentlinks{components/email/src/lib.rs}{components/email/wit/email.wit}{rust-logo-black}{authentikate:email}\par\smallskip
+  \textbf{Email sending}\componentlinks{components/email/src/lib.rs}{components/email/wit/email.wit}{rust-logo-black}{authentikate:email}\par\smallskip
   \textbf{send}\ty{(message)}\par
   \ty{  -> result<(), error>}
 };
+\wasitab{email}{\code{cli/stdout}, \code{io/streams},\\ \code{io/error}}
 
 % Route the lower provider calls through the gap between the cards.
 \begin{scope}[on background layer]
-  \draw[flow] (gateway.south) --
-    node[edge label]{\code{authentikate:service/api}} (service.north);
-  \draw[flow] (service.south) -- (provider-bus) -| (argon2.north);
+  \draw[flow] ($(gateway.south east)!0.5!(gateway-wasi.north east)$) |-
+    ($(service.north)+(0,.43)$) -- (service.north);
+  \draw[flow,-] ($(service.south east)!0.5!(service-wasi.north east)$) |- (provider-bus);
+  \draw[flow] (provider-bus) -| (argon2.north);
   \draw[flow] (provider-bus) -| (hmac.north);
   \draw[flow] (provider-bus) -- (storage-bus) -| (storage.north);
   \draw[flow] (storage-bus) -| (email.north);
 \end{scope}
 
-\node[fit=(storage)(email),inner sep=0pt] (provider-row) {};
+\node[fit=(storage)(storage-wasi)(email)(email-wasi),inner sep=0pt] (provider-row) {};
 \node[anchor=north,text width=13.6cm,font=\footnotesize,align=left]
-  at ($(provider-row.south)+(0,-.5)$) {
-  Simplified interfaces; \code{bytes = list<u8>}.
+  at ($(provider-row.south)+(0,-.35)$) {
+  Simplified interfaces. \code{bytes = list<u8>}.
   Argon2's hash result is JSON-encoded bytes containing the generated salt and password hash.
-  Arrows denote component calls. Host imports are omitted.
+  Arrows denote component calls. Bottom tabs list WASI host imports
+  (all names have the prefix \code{wasi:}), including supporting interfaces.
+  The signature component has no WASI imports.
   Language logos link to the implementation; identifiers below headers link to WIT definitions.
 };
 \end{tikzpicture}
