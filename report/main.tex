@@ -7,6 +7,10 @@
 \usepackage{pdflscape}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,calc,fit,backgrounds}
+\usepackage[backend=bibtex,style=numeric]{biblatex}
+\IfFileExists{refs.bib}
+  {\addbibresource{refs.bib}}
+  {\addbibresource{report/refs.bib}}
 \usepackage[hidelinks]{hyperref}
 % Draft markers; loaded after hyperref so the list of todos links.
 \usepackage{todonotes}
@@ -36,11 +40,16 @@
 
 \chapter{Introduction}
 This report describes a partly verified authentication backend service with the following functionality:
-\begin{itemize}
-  \item A client can create an account, provided an email address and password.
-  \item A client can log in, provided an email address and password. This returns a signed JWT token.
-  \item A client can ask the service to verify a JWT token.
-\end{itemize}
+\begin{center}
+\small
+\begin{tabular}{@{}llll@{}}
+\textbf{Method} & \textbf{Path} & \textbf{Request} & \textbf{Successful Response} \\
+\hline
+POST & \code{/api/signup} & \code{{email, password}} & \code{201 {}} \\
+POST & \code{/api/login} & \code{{email, password}} & \code{200 {token}} \\
+POST & \code{/api/validate} & \code{{token}} & \code{200 {valid, claims?}} \\
+\end{tabular}
+\end{center}
 
 The main logic of the service is implemented in Rocq and extracted to WebAssembly using CertiRocq.
 It is combined with other Wasm components built from separate libraries. A goal was to test the feasibility of that integration.
@@ -51,7 +60,7 @@ For the report itself, LLMs were used to assist the creation of the figures, but
 \chapter{Background}
 
 \section{WebAssembly: modules and components}
-When one refers to \textit{WebAssembly} or \textit{Wasm}, one usually refers to the WebAssembly (core) module standard \todo{wasmspec}.
+When one refers to \textit{WebAssembly} or \textit{Wasm}, one usually refers to the WebAssembly (core) module standard~\cite{wasm1.0spec,wasm2.0spec,wasm3.0spec}.
 Commonly advertised features of Wasm are its performance and security - a Wasm module is a sandbox that can interact with the host only in
 ways that are explicitely permitted. For instance, 
 
@@ -74,7 +83,7 @@ Defining such an interface may not seem terribly exciting. However, it being sta
 that makes it more convenient to deploy and integrate Wasm code in larger software projects.
 
 
-Today, CertiRocq's Wasm backend\todo{cite} generates a Wasm (core) module. This module exposes a number of internals relevant for writing glue code.
+Today, CertiRocq's Wasm backend~\cite{certicoqwasm-cpp2025} generates a Wasm (core) module. This module exposes a number of internals relevant for writing glue code.
 
 
 \chapter{Implementation}
@@ -103,5 +112,7 @@ outcomes.
 
 \chapter{Conclusion}
 Summarize the results and discuss future work.
+
+\printbibliography[heading=bibintoc]
 
 \end{document}

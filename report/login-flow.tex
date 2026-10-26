@@ -23,7 +23,7 @@
 };
 \node[participant] (backend) at (19,-2.25) {
   \textbf{Backend}\\
-  \source{host/src/main.rs}{Rust HTTP boundary} +
+  \source{components/gateway/src/lib.rs}{Gateway HTTP boundary} +
   \source{components/service/theories/Api.v}{Rocq service} + provider interfaces
 };
 \draw[lifeline] (4,-2.8) -- (4,-24.1);
@@ -41,7 +41,8 @@
 \draw[message] (19,-5) -- (20.5,-5) -- (20.5,-5.45) -- (19,-5.45);
 \node[note] at (22,-4.85) {
   \textbf{1. Check the HTTP envelope.}\par
-  \source{host/src/main.rs}{Host/Origin, method, content type and 16 KiB limit}.
+  \source{components/gateway/src/policy.rs}{Gateway Host/Origin policy};
+  \source{components/gateway/src/lib.rs}{method, content type and 16 KiB limit}.
   Boundary rejection ends the request without a credential lookup.
 };
 

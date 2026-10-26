@@ -386,7 +386,7 @@
             ];
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
-            outputHash = "sha256-A6IQgto0hd31t7xZBUmopdk0KHwqVAAyjpwMbq97h3I=";
+            outputHash = "sha256-tZjoDLC7iPAT0LxbhkAC+D/T/EWM/cyfXHSY7TT6NRM=";
           }
           ''
             export HOME=$TMPDIR/home
@@ -397,6 +397,22 @@
             mkdir -p $out
             cp -r "$HOME/.cache/tectonic/bundles" $out/
           '';
+
+      report-watch = pkgs.writeShellApplication {
+        name = "report-watch";
+        runtimeInputs = [ pkgs.coreutils pkgs.tectonic pkgs.watchman pkgs.jq ];
+        text = ''
+          mkdir -p build/report
+          watchman watch "$PWD/report" >/dev/null
+          jq -nc --arg root "$PWD/report" \
+            '["subscribe", $root, "report", {expression: ["anyof", ["suffix", "tex"], ["suffix", "bib"]], fields: ["name"]}]' \
+            | watchman --no-pretty --persistent -j | while IFS= read -r event; do
+            if jq -e '.files | length > 0' <<< "$event" >/dev/null; then
+              tectonic --outdir build/report report/main.tex || true
+            fi
+          done
+        '';
+      };
 
       report = pkgs.stdenvNoCC.mkDerivation {
         pname = "authentikate-report";
@@ -438,7 +454,7 @@
           inherit CertiRocq;
           inherit jco;
           rust-toolchain = rustToolchain;
-          inherit report;
+          inherit report report-watch;
         };
       };
 
@@ -466,6 +482,10 @@
             authentikate-production = {
               type = "app";
               program = lib.getExe authentikate-production;
+            };
+            report-watch = {
+              type = "app";
+              program = lib.getExe report-watch;
             };
           };
         };
@@ -527,7 +547,9 @@
 
         report = pkgs.mkShell {
           name = "authentikate-report";
-          packages = [ pkgs.tectonic ];
+          packages = [
+            pkgs.tectonic
+          ];
         };
       };
     };
