@@ -1,11 +1,11 @@
 \begingroup
-\newcommand{\componentlinks}[3]{\hfill
+\newcommand{\componentlinks}[4]{\hfill
   \def\iconheight{2.6ex}\def\iconname{#3}\def\rusticon{rust-logo-black}
   \ifx\iconname\rusticon\def\iconheight{3.1ex}\fi
-  \source{#2}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\fbox{\textsf{\textbf{WIT}}}}}\enspace
   \source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#3.pdf}
     {\includegraphics[height=\iconheight]{icons/#3.pdf}}
-    {\includegraphics[height=\iconheight]{report/icons/#3.pdf}}}}}
+    {\includegraphics[height=\iconheight]{report/icons/#3.pdf}}}}\par\nobreak
+  {\fontsize{9}{11}\selectfont\source{#2}{\nolinkurl{#4}}\par}\vspace{\baselineskip}}
 \begin{tikzpicture}[
   x=1cm,y=1cm,
   card/.style={draw=blue!45!black,rounded corners=3pt,line width=.65pt,
@@ -16,13 +16,13 @@
   edge label/.style={font=\footnotesize,fill=white,inner sep=3pt,align=center}
 ]
 \node[card,text width=10cm,minimum height=1.8cm] (gateway) at (0,0) {
-  \textbf{HTTP gateway}\componentlinks{components/gateway/src/lib.rs}{components/gateway/wit/gateway.wit}{rust-logo-black}\par\smallskip
+  \textbf{HTTP gateway}\componentlinks{components/gateway/src/lib.rs}{components/gateway/wit/gateway.wit}{rust-logo-black}{authentikate:gateway}\par\smallskip
   \textbf{handle}\ty{(request, response-out)}\par
   \code{wasi:http/incoming-handler}
 };
 
 \node[service] (service) at ($(gateway.south)+(0,-1)$) {
-  \textbf{Authentication service}\componentlinks{components/service/theories/Api.v}{components/service/wit/api.wit}{rocq-icon-black}\par\smallskip
+  \textbf{Authentication service}\componentlinks{components/service/theories/Api.v}{components/service/wit/world.wit}{rocq-icon-black}{authentikate:service}\par\smallskip
   \textbf{signup}\ty{(body: bytes) -> response}\par
   \textbf{login}\ty{(body: bytes) -> response}\par
   \textbf{validate}\ty{(body: bytes) -> response}
@@ -30,14 +30,14 @@
 
 \coordinate (provider-bus) at ($(service.south)+(0,-.6)$);
 \node[card] (argon2) at ($(provider-bus)+(-3.6,-.6)$) {
-  \textbf{Argon2 provider}\componentlinks{components/crypto/argon2/src/lib.rs}{components/crypto/wit/argon2.wit}{rust-logo-black}\par\smallskip
+  \textbf{Password hashing}\componentlinks{components/crypto/argon2/src/lib.rs}{components/crypto/wit/argon2.wit}{rust-logo-black}{authentikate:crypto/argon2}\par\smallskip
   \textbf{hash}\ty{(password: bytes)}\par
   \ty{-> result<{salt, hash}, error>}\par\smallskip
   \textbf{verify}\ty{(password, salt, hash)}\par
   \ty{  -> result<bool, error>}
 };
 \node[card] (hmac) at ($(provider-bus)+(3.6,-.6)$) {
-  \textbf{HMAC-SHA-256}\componentlinks{components/crypto/hmac/src/lib.rs}{components/crypto/wit/hmac.wit}{rust-logo-black}\par\smallskip
+  \textbf{Signature}\componentlinks{components/crypto/hmac/src/lib.rs}{components/crypto/wit/hmac.wit}{rust-logo-black}{authentikate:crypto/hmac}\par\smallskip
   \textbf{import-key}\ty{(secret: bytes)}\par
   \ty{  -> result<u32, error>}\par\smallskip
   \textbf{sign}\ty{(key: u32, msg: bytes)}\par
@@ -48,14 +48,14 @@
 \node[fit=(argon2)(hmac),inner sep=0pt] (crypto-row) {};
 \coordinate (storage-bus) at ($(crypto-row.south)+(0,-.45)$);
 \node[card] (storage) at ($(storage-bus)+(-3.6,-.45)$) {
-  \textbf{Account storage}\componentlinks{components/storage/src/lib.rs}{wit/accounts.wit}{rust-logo-black}\par\smallskip
+  \textbf{Account storage}\componentlinks{components/storage/src/lib.rs}{components/storage/wit/storage.wit}{rust-logo-black}{authentikate:storage}\par\smallskip
   \textbf{get}\ty{(key: string)}\par
    \ty{  -> result<bytes, error>}\par\smallskip
-  \textbf{create}\ty{(key: string, value: bytes)}\par
+  \mbox{\textbf{create}\ty{(key: string, value: bytes)}}\par
   \ty{  -> result<(), error>}
 };
 \node[card] (email) at ($(storage-bus)+(3.6,-.45)$) {
-  \textbf{Email provider}\componentlinks{components/email/src/lib.rs}{components/email/wit/email.wit}{rust-logo-black}\par\smallskip
+  \textbf{Email provider}\componentlinks{components/email/src/lib.rs}{components/email/wit/email.wit}{rust-logo-black}{authentikate:email}\par\smallskip
   \textbf{send}\ty{(message)}\par
   \ty{  -> result<(), error>}
 };
@@ -76,7 +76,7 @@
   Simplified interfaces; \code{bytes = list<u8>}.
   Argon2's hash result is JSON-encoded bytes containing the generated salt and password hash.
   Arrows denote component calls. Host imports are omitted.
-  Language logos link to the implementation; \textsf{WIT} links to the interface.
+  Language logos link to the implementation; identifiers below headers link to WIT definitions.
 };
 \end{tikzpicture}
 \endgroup
