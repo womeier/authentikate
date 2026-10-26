@@ -81,18 +81,18 @@ Today, CertiRocq's Wasm backend\todo{cite} generates a Wasm (core) module. This 
 Explain the approach, design, and implementation.
 
 \section{Architecture}
-Figure~\ref{fig:architecture} shows the backend components and verification
-boundaries. Figure~\ref{fig:login-flow} traces the login request and its possible
+Figure~\ref{fig:architecture} shows the Wasm components and their interfaces.
+Figure~\ref{fig:login-flow} traces the login request and its possible
 outcomes.
 
-\begin{landscape}
 \begin{figure}[p]
 \centering
-\resizebox{0.85\linewidth}{!}{\input{architecture.tex}}
-\caption{Backend architecture, component interfaces, and verification boundaries.}
+\resizebox{\linewidth}{!}{\input{architecture.tex}}
+\caption{Wasm component architecture. Only component-level boundaries are shown.}
 \label{fig:architecture}
 \end{figure}
 
+\begin{landscape}
 \begin{figure}[p]
 \centering
 \resizebox{0.85\linewidth}{!}{\input{login-flow.tex}}

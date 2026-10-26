@@ -1,332 +1,86 @@
 \begin{tikzpicture}[
   x=1cm,y=1cm,
-  card/.style={draw=black!28,rounded corners=3pt,line width=.65pt,
-    fill=white,anchor=north west,text width=9.6cm,minimum height=4.8cm,
-    inner sep=10pt,align=left,font=\small},
-  proved/.style={card,fill=green!5,draw=green!45!black},
-  checked/.style={card,fill=blue!4,draw=blue!45!black},
-  external/.style={card,fill=orange!7,draw=orange!55!black},
-  inactive/.style={card,fill=black!3,draw=black!40,dashed},
+  card/.style={draw=blue!45!black,rounded corners=3pt,line width=.65pt,
+    fill=blue!4,text width=5.8cm,minimum height=3.2cm,
+    inner sep=9pt,align=left,font=\footnotesize,anchor=north},
+  service/.style={card,fill=green!5,draw=green!45!black,text width=10cm},
   flow/.style={-{Latex[length=2.5mm]},line width=.8pt,draw=black!65},
-  optional/.style={flow,dashed,draw=black!50},
-  dependency/.style={flow,densely dotted,draw=blue!55!black},
-  edge label/.style={font=\scriptsize,fill=white,inner sep=2pt,align=center}
+  edge label/.style={font=\footnotesize,fill=white,inner sep=3pt,align=center}
 ]
-\node[anchor=north west,font=\LARGE\bfseries] at (0,0)
-  {Authentikate backend: components, types and verification boundaries};
-\node[anchor=north west,font=\small,text width=54cm] at (0,-.85)
-  {Solid arrows: active backend calls. Dashed arrows: alternative providers.
-   Dotted arrows: build or source dependency. Every blue source label is a PDF hyperlink.
-   \textbf{Green means a named source theorem, not a verified executable stack.}};
-
-% Backend entry point, external clock, build and proof scope.
-\node[checked] (entry) at (0,-2) {
-  \textbf{Authentication backend component} \hfill Rocq / WAT\par
-  \ty{authentikate.component.wasm}\par
-  Exports the custom service API; imports crypto, keyvalue, email and wall clock.\par\smallskip
-  \ty{{signup,login,validate}(config,bytes) -> response}\par
-  \ty{response = {status:u32, body:list<u8>}}\par\smallskip
-  \tested{} Selected Rocq source properties are proved below.\par
-  \links{components/service/theories/extraction.v}{components/service/adapters/service.wat}\par
-  \source{components/service/wit/service.wit}{Export and import types}
-};
-\node[external] (clock) at (11,-2) {
-  \textbf{WASI wall clock} \hfill Host implementation\par
-  \ty{wasi:clocks/wall-clock@0.2.0}\par
-  \ty{now() -> {seconds:u64, nanoseconds:u32}}\par\smallskip
-  Read once per service call. Unix seconds become an explicit \code{N}
-  argument inside the pure Rocq core.\par
-  \trusted{} Truthful time is not proved; wall time is not monotonic.\par
-  \source{host/src/main.rs}{Rust / Wasmtime host}\quad
-  \source{components/service/adapters/service.wat}{Clock adapter}\par
-  \source{components/service/wit/deps/clocks/wall-clock.wit}{Standard WIT types}
-};
-\node[checked] (build) at (22,-2) {
-  \textbf{Extraction and component assembly}\hfill Rocq / JS\par
-  CertiRocq, MetaRocq, WasmCert; wasm-tools and Binaryen.\par\smallskip
-  \ty{Rocq -> core Wasm + WAT -> component Wasm}\par\smallskip
-  \tested{} No repository proof of the complete FFI/component refinement.\par
-  \source{components/service/theories/extraction.v}{Extraction}\quad
-  \source{components/service/build.mjs}{Assembler}\quad
-  \source{flake.nix}{Nix}\par
-  \source{components/service/adapters/service.wat}{Adapter / canonical boundary}
-};
-\node[external] (scope) at (44,-2) {
-  \textbf{Verification legend and scope}\par\smallskip
-  \textbf{Green:} linked, machine-checked source properties.\par
-  \textbf{Blue:} functional / ABI tests, not formal verification.\par
-  \textbf{Orange:} external capabilities or provider behavior.\par
-  \textbf{Dashed:} optional deployment or disconnected code.\par\smallskip
-  \source{components/service/theories/Proofs.v\#L612}{\code{login_then_validate}} is proved
-  (correctness), as is
-  \source{components/service/theories/Proofs.v\#L846}{\code{accepted_implies_authenticated}}
-  (an accepted token implies a credential check), under an assumed
-  \source{components/service/theories/Proofs.v\#L684}{\code{signing_oracle}}:
-  unforgeability is assumed, not proved.  Its rejection form,
-  \source{components/service/theories/Proofs.v\#L913}{\code{no_valid_token_without_a_password}},
-  rests on that assumption and on no other.\par
-  \source{components/service/theories/Proofs.v\#L1342}{\code{signup_then_validate}}
-  carries a created account through login to validation, under an assumed
-  \source{components/service/theories/Proofs.v\#L1232}{\code{argon2_spec}} and
-  \source{components/service/theories/Proofs.v\#L1264}{\code{store_creates}}
-  (an acknowledged create reads back, and no second create of that key
-  succeeds; neither durability nor the provider's atomicity itself).\par
-  \source{components/service/theories/Proofs.v\#L1385}{\code{signup_happens_once}}
-  turns that exclusivity into account uniqueness: of two signups for one
-  email, at most one is created.\par
-  No whole-service constant-time, replay, revocation, durable-storage or
-  actual-email-delivery theorem is established, and the atomicity the create
-  rests on is the provider's to supply.
+\node[card,text width=10cm,minimum height=2.5cm] (gateway) at (0,0) {
+  \textbf{HTTP gateway} \hfill Rust\par\smallskip
+  Exports \code{wasi:http/incoming-handler}.\par
+  HTTP routing, request policy and static assets.
+  Forwards raw request bodies to the service.\par\smallskip
+  \source{components/gateway/src/lib.rs}{Implementation}\quad
+  \source{components/gateway/wit/gateway.wit}{WIT interface}
 };
 
-% Source-level functionality inside the extracted service.
-\node[proved] (bytes) at (0,-8) {
-  \textbf{Bytes and strict base64url} \hfill Rocq / rocq-base64\par
-  \ty{bytes = MetaRocq bytestring}\par
-  \ty{encode : bytes -> bytes}\par
-  \ty{decode : bytes -> option bytes}\par\smallskip
-  \source{components/service/theories/Bytes.v}{Bytes implementation}\quad
-  \source{components/service/theories/Bytes.v\#L238}{Split theorem}\par
-  \source{components/service/theories/Base64.v}{Base64 implementation}\quad
-  \source{components/service/theories/Base64.v\#L36}{Round-trip statement}\par
-  \source{components/service/theories/Base64.v\#L39}{Canonical decoding statement}\par
-  \source{components/service/adapters/service.wat}{Bytes marshalling adapter}
-};
-\node[proved] (json) at (11,-8) {
-  \textbf{JSON parser and canonical printer} \hfill Rocq\par
-  \ty{parse : bytes -> option json}\par
-  \ty{print : json -> bytes}\par\smallskip
-  Conditional round trip at any depth: qualifying strings and keys, bounded
-  decimal values, and a fuel budget of 16. Not arbitrary bytes; the
-  print-after-parse direction is false by design.\par
-  \source{components/service/theories/Json.v}{Implementation}\quad
-  \source{components/service/theories/JsonProofs.v\#L527}{Round-trip statement}\par
-  \source{components/service/adapters/service.wat}{Byte-level adapter; no JSON host parser}
-};
-\node[proved] (protocol) at (22,-8) {
-  \textbf{Claims, JWT and account records} \hfill Rocq\par
-  \source{components/service/theories/Claims.v}{Claims:}\ \ty{to_json : claims -> json}\par
-  \ty{fresh : N * claims -> bool}\par
-  \source{components/service/theories/Jwt.v}{JWT:}\ \ty{sign : crypto_ops * Key * claims -> option bytes}\par
-  \ty{verify : crypto_ops * bytes * bytes -> option claims}\par
-  \source{components/service/theories/Store.v}{Store:}\ \ty{decode : bytes -> option user}\par\smallskip
-  \source{components/service/theories/Proofs.v\#L325}{Claims conversion statement}\quad
-  \source{components/service/theories/Proofs.v\#L265}{Pinned-header statement}\par
-  \source{components/service/theories/Store.v\#L193}{Stored-email statement}\par
-  Adapters: \source{components/service/adapters/ed25519.wat}{signatures},
-  \source{components/service/adapters/store.wat}{storage}, \source{components/service/adapters/service.wat}{bytes}.
-};
-\node[proved] (logic) at (33,-8) {
-  \textbf{Signup / login / validate decisions} \hfill Rocq\par
-  \ty{handle : crypto_ops -> store_ops -> email_ops}\par
-  \ty{       -> config -> N -> route -> bytes -> response}\par\smallskip
-  \partialproof{} Creation requires an acknowledged write and email acceptance;
-  token issuance requires a successful credential check.\par
+\node[service,minimum height=3.2cm] (service) at ($(gateway.south)+(0,-1)$) {
+  \textbf{Authentication service} \hfill Rocq / WAT\par\smallskip
+  Rocq logic extracted to Wasm by CertiRocq, wrapped as one component.\par
+  \ty{signup, login, validate: bytes -> response}\par
+  \ty{response = {status: u32, body: bytes}}\par\smallskip
+  \partialproof{} No proof of the complete executable stack.\par
   \source{components/service/theories/Api.v}{Implementation}\quad
-  \source{components/service/theories/Proofs.v\#L102}{Token theorem}\quad
-  \source{components/service/theories/Proofs.v\#L150}{Signup theorem}\par
-  \source{components/service/theories/Proofs.v\#L294}{Freshness / issuer theorem}\quad
-  \source{components/service/adapters/service.wat}{Adapter}
-};
-\node[checked] (runtime) at (44,-8) {
-  \textbf{Service component export and runtime wrapper}\par
-  WIT contract; WAT implementation; linked core Wasm.\par\smallskip
-  \ty{{signup,login,validate}(config,bytes)}\par
-  \ty{  -> {status:u32, body:bytes}}\par
-  \ty{bytes = list<u8> (WIT)}\par\smallskip
-  \tested{} Heap/closure marshalling and alignment boundaries.\par
-  \links{components/service/adapters/service.wat}{components/service/adapters/service.wat}\par
-  \source{components/service/wit/service.wit}{Exact config and export types}\quad
-  \source{tests/component.mjs}{Runtime tests}
+  \source{components/service/theories/Proofs.v}{Source proofs}\quad
+  \source{components/service/wit/api.wit}{WIT interface}
 };
 
-% Internal core adapters: these are not independent component-model providers.
-\node[checked] (argonadapter) at (0,-14) {
-  \textbf{Argon2 FFI adapter} \hfill WAT / core Wasm\par
-  \ty{Secret -> option public-record-bytes}\par
-  \ty{Secret * salt * params * Secret -> option bool}\par\smallskip
-  Heap values to canonical enrollment / verification imports.
-  The seal identity is also realized here.\par
-  \tested{} Shared globals and error/return layouts.\par
-  \links{components/service/adapters/argon2.wat}{components/service/adapters/argon2.wat}\par
-  \source{components/crypto/wit/argon2.wit}{Exact WIT types}
+\coordinate (provider-bus) at ($(service.south)+(0,-.6)$);
+\node[card] (argon2) at ($(provider-bus)+(-3.6,-.6)$) {
+  \textbf{Argon2 provider} \hfill Rust\par\smallskip
+  RustCrypto password hashing and verification;
+  fresh random salts.\par\smallskip
+  \code{hash}, \code{verify}\par\smallskip
+  \source{components/crypto/argon2/src/lib.rs}{Implementation}\quad
+  \source{components/crypto/wit/argon2.wit}{WIT interface}
 };
-\node[checked] (edadapter) at (11,-14) {
-  \textbf{Ed25519 FFI adapter} \hfill WAT / core Wasm\par
-  \ty{Key * bytes -> option bytes}\par
-  \ty{bytes * bytes * bytes -> option bool}\par\smallskip
-  Opaque Rocq key handle to checked canonical u32;
-  no raw private key in Rocq memory.\par
-  \tested{} Handle bounds and byte/result layouts.\par
-  \links{components/service/adapters/ed25519.wat}{components/service/adapters/ed25519.wat}\par
-  \source{components/crypto/wit/ed25519.wit}{Exact WIT types}
+\node[card] (hmac) at ($(provider-bus)+(3.6,-.6)$) {
+  \textbf{HMAC-SHA-256} \hfill Rust\par\smallskip
+  HS256 token authentication; secret keys behind instance-local
+  opaque handles.\par\smallskip
+  \code{import-key}, \code{sign}, \code{verify}\par\smallskip
+  \source{components/crypto/hmac/src/lib.rs}{Implementation}\quad
+  \source{components/crypto/wit/hmac.wit}{WIT interface}
 };
-\node[checked] (storeadapter) at (22,-14) {
-  \textbf{WASI keyvalue FFI adapter} \hfill WAT / core Wasm\par
-  \ty{get : bytes -> option (option bytes)}\par
-  \ty{create : bytes * bytes -> option bool}\par\smallskip
-  Bucket open/get and create-if-absent over \code{cas.new} /
-  \code{cas.current} / \code{swap}; \code{bucket.set} is not imported.
-  UTF-8 key checks.  Missing keys, a taken key and provider refusal remain
-  three distinct answers.\par
-  \tested{} Created / taken / lost race / refused, handle accounting, UTF-8.\par
-  \links{components/service/adapters/store.wat}{components/service/adapters/store.wat}\par
-  \source{components/service/wit/deps/keyvalue/atomic.wit}{Standard WIT types}
+\node[fit=(argon2)(hmac),inner sep=0pt] (crypto-row) {};
+\coordinate (storage-bus) at ($(crypto-row.south)+(0,-.45)$);
+\node[card] (storage) at ($(storage-bus)+(-3.6,-.45)$) {
+  \textbf{Account storage} \hfill Rust\par\smallskip
+  WASI filesystem at \code{/accounts}.
+  Atomic create-if-absent via hard-link publication.\par\smallskip
+  \code{get}, \code{create}\par\smallskip
+  \source{components/storage/src/lib.rs}{Implementation}\quad
+  \source{wit/accounts.wit}{WIT interface}
 };
-\node[checked] (emailadapter) at (33,-14) {
-  \textbf{Email FFI adapter} \hfill WAT / core Wasm\par
-  \ty{from * to * subject * text -> option bool}\par
-  \ty{sender.send(message) -> result<(),error>}\par\smallskip
-  Byte / string conversion and UTF-8 checks.
-  Acceptance is not proof of delivery.\par
-  \tested{} Adapter and provider-boundary tests.\par
-  \links{components/service/adapters/email.wat}{components/service/adapters/email.wat}\par
-  \source{components/email/wit/email.wit}{Message / error WIT types}
-};
-\node[external] (abiboundary) at (44,-14) {
-  \textbf{Foreign ABI and trust boundary}\par
-  Registered arguments: Rocq heap values as i32s, plus the pinned compiler's
-  ignored force argument.\par\smallskip
-  \ty{ffi_*(force:i32, args:i32...) -> ()}\par
-  Result is written to shared \code{result}; the runtime restores heap alignment.\par
-  \source{components/service/theories/extraction.v}{Registration / exact arities}\par
-  \source{components/service/theories/Crypto.v}{Opaque types / crypto records}\quad
-  \source{components/service/theories/Api.v\#L66}{Email operation record}\par
-  \source{components/service/adapters/service.wat}{Boundary adapters}\quad
-  \source{tests/ffi-adapters.mjs}{ABI tests, not a proof}
+\node[card] (email) at ($(storage-bus)+(3.6,-.45)$) {
+  \textbf{Email provider} \hfill Rust\par\smallskip
+  Writes welcome messages to WASI stdout.
+  Acceptance does not imply mailbox delivery.\par\smallskip
+  \code{send}\par\smallskip
+  \source{components/email/src/lib.rs}{Implementation}\quad
+  \source{components/email/wit/email.wit}{WIT interface}
 };
 
-% Concrete providers and their composition.
-\node[checked] (composition) at (0,-20) {
-  \textbf{WAC composition and Rust web host}\par
-  \ty{host.component.wasm} links the service and Rust Wasm providers
-  at the component level, not through host crypto callbacks.\par\smallskip
-  Axum serves embedded assets; Wasmtime runs a fresh composed instance
-  per request with process-local signing seed and account storage.\par
-  \tested{} Real HTTP/component integration.\par
-  \source{host/composition.wac}{Composition}\quad
-  \source{host/src/main.rs}{Host}\quad
-  \source{host/tests/http.rs}{HTTP tests}
-};
-\node[checked] (argonrust) at (11,-20) {
-  \textbf{Active Argon2 provider component} \hfill Rust\par
-  RustCrypto Argon2 + subtle; enrollment uses a fresh 16-byte salt.\par
-  \ty{hash(bytes) -> result<bytes,error>}\par
-  \ty{verify(password,salt,algorithm,params,tag)}\par
-  \ty{  -> result<bool,error>}\par\smallskip
-  \tested{} Unit tests; no crypto-security / timing proof.\par
-  \links{components/crypto/argon2/src/lib.rs}{components/service/adapters/argon2.wat}\par
-  \source{components/crypto/wit/argon2.wit}{Interface}; composed into the demo.
-};
-\node[checked] (edrust) at (22,-20) {
-  \textbf{Active Ed25519 provider component} \hfill Rust\par
-  libcrux-ed25519; instance-local private-key store.\par
-  \ty{import-key(bytes) -> result<u32,error>}\par
-  \ty{sign(u32,bytes) -> result<bytes,error>}\par
-  \ty{verify(pk,msg,sig) -> result<bool,error>}\par\smallskip
-  \tested{} RFC vectors, malformed inputs, handle bounds.\par
-  \links{components/crypto/ed25519/src/lib.rs}{components/service/adapters/ed25519.wat}\par
-  \source{components/crypto/wit/ed25519.wit}{Interface}; composed into the demo.
-};
-\node[checked] (map) at (33,-20) {
-  \textbf{Actual demo keyvalue provider} \hfill Rust / BTreeMap\par
-  \ty{open(string) -> result<bucket,error>}\par
-  \ty{bucket.get(string) -> result<option<bytes>,error>}\par
-  \ty{cas.new/current; swap(cas,bytes) -> result<_,cas-error>}\par\smallskip
-  Compare and write under one mutex, so a lost swap is a conflict rather
-  than an overwrite.\par
-  \tested{} Ephemeral in-memory storage; concurrent signups give 201/409.
-  No durability, and no distributed atomicity.\par
-  \links{host/src/main.rs}{components/service/adapters/store.wat}\par
-  \source{components/service/wit/deps/keyvalue/atomic.wit}{WASI keyvalue 0.2.0-draft2 contract}
-};
-\node[checked] (stdoutemail) at (44,-20) {
-  \textbf{Actual stdout email provider component} \hfill Rust\par
-  \ty{send(message) -> result<(),error>}\par
-  \ty{message = {from,to,subject,text,idempotency-key}}\par\smallskip
-  Writes the welcome email to WASI stdout, not a mailbox.\par
-  \tested{} Unit / mocked-WASI / demo integration tests.
-  No delivery theorem.\par
-  \links{components/email/src/lib.rs}{components/service/adapters/email.wat}\par
-  \source{components/email/wit/email.wit}{Interface}\quad
-  \source{tests/email.mjs}{Provider tests}
-};
-
-% External standards and important behavioral limits.
-\node[external] (limits) at (0,-26) {
-  \textbf{Important behavioral limits}\par
-  Signup is get/hash/create/send.  The create is atomic, the sequence is
-  not: a failed email can leave a persisted account; retries conflict.\par\smallskip
-  Config, time, entropy, key custody, storage and provider correctness remain
-  trusted boundaries. No email confirmation / retry queue is implied.\par
-  \source{components/service/theories/Api.v}{Control flow}\quad
-  \source{components/service/theories/Proofs.v\#L150}{Creation statement}\par
-  \source{tests/component.mjs}{Runtime tests}\quad
-  \source{host/tests/http.rs}{HTTP tests}
-};
-\node[external] (random) at (11,-26) {
-  \textbf{WASI secure randomness} \hfill Host implementation\par
-  \ty{get-random-bytes(u64) -> list<u8>}\par
-  \ty{get-random-u64() -> u64}\par\smallskip
-  \trusted{} Rust Argon2 enrollment uses Wasmtime's WASI random
-  capability; the Rust host also creates the process signing seed.\par
-  \source{components/crypto/wit/deps/random/random.wit}{Standard type declaration}\par
-  \source{components/crypto/argon2/src/lib.rs}{Consumer implementation}\quad
-  \source{host/src/main.rs}{Host wiring}; no entropy theorem.
-};
-\node[external] (kvstandard) at (22,-26) {
-  \textbf{External persistent WASI keyvalue provider}\par
-  Implementation language: deployment-dependent; none bundled.\par
-  \ty{resource bucket; get/open}\par
-  \ty{resource cas; new/current; swap}\par
-  \ty{error = no-such-store | access-denied | other(string)}\par\smallskip
-  \trusted{} The CAS the create needs is WASI, but only on an untagged
-  \code{main} commit; the provider must honor it atomically.\par
-  \source{components/service/wit/deps/keyvalue/atomic.wit}{Contract; implementation supplied by host}\par
-  \source{components/service/adapters/store.wat}{Adapter}; no durability theorem.
-};
-\node[external] (emailwasi) at (33,-26) {
-  \textbf{Email host capabilities} \hfill Host implementation\par
-  Stdout: \ty{blocking-write-and-flush(bytes) -> result<(),error>}\par\smallskip
-  \trusted{} Output-stream behavior is external.\par
-  \source{components/email/src/lib.rs}{Consumer / generated bindings}\quad
-  \source{components/email/README.md}{Capability configuration}\par
-  \source{tests/email.mjs}{Mocked capability tests, not live delivery}
-};
-
-% Draw connectors behind the cards so optional paths cannot obscure text.
+% Route the lower provider calls through the gap between the cards.
 \begin{scope}[on background layer]
-  \draw[flow] (entry.south) -- ++(0,-.45) -|
-    node[edge label,pos=.75]{canonical service API} (runtime.north);
-  \draw[flow] (runtime.north) -- ++(0,.85) -| (clock.south);
-  \draw[dependency] (build.south) -- ++(0,-.65) -| (runtime.north);
-  \draw[flow] (runtime.west) -- (logic.east);
-  \draw[dependency] (bytes.east) -- (json.west);
-  \draw[dependency] (json.east) -- (protocol.west);
-  \draw[dependency] (protocol.east) -- (logic.west);
-  \draw[flow] (logic.south) -- ++(0,-.5) -| (argonadapter.north);
-  \draw[flow] (logic.south) -- ++(0,-.5) -| (edadapter.north);
-  \draw[flow] (logic.south) -- ++(0,-.5) -| (storeadapter.north);
-  \draw[flow] (logic.south) -- (emailadapter.north);
-  \draw[dependency] (composition.north) -- ++(0,.45) -| (entry.west);
-  \draw[dependency] (composition.east) -- (argonrust.west);
-  \draw[flow] (argonadapter.south) -- ++(0,-.7) -| (argonrust.north);
-  \draw[flow] (edadapter.south) -- ++(0,-.9) -| (edrust.north);
-  \draw[flow] (storeadapter.south) -- ++(0,-1.1) -| (map.north);
-  \draw[flow] (emailadapter.south) -- ++(0,-.45) -| (stdoutemail.north);
-  \draw[flow] (argonrust.south) -- (random.north);
-  \draw[optional] (storeadapter.south) -- ++(0,-.45) -- ++(-.8,0)
-    |- (kvstandard.west);
-  \draw[flow] (stdoutemail.south) -- ++(0,-.45) -| (emailwasi.north);
+  \draw[flow] (gateway.south) --
+    node[edge label]{\code{authentikate:service/api}} (service.north);
+  \draw[flow] (service.south) -- (provider-bus) -| (argon2.north);
+  \draw[flow] (provider-bus) -| (hmac.north);
+  \draw[flow] (provider-bus) -- (storage-bus) -| (storage.north);
+  \draw[flow] (storage-bus) -| (email.north);
 \end{scope}
 
-\node[anchor=north west,text width=54cm,font=\footnotesize] at (0,-32) {
-  \textbf{Reading the types:} source \code{bytes} is a MetaRocq bytestring;
-  WIT \code{bytes} here abbreviates \code{list<u8>}. Source signatures on this
-  figure use products as shorthand for curried arguments. Boxed providers are
-  components; the four WAT FFI adapters are internal core modules, not independent
-  component-model providers. Proof links target statement declarations, not
-  claims that tests prove security. Links follow \code{main}; working-tree
-  provider changes may not yet be published there.
+\node[fit=(storage)(email),inner sep=0pt] (provider-row) {};
+\node[anchor=north,text width=13.6cm,font=\footnotesize,align=left]
+  at ($(provider-row.south)+(0,-.5)$) {
+  Each box is a Wasm component. Arrows denote calls through component
+  interfaces; \code{bytes} abbreviates \code{list<u8>}. The six components are
+  linked by \source{host/composition.wac}{WAC composition} into one HTTP
+  component. Host capabilities and internal source libraries / core-Wasm
+  adapters are omitted. Green marks selected source-level proofs, not
+  end-to-end verification; Rust providers are tested, not formally verified.
 };
 \end{tikzpicture}
