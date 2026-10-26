@@ -59,26 +59,45 @@ For the report itself, LLMs were used to assist the creation of the figures, but
 
 \chapter{Background}
 
-\section{WebAssembly: modules and components}
-When one refers to \textit{WebAssembly} or \textit{Wasm}, one usually refers to the WebAssembly (core) module standard~\cite{wasm1.0spec,wasm2.0spec,wasm3.0spec}.
-Commonly advertised features of Wasm are its performance and security - a Wasm module is a sandbox that can interact with the host only in
-ways that are explicitely permitted. For instance, 
+\section{WebAssembly primer}
+When one refers to \textit{WebAssembly} or \textit{Wasm}, one usually means the WebAssembly (core) module standard, originally introduced in~\cite{wasm1.0spec}.
+The standard is evolving, the currently standarised version is version 3.0~\cite{wasm3.0spec}.
 
-In the context of verification, the main advantage is that the specification formally defines the syntax, the type system (with progress and preservation statements)
-and an operational semantics for every instruction. New feature additions to the standard are mechanized in Rocq, and reported mistakes integrated.
-WasmCert-Coq is the best-tested mechanisation of the Wasm standard I'm aware of, there are also mechanisations in Lean and Isabelle: \todo{links}.
+Commonly advertised features of Wasm are its performance, and security: a Wasm module is a sandbox that can interact with the host only in the
+ways that are explicitely permitted; there are no syscalls or the like in Wasm.
 
+In the context of verification, the main benefit is that the specification formally defines Wasm's syntax, the type system (with progress and preservation statements)
+and an operational semantics. New feature additions to the standard are mechanized (usually with some delay), and reported mistakes integrated.
+WasmCert-Coq is a well-maintained mechanization of the Wasm 2.0 standard, there are also mechanisations in Lean and Isabelle: \todo{links}.
+
+CertiRocq's Wasm backend generates such a Wasm module.
+
+\subsection{Wasm component model}
 A more recent addition to the Wasm ecosystem is the Wasm component model \todo{}.
-In its essence, a Wasm component is a Wasm module wrapped in a nice interface, listing function imports and exports. And allowing the composition of Wasm components in a principled way.
-While a Wasm module essentially\todo{footnote about Wasm 3.0} only has primitive integer and float types, the type system used when defining a Wasm component
-additionally has native strings, option and result types. The Wasm component model defines the representation of these types and lifting operations.
+In its simplest form, a Wasm component is a Wasm module wrapped in a cleaner interface, listing the module's imported and exported functions (and no other internals).
+The type system is also richer: in addition to Wasm's primitive types (i32, i64, f32, f64\footnote{Since version 3.0, additional heap-allocated arrays and record types.}),
+the component's type system has native strings, user-defined records, and option and result types.
+For these types, the component model defines the representation in the embedded Wasm core module and lifting operations.
 
-I'm not aware of a mechanization of the Wasm component standard, in fact it doesn't yet have a standardised semantics.
-Eventually, it should allow verifying the interaction between Wasm core modules and glue code.
+Wasm components with corresponding imports and exports can be composed, leading to a component containing multiple modules. 
 
+Further, using Wasm components allows for straightforward integration with other languages.
+
+
+I'm not aware of a mechanization of the Wasm component standard, in fact it doesn't yet have a standardised semantics or specification document.
+
+Having one would allow verifying the interaction between Wasm core modules and glue code.
 \todo{example component}
 
-Defining such an interface may not seem terribly exciting. However, it being standardised means that other projects are building tooling and infrastructure for integration. \todo{list bindings generator and composition}. \todo{WASI}.
+\subsection{Wasm system interface (WASI)}
+
+The current version of the component model is 0.3, calling it \`'widely supported\`' would be an overstatement.
+However, it is implemented by \textit{wasmtime}, one of the most popular Wasm runtimes.
+
+
+
+Defining such an interface may not seem terribly exciting. However, since it's being standardised, other projects are building tooling and infrastructure on top of it
+\cite{wasi.dev}.
 
 that makes it more convenient to deploy and integrate Wasm code in larger software projects.
 
