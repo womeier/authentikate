@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # Identity Workbench
 
 A local demonstration of the actual Rocq-generated authentication

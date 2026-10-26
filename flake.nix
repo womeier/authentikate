@@ -375,66 +375,6 @@
         echo "not yet supported"
       '';
 
-      # Fetch only the pinned bundle resources used by this report, not the
-      # multi-gigabyte full bundle. Update the hash when adding TeX dependencies.
-      reportResources =
-        pkgs.runCommand "authentikate-report-tex-resources"
-          {
-            nativeBuildInputs = [
-              pkgs.tectonic
-              pkgs.cacert
-            ];
-            outputHashMode = "recursive";
-            outputHashAlgo = "sha256";
-            outputHash = "sha256-tZjoDLC7iPAT0LxbhkAC+D/T/EWM/cyfXHSY7TT6NRM=";
-          }
-          ''
-            export HOME=$TMPDIR/home
-            mkdir -p "$HOME" work
-            cp -r ${./report}/. work/
-            cd work
-            tectonic --bundle ${pkgs.tectonic.unwrapped.TECTONIC_BUNDLE_LOCKED} main.tex
-            mkdir -p $out
-            cp -r "$HOME/.cache/tectonic/bundles" $out/
-          '';
-
-      report-watch = pkgs.writeShellApplication {
-        name = "report-watch";
-        runtimeInputs = [ pkgs.coreutils pkgs.tectonic pkgs.watchman pkgs.jq ];
-        text = ''
-          mkdir -p build/report
-          watchman watch "$PWD/report" >/dev/null
-          jq -nc --arg root "$PWD/report" \
-            '["subscribe", $root, "report", {expression: ["anyof", ["suffix", "tex"], ["suffix", "bib"]], fields: ["name"]}]' \
-            | watchman --no-pretty --persistent -j | while IFS= read -r event; do
-            if jq -e '.files | length > 0' <<< "$event" >/dev/null; then
-              tectonic --outdir build/report report/main.tex || true
-            fi
-          done
-        '';
-      };
-
-      report = pkgs.stdenvNoCC.mkDerivation {
-        pname = "authentikate-report";
-        version = "0.1.0";
-        src = ./report;
-        nativeBuildInputs = [ pkgs.tectonic ];
-        buildPhase = ''
-          runHook preBuild
-          export HOME=$TMPDIR/home
-          mkdir -p "$HOME/.cache/tectonic"
-          cp -r ${reportResources}/bundles "$HOME/.cache/tectonic/"
-          chmod -R u+w "$HOME"
-          tectonic --only-cached --bundle ${pkgs.tectonic.unwrapped.TECTONIC_BUNDLE_LOCKED} main.tex
-          runHook postBuild
-        '';
-        installPhase = ''
-          runHook preInstall
-          mkdir -p $out
-          cp main.pdf $out/
-          runHook postInstall
-        '';
-      };
     in
     {
       packages = darwinPackages // {
@@ -454,7 +394,6 @@
           inherit CertiRocq;
           inherit jco;
           rust-toolchain = rustToolchain;
-          inherit report report-watch;
         };
       };
 
@@ -482,10 +421,6 @@
             authentikate-production = {
               type = "app";
               program = lib.getExe authentikate-production;
-            };
-            report-watch = {
-              type = "app";
-              program = lib.getExe report-watch;
             };
           };
         };
@@ -543,13 +478,6 @@
             echo ""
             echo "Build the Wasm module:  make        (or: nix build)"
           '';
-        };
-
-        report = pkgs.mkShell {
-          name = "authentikate-report";
-          packages = [
-            pkgs.tectonic
-          ];
         };
       };
     };

@@ -1,3 +1,5 @@
+Written by LLMs. TODO: check.
+
 # HS256 Crypto Component
 
 `authentikate:crypto/hmac@0.1.0` imports no host capabilities and exposes only
