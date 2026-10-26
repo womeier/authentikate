@@ -44,12 +44,12 @@ impl From<WitAlgorithm> for Algorithm {
 }
 
 /// OWASP's current recommendation for Argon2id: 19 MiB, two passes, one lane,
-/// a 32-byte tag.
+/// a 32-byte hash.
 const RECOMMENDED: WitParams = WitParams {
     memory_kib: 19 * 1024,
     iterations: 2,
     parallelism: 1,
-    tag_length: 32,
+    hash_length: 32,
 };
 
 fn enrollment_with_salt(password: &[u8], salt: Vec<u8>) -> Result<Vec<u8>, Error> {
@@ -68,13 +68,13 @@ fn enrollment_with_salt(password: &[u8], salt: Vec<u8>) -> Result<Vec<u8>, Error
     // Only base64url strings and numbers are interpolated, so no JSON escaping
     // is needed. The resulting record is public, unlike the input password.
     Ok(format!(
-        "{{\"salt\":\"{}\",\"tag\":\"{}\",\"algorithm\":2,\"memory_kib\":{},\"iterations\":{},\"parallelism\":{},\"tag_length\":{}}}",
+        "{{\"salt\":\"{}\",\"hash\":\"{}\",\"algorithm\":2,\"memory_kib\":{},\"iterations\":{},\"parallelism\":{},\"hash_length\":{}}}",
         URL_SAFE_NO_PAD.encode(&salt),
         URL_SAFE_NO_PAD.encode(&tag),
         RECOMMENDED.memory_kib,
         RECOMMENDED.iterations,
         RECOMMENDED.parallelism,
-        RECOMMENDED.tag_length,
+        RECOMMENDED.hash_length,
     ).into_bytes())
 }
 
@@ -91,7 +91,7 @@ fn params(p: &WitParams) -> Result<Params, Error> {
         p.memory_kib,
         p.iterations,
         p.parallelism,
-        Some(p.tag_length as usize),
+        Some(p.hash_length as usize),
     )
     .map_err(|e| Error::InvalidParams(format!("{e}")))
 }
@@ -136,7 +136,7 @@ fn derive_into(
     check_salt(salt)?;
     let params = params(p)?;
 
-    let mut tag = vec![0u8; p.tag_length as usize];
+    let mut tag = vec![0u8; p.hash_length as usize];
     // Version 0x13 (19) is Argon2 v1.3, the only version anything should be
     // producing.
     Argon2::new(algorithm.into(), Version::V0x13, params)
@@ -173,27 +173,21 @@ impl Guest for Component {
         derive_into(&password, &salt, algorithm, &params)
     }
 
-    fn verify(
-        password: Vec<u8>,
-        salt: Vec<u8>,
-        algorithm: WitAlgorithm,
-        params: WitParams,
-        expected: Vec<u8>,
-    ) -> Result<bool, Error> {
+    fn verify(password: Vec<u8>, salt: Vec<u8>, hash: Vec<u8>) -> Result<bool, Error> {
         // Checked before deriving: a length mismatch is a caller bug, and
         // reporting it as `false` would hide it.  The length of the expected
-        // tag is not a secret -- it is stored in the clear next to it -- so
+        // hash is not a secret -- it is stored in the clear next to it -- so
         // this branch leaks nothing.
-        if expected.len() != params.tag_length as usize {
-            return Err(Error::InvalidTag(format!(
-                "expected tag of {} bytes, got {}",
-                params.tag_length,
-                expected.len()
+        if hash.len() != RECOMMENDED.hash_length as usize {
+            return Err(Error::InvalidHash(format!(
+                "expected hash of {} bytes, got {}",
+                RECOMMENDED.hash_length,
+                hash.len()
             )));
         }
 
-        let tag = derive_into(&password, &salt, algorithm, &params)?;
-        Ok(bool::from(tag.ct_eq(&expected)))
+        let tag = derive_into(&password, &salt, WitAlgorithm::Argon2id, &RECOMMENDED)?;
+        Ok(bool::from(tag.ct_eq(&hash)))
     }
 
     fn recommended_params() -> WitParams {
@@ -226,12 +220,14 @@ mod tests {
         let record = record(b"password", vec![0xfb; 16]);
         let fields = record.as_object().unwrap();
         assert_eq!(fields.len(), 7);
+        assert!(!fields.contains_key("tag"));
+        assert!(!fields.contains_key("tag_length"));
         assert_eq!(record["algorithm"], 2);
         assert_eq!(record["memory_kib"], 19456);
         assert_eq!(record["iterations"], 2);
         assert_eq!(record["parallelism"], 1);
-        assert_eq!(record["tag_length"], 32);
-        for (field, length) in [("salt", 16), ("tag", 32)] {
+        assert_eq!(record["hash_length"], 32);
+        for (field, length) in [("salt", 16), ("hash", 32)] {
             let encoded = record[field].as_str().unwrap();
             assert!(encoded
                 .bytes()
@@ -246,34 +242,63 @@ mod tests {
         let first = record(b"password", vec![1; 16]);
         let second = record(b"password", vec![2; 16]);
         assert_ne!(first["salt"], second["salt"]);
-        assert_ne!(first["tag"], second["tag"]);
+        assert_ne!(first["hash"], second["hash"]);
     }
 
     #[test]
-    fn enrollment_tag_verifies() {
+    fn enrollment_hash_verifies() {
         let record = record(b"password", vec![3; 16]);
         let salt = URL_SAFE_NO_PAD
             .decode(record["salt"].as_str().unwrap())
             .unwrap();
         let tag = URL_SAFE_NO_PAD
-            .decode(record["tag"].as_str().unwrap())
+            .decode(record["hash"].as_str().unwrap())
             .unwrap();
-        assert!(Component::verify(
-            b"password".to_vec(),
-            salt.clone(),
-            WitAlgorithm::Argon2id,
-            RECOMMENDED,
-            tag.clone()
-        )
-        .unwrap());
-        assert!(!Component::verify(
-            b"wrong".to_vec(),
-            salt,
-            WitAlgorithm::Argon2id,
-            RECOMMENDED,
-            tag
-        )
-        .unwrap());
+        assert!(Component::verify(b"password".to_vec(), salt.clone(), tag.clone()).unwrap());
+        assert!(!Component::verify(b"wrong".to_vec(), salt, tag).unwrap());
+    }
+
+    #[test]
+    fn verification_rejects_invalid_hash_lengths() {
+        for length in [0, 4, 16, 31, 33, 64] {
+            assert!(matches!(
+                Component::verify(b"password".to_vec(), vec![3; 16], vec![0; length]),
+                Err(Error::InvalidHash(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn verification_enforces_algorithm_and_costs() {
+        for (algorithm, p) in [
+            (WitAlgorithm::Argon2d, RECOMMENDED),
+            (WitAlgorithm::Argon2i, RECOMMENDED),
+            (
+                WitAlgorithm::Argon2id,
+                WitParams {
+                    memory_kib: 1024,
+                    ..RECOMMENDED
+                },
+            ),
+            (
+                WitAlgorithm::Argon2id,
+                WitParams {
+                    iterations: 1,
+                    ..RECOMMENDED
+                },
+            ),
+            (
+                WitAlgorithm::Argon2id,
+                WitParams {
+                    parallelism: 2,
+                    ..RECOMMENDED
+                },
+            ),
+        ] {
+            let salt = vec![3; 16];
+            let tag = Component::derive(b"password".to_vec(), salt.clone(), algorithm, p).unwrap();
+            assert!(!Component::verify(b"password".to_vec(), salt, tag).unwrap());
+        }
     }
 
     #[test]

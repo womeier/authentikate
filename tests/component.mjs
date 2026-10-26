@@ -71,11 +71,11 @@ const out = resolve(process.argv[2] ?? 'build');
           // The dummy salt is a constant in the adapter, 16 bytes, over the
           // 8-byte minimum `derive` enforces.
           assert.deepEqual(bytes(get(cfg + 16)), [...Buffer.from('authentikate-abs')]);
-          // The dummy tag is `tag-length` zero bytes; 7 is deliberately odd
-          // and not a multiple of four, so the zeroing loop is exercised.
-          assert.deepEqual(bytes(get(cfg + 20)), new Array(7).fill(0));
+          // Verification requires 32 bytes even when recommended-params is
+          // stubbed with a different hash length.
+          assert.deepEqual(bytes(get(cfg + 20)), new Array(32).fill(0));
           const costs = get(cfg + 24);
-          assert.deepEqual([4, 8, 12, 16, 20].map(i => N(get(costs + i))), [2n, 19456n, 2n, 1n, 7n]);
+          assert.deepEqual([4, 8, 12, 16, 20].map(i => N(get(costs + i))), [2n, 19456n, 2n, 1n, 32n]);
           assert.deepEqual(bytes(get(cfg + 28)), [70, 0, 128, 255]);
           assert.equal(N(now), clockSeconds);
           assert.deepEqual(bytes(body), [0, 255]);
@@ -168,7 +168,7 @@ const out = resolve(process.argv[2] ?? 'build');
       clockSeconds = clockSeconds === 0xffffffffffffffffn ? 0n : 0x100000001n;
     }
     assert.equal(calls, 3);
-    for (const [name, arity] of [['ffi_argon2_verify', 5], ['ffi_argon2_hash', 2],
+    for (const [name, arity] of [['ffi_argon2_verify', 4], ['ffi_argon2_hash', 2],
       ['ffi_secret_of_bytes', 2], ['ffi_hmac_sign', 3], ['ffi_hmac_verify', 4],
       ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
       assert.equal(wrapper[name].length, arity);
@@ -212,6 +212,9 @@ for (const endpoint of ['login', 'validate', 'signup']) {
 // No caller supplies configuration any more, so there is no `config` record
 // in the exported interface to supply.
 assert.ok(!wit.includes('record config'));
+assert.match(wit, /variant error\s*\{\s*not-found,\s*already-exists,\s*unavailable,\s*\}/);
+assert.ok(wit.includes('get: func(key: string) -> result<list<u8>, error>;'));
+assert.ok(wit.includes('create: func(key: string, value: list<u8>) -> result<_, error>;'));
 assert.ok(!wit.includes('main-function'));
 console.log('component: validates; only custom service API exported; exact clock, accounts, crypto, and email imports');
 
@@ -242,6 +245,7 @@ assert.deepEqual(WebAssembly.Module.exports(core).map(e => e.name).sort(), [
 ]);
 let e, mode = 'missing', verifyError = false, verifyMatched = false;
 let enrollError = false, writeError = false, allowEnrollment = false;
+let getError = null, createError = null;
 let signError = false, signatureError = false;
 let sendError = false, clockSeconds = 0n, clockCalls = 0, configCalls = 0;
 let importKeyError = false;
@@ -277,25 +281,27 @@ const imports = {
   'authentikate:storage/accounts@0.1.0': {
     get(p, n, ret) {
       gets++;
-      if (mode === 'outage') { failure(ret); return; }
+      if (mode === 'outage' || getError !== null) {
+        put(ret, 1); put(ret + 4, getError ?? 2); put(ret + 8, 0); return;
+      }
       const value = store.get(bytes(p, n).toString());
-      put(ret, 0);
-      put(ret + 4, Number(Boolean(value)));
-      if (value) list(ret, value, 8);
+      put(ret, Number(value === undefined));
+      if (value !== undefined) list(ret, value);
+      else { put(ret + 4, 0); put(ret + 8, 0); }
     },
     create(kp, kn, p, n, ret) {
       writes++;
       const memory = new Uint8Array(e.memory.buffer);
-      memory[ret] = Number(writeError || mode === 'outage');
-      memory[ret + 1] = 0;
-      if (writeError || mode === 'outage') return;
+      memory[ret] = 1;
+      memory[ret + 1] = createError ?? 2;
+      if (writeError || mode === 'outage' || createError !== null) return;
       const key = bytes(kp, kn).toString();
       // A competing create may win after signup's initial read but before ours.
       if (interleave) { store.set(key, Buffer.from(interleave)); interleave = null; }
-      if (store.has(key)) return;
+      if (store.has(key)) { memory[ret + 1] = 1; return; }
       store.set(key, Buffer.from(bytes(p, n)));
       events.push('write');
-      memory[ret + 1] = 1;
+      memory[ret] = 0;
     },
   },
   'authentikate:config/service@0.1.0': {
@@ -314,14 +320,13 @@ const imports = {
       // The parameters enrollment uses, so the dummy record costs the same.
       [19456, 2, 1, 32].forEach((v, i) => put(ret + 4 * i, v));
     },
-    verify(pp, pn, sp, sn, algorithm, memory, iterations, parallelism, length, tp, tn, ret) {
+    verify(...args) {
+      assert.equal(args.length, 7, 'canonical verify has seven i32 parameters');
+      const [pp, pn, sp, sn, tp, tn, ret] = args;
       hashes++;
       assert.equal(bytes(pp, pn).toString(), 'password');
-      // The absent-account path must cost exactly what a present one costs,
-      // so the dummy parameters are the enrolled parameters.  Only the salt
-      // and tag differ, and the dummy pair is now built by the adapter rather
-      // than passed in: a 16-byte constant and `tag-length` zero bytes.
-      assert.deepEqual([algorithm, memory, iterations, parallelism, length], [2, 19456, 2, 1, 32]);
+      // Both paths use the provider's fixed policy. The adapter supplies a
+      // 16-byte dummy salt and 32 zero bytes when the account is absent.
       const dummy = bytes(sp, sn).toString() === 'authentikate-abs';
       assert.ok(dummy || bytes(sp, sn).toString() === 'salt-salt', bytes(sp, sn).toString());
       assert.equal(bytes(tp, tn).length, 32);
@@ -335,8 +340,8 @@ const imports = {
       if (enrollError) { failure(ret); return; }
       put(ret, 0);
       list(ret, Buffer.from(JSON.stringify({
-        algorithm: 2, memory_kib: 19456, iterations: 2, parallelism: 1, tag_length: 32,
-        salt: Buffer.from('salt-salt').toString('base64url'), tag: Buffer.alloc(32).toString('base64url'),
+        algorithm: 2, memory_kib: 19456, iterations: 2, parallelism: 1, hash_length: 32,
+        salt: Buffer.from('salt-salt').toString('base64url'), hash: Buffer.alloc(32).toString('base64url'),
       })));
     },
   },
@@ -438,6 +443,10 @@ assert.equal(gets, 0); assert.equal(hashes, 0);
 assert.equal(enrolls, 0); assert.equal(writes, 0); assert.equal(emails.length, 0);
 assert.deepEqual(request('validate', '{"token":"invalid"}'), { status: 200, body: { valid: false } });
 const credentials = '{"email":"user@example.test","password":"password"}';
+getError = 1; // already-exists is not an appropriate get error.
+assert.equal(request('login', credentials).status, 500);
+assert.equal(request('signup', credentials).status, 500);
+getError = null;
 assert.equal(request('login', credentials).status, 401);
 assert.equal(hashes, 1);
 verifyError = true;
@@ -454,12 +463,17 @@ assert.equal(request('signup', credentials).status, 500);
 assert.equal(writes, 1);
 assert.equal(emails.length, 0, 'invalid requests, outages, enrollment and write failures must not send email');
 writeError = false;
+createError = 0; // not-found must not be mistaken for a create conflict.
+const beforeMismatch = [writes, emails.length];
+assert.equal(request('signup', credentials).status, 500);
+assert.deepEqual([writes, emails.length], [beforeMismatch[0] + 1, beforeMismatch[1]]);
+createError = null;
 assert.deepEqual(request('signup', credentials), { status: 201, body: {} });
 assert.equal(emails.length, 1);
 assert.deepEqual(events, ['write', 'send']);
 assert.equal(request('signup', credentials).status, 409);
 assert.equal(emails.length, 1, 'duplicate signup must not send email');
-assert.equal(writes, 2);
+assert.equal(writes, 3);
 assert.equal(JSON.parse(store.get('user@example.test')).email, 'user@example.test');
 verifyError = false; verifyMatched = true;
 signError = true;
@@ -495,7 +509,7 @@ assert.deepEqual([enrolls, writes, emails.length], beforeRetry, 'retry after sen
 
 // The race itself.  `interleave` makes another writer take the key *after*
 // this request has read it as absent -- precisely the
-// window a get followed by a set cannot close. Creation returns false, signup
+// window a get followed by a set cannot close. Creation returns already-exists, signup
 // answers 409, and the other writer's record is still there afterwards.
 store.delete('user@example.test');
 const winner = '{"email":"somebody-else"}';

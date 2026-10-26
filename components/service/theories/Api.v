@@ -43,15 +43,15 @@ Record config := MkConfig {
   cfg_key : Key.t;          (* handle to the signing key, held by the component *)
   cfg_iss : bytes;
   cfg_ttl : N;
-  (* A salt and tag to hash against when the email is unknown, so that a
+  (* A salt and hash to verify against when the email is unknown, so that a
      login for a nonexistent user costs the same as one for a real user with
      the wrong password.  Without this the uniform 401 below is undone by a
      microsecond-scale user-enumeration oracle. *)
   cfg_dummy_salt : bytes;
-  cfg_dummy_tag : Secret.t;
+  cfg_dummy_hash : Secret.t;
   (* And the cost parameters to hash the dummy under.  These have to be the
      parameters real records use, or the dummy path is distinguishable by how
-     long it takes -- which is the oracle [cfg_dummy_tag] exists to close.
+     long it takes -- which is the oracle [cfg_dummy_hash] exists to close.
      Note what that means once records start carrying different generations of
      parameters: the dummy can only match one of them, so a login's duration
      reveals which generation an account belongs to, and accounts stored under
@@ -96,7 +96,7 @@ Definition parse_request (r : route) (body : bytes) : request :=
   | RtUnknown => Malformed
   end.
 
-(* The lookup result picks which salt, parameters and tag to hash against, but
+(* The lookup result picks which salt and hash to verify against, but
    the hash runs either way, and the [found] test comes after it: a missing
    account and a wrong password take the same path through the expensive part.
    Factored out of [handle] so that this -- the only place where the two cases
@@ -107,15 +107,11 @@ Definition login_check (ops : crypto_ops) (cfg : config) (found : option user)
               | Some u => u_salt u
               | None => cfg_dummy_salt cfg
               end in
-  let params := match found with
-                | Some u => u_params u
-                | None => cfg_dummy_params cfg
-                end in
-  let tag := match found with
-             | Some u => u_tag u
-             | None => cfg_dummy_tag cfg
+  let hash := match found with
+              | Some u => u_hash u
+              | None => cfg_dummy_hash cfg
              end in
-  match argon2_verify ops password salt params tag, found with
+  match argon2_verify ops password salt hash, found with
   | Some true, Some _ =>
       match Jwt.sign ops (cfg_key cfg)
               (MkClaims email (cfg_iss cfg) now (now + cfg_ttl cfg)) with

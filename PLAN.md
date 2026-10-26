@@ -70,8 +70,8 @@ temporaries are not guaranteed wiped.
 
 [components/crypto/argon2](components/crypto/argon2) uses RustCrypto Argon2id.
 Enrollment obtains fresh salts from WASI random and returns public encoded
-salt/tag fields and cost parameters. Rocq constructs the stored JSON; raw key
-bytes and secret-tag comparison remain outside the Rocq heap's computation.
+salt/hash fields and cost parameters. Rocq constructs the stored JSON; raw key
+bytes and password-hash comparison remain outside the Rocq heap's computation.
 
 ## Account Storage
 

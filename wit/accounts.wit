@@ -3,16 +3,18 @@ package authentikate:storage@0.1.0;
 // Immutable opaque records. No overwrite, delete, buckets, or CAS handles.
 interface accounts {
     variant error {
+        not-found,
+        already-exists,
         unavailable,
     }
 
-    // Only ok(none) means absence; failures must remain errors.
-    get: func(key: string) -> result<option<list<u8>>, error>;
+    // Only not-found means absence; other failures must remain errors.
+    get: func(key: string) -> result<list<u8>, error>;
 
-    // Atomically publish the complete value if the key is absent. True means
-    // this caller created it; false means the key was already taken. A losing
+    // Atomically publish the complete value if the key is absent. Success means
+    // this caller created it; already-exists means the key was taken. A losing
     // caller must not replace the existing value, even with identical bytes.
     // A successful create must be visible to subsequent reads. An error may
     // follow publication if durability could not be confirmed; it is not a rollback.
-    create: func(key: string, value: list<u8>) -> result<bool, error>;
+    create: func(key: string, value: list<u8>) -> result<_, error>;
 }

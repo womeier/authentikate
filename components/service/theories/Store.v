@@ -21,7 +21,7 @@
 (*  a blob store over SQL columns: the host moves bytes and decides nothing,   *)
 (*  and the record format sits inside the verified perimeter.                 *)
 (*                                                                            *)
-(*  The salt is public and stored beside the tag; the tag becomes a            *)
+(*  The salt is public and stored beside the hash; the hash becomes a          *)
 (*  [Secret.t] on the way in.  Note what follows from that seal being          *)
 (*  one-way: this module cannot serialize a [Secret.t].  Enrollment instead    *)
 (*  receives explicitly public JSON from the Argon2 component.                 *)
@@ -37,7 +37,7 @@ Record user := MkUser {
   u_email : bytes;
   u_salt : bytes;
   u_params : argon2_params;
-  u_tag : Secret.t
+  u_hash : Secret.t
 }.
 
 Record store_ops := MkStore {
@@ -74,30 +74,30 @@ Definition fits_u32 (n : N) : bool := N.ltb n 4294967296.
    nothing besides.  Split out of [of_json] because the component does not
    know the email, and because [enrollment_record] below builds the record it
    writes out of these fields rather than out of the component's own JSON.
-   Salt and tag stay base64 here -- this is the record as read, before any
+   Salt and hash stay base64 here -- this is the record as read, before any
    decoding. *)
 Record public_record := MkPublic {
   pr_salt64 : bytes;
-  pr_tag64 : bytes;
+  pr_hash64 : bytes;
   pr_params : argon2_params
 }.
 
 Definition public_of_json (j : json) : option public_record :=
   match Json.get_str (lit ("salt"%string)) j,
-        Json.get_str (lit ("tag"%string)) j,
+        Json.get_str (lit ("hash"%string)) j,
         Json.get_num (lit ("algorithm"%string)) j,
         Json.get_num (lit ("memory_kib"%string)) j,
         Json.get_num (lit ("iterations"%string)) j,
         Json.get_num (lit ("parallelism"%string)) j,
-        Json.get_num (lit ("tag_length"%string)) j with
-  | Some salt64, Some tag64, Some alg, Some mem, Some iter, Some par, Some len =>
+        Json.get_num (lit ("hash_length"%string)) j with
+  | Some salt64, Some hash64, Some alg, Some mem, Some iter, Some par, Some len =>
       (* The five knobs are [u32] in the WIT, so a record naming a wider one
          would be truncated on the way through the canonical ABI.  Reject it
          rather than hash with parameters nobody wrote down. *)
       if andb (andb (andb (fits_u32 alg) (fits_u32 mem))
                     (andb (fits_u32 iter) (fits_u32 par)))
               (fits_u32 len)
-      then Some (MkPublic salt64 tag64 (MkParams alg mem iter par len))
+      then Some (MkPublic salt64 hash64 (MkParams alg mem iter par len))
       else None
   | _, _, _, _, _, _, _ => None
   end.
@@ -105,9 +105,9 @@ Definition public_of_json (j : json) : option public_record :=
 Definition of_json (j : json) : option user :=
   match Json.get_str (lit ("email"%string)) j, public_of_json j with
   | Some email, Some p =>
-      match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
-      | Some salt, Some tag =>
-          Some (MkUser email salt (pr_params p) (Secret.of_bytes tag))
+      match Base64.decode (pr_salt64 p), Base64.decode (pr_hash64 p) with
+      | Some salt, Some hash =>
+          Some (MkUser email salt (pr_params p) (Secret.of_bytes hash))
       | _, _ => None
       end
   | _, _ => None
@@ -119,7 +119,7 @@ Definition decode (v : bytes) : option user :=
   | None => None
   end.
 
-(* Enrollment supplies salt, tag and all five cost fields, but does not know
+(* Enrollment supplies salt, hash and all five cost fields, but does not know
    the email.  The record is printed here, from the fields this module read
    out of the component's JSON -- not the component's JSON with an email
    prepended, which is what this used to be.  The difference is what a
@@ -136,12 +136,12 @@ Definition decode (v : bytes) : option user :=
 Definition record_json (email : bytes) (p : public_record) : json :=
   JObj [ (lit ("email"%string), JStr email);
          (lit ("salt"%string), JStr (pr_salt64 p));
-         (lit ("tag"%string), JStr (pr_tag64 p));
+         (lit ("hash"%string), JStr (pr_hash64 p));
          (lit ("algorithm"%string), JNum (ap_algorithm (pr_params p)));
          (lit ("memory_kib"%string), JNum (ap_memory_kib (pr_params p)));
          (lit ("iterations"%string), JNum (ap_iterations (pr_params p)));
          (lit ("parallelism"%string), JNum (ap_parallelism (pr_params p)));
-         (lit ("tag_length"%string), JNum (ap_tag_length (pr_params p))) ].
+         (lit ("hash_length"%string), JNum (ap_hash_length (pr_params p))) ].
 
 (* Exactly the parser's string-content invariant, not merely printable ASCII.
    Request emails satisfy it; arbitrary callers of [enrollment_record] need not. *)
@@ -160,9 +160,9 @@ Definition enrollment_record (email public_json : bytes) : option bytes :=
       match Json.get (lit ("email"%string)) j, public_of_json j with
       | None, Some p =>
           if record_email_safe email then
-            (* The parser established safe salt/tag strings, and [public_of_json]
+            (* The parser established safe salt/hash strings, and [public_of_json]
                checked the numeric bounds.  Only base64 validation remains. *)
-            match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
+            match Base64.decode (pr_salt64 p), Base64.decode (pr_hash64 p) with
             | Some _, Some _ => Some (Json.print (record_json email p))
             | _, _ => None
             end

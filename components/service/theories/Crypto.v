@@ -56,31 +56,23 @@ Module Key : KEY.
   Definition of_handle (n : N) : t := n.
 End Key.
 
-(* Argon2's cost knobs, mirroring the [params] record and the [algorithm] enum
-   in components/crypto/wit/argon2.wit. Public, all of them: how expensive a hash was is
-   not a secret, and it cannot be one -- it is stored beside the tag, because a
-   tag is only verifiable under the parameters it was derived with.
-
-   Which is why these are an argument and not a constant.  Compiling them into
-   the adapter, as it does today, binds every stored tag to whatever
-   [recommended-params] returned the day it was written; the next time that
-   recommendation moves, every stored tag stops verifying at once.
-
-   Bounded to u32 by [Store.of_json], which is what the canonical ABI wants. *)
+(* Public metadata retained in stored records. Verification does not consume
+   these fields: the provider enforces Argon2id v1.3, 19456 KiB, two passes,
+   one lane and a 32-byte hash. *)
 Record argon2_params := MkParams {
   ap_algorithm : N;      (* 0 argon2d, 1 argon2i, 2 argon2id *)
   ap_memory_kib : N;
   ap_iterations : N;
   ap_parallelism : N;
-  ap_tag_length : N
+  ap_hash_length : N
 }.
 
 Record crypto_ops := MkOps {
-  (* password, salt, cost parameters, expected tag.  The comparison happens
-     inside the component, in constant time; the tag never comes back here. *)
-  argon2_verify : Secret.t -> bytes -> argon2_params -> Secret.t -> option bool;
+  (* password, salt, expected hash. The comparison happens
+     inside the component, in constant time; the hash never comes back here. *)
+  argon2_verify : Secret.t -> bytes -> Secret.t -> option bool;
   (* A fresh random salt is generated inside the Argon2 component.  The result
-     is PUBLIC JSON with base64url salt/tag and numeric algorithm/cost fields;
+     is PUBLIC JSON with base64url salt/hash and numeric algorithm/cost fields;
      Store.enrollment_record adds the email.  No secret eliminator is exposed. *)
   argon2_hash : Secret.t -> option bytes;
   (* key handle, message *)

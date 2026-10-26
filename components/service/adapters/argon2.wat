@@ -46,9 +46,8 @@
   (import "rocq" "result" (global $result (mut i32)))
 
   ;; ---- from the argon2 component -------------------------------------------
-  ;; Canonical ABI lowerings of components/crypto/wit/argon2.wit. `params` is a record of
-  ;; four u32, so it flattens to four i32 in field order; `algorithm` is an
-  ;; enum, so one i32.  The results need more than one flat value, so they
+  ;; Canonical ABI lowerings of components/crypto/wit/argon2.wit.
+  ;; The results need more than one flat value, so they
   ;; come back through a return area we supply.
   (import "authentikate:crypto/argon2@0.1.0" "hash"
     (func $wit_hash
@@ -58,8 +57,6 @@
     (func $wit_verify
       (param i32 i32)          ;; password: ptr, len
       (param i32 i32)          ;; salt: ptr, len
-      (param i32)              ;; algorithm
-      (param i32 i32 i32 i32)  ;; params
       (param i32 i32)          ;; expected: ptr, len
       (param i32)))            ;; return area
 
@@ -68,33 +65,29 @@
   (global $buf_len (mut i32) (i32.const 0))
 
   ;; Expanded at build/test time from common.wat; no runtime helper module.
-  ;; @COMMON alloc cabi_realloc list_len read_N lower lift_bytes some@
+  ;; @COMMON alloc cabi_realloc list_len lower lift_bytes some@
 
   ;; ---- the registered primitives -------------------------------------------
   ;;
   ;; Export names must match the strings given to `CertiRocq Register`.
   ;;
-  ;; Enrollment chooses parameters in the provider; verify uses the stored record.
+  ;; Enrollment and verification use the same fixed policy in the provider.
   ;;
   ;; All return `option`, so a misuse of the interface (a short salt, an
-  ;; over-long password, a tag of the wrong length) arrives in Rocq as `None`
+  ;; over-long password, a hash of the wrong length) arrives in Rocq as `None`
   ;; rather than as a plausible answer.  The component's error message is
   ;; discarded: it is a string in linear memory and Rocq has nothing to do
   ;; with it.
 
-  ;; argon2_verify : bytes -> bytes -> argon2_params -> bytes -> option bool
+  ;; argon2_verify : bytes -> bytes -> bytes -> option bool
   ;;
   ;; The comparison stays inside the component, where it is `subtle::ct_eq`.
-  ;; Returning the tag for Rocq to compare would be a timing oracle: equality
+  ;; Returning the hash for Rocq to compare would be a timing oracle: equality
   ;; on bytestrings in extracted code short-circuits on the first differing byte.
   ;;
-  ;; The parameters come from the caller, which is to say from the stored
-  ;; record.  They have to: a tag only verifies under the parameters it was
-  ;; derived with, so reading `recommended-params` here -- as this did -- would
-  ;; invalidate every stored tag the day that recommendation moved.
   (func $argon2_verify
-        (param $password i32) (param $salt i32) (param $params i32)
-        (param $expected i32)
+        (param $password i32) (param $salt i32)
+        (param $hash i32)
         (result i32)
     (local $pp i32) (local $pl i32)
     (local $sp i32) (local $sl i32)
@@ -108,31 +101,20 @@
     (local.set $pl (global.get $buf_len))
     (local.set $sp (call $lower (local.get $salt)))
     (local.set $sl (global.get $buf_len))
-    (local.set $ep (call $lower (local.get $expected)))
+    (local.set $ep (call $lower (local.get $hash)))
     (local.set $el (global.get $buf_len))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
 
-    ;; `argon2_params` is a five-field record: algorithm at 4, then the four
-    ;; fields of the WIT `params` in its declaration order -- memory-kib,
-    ;; iterations, parallelism, tag-length.  The orders agree by construction;
-    ;; Crypto.v says so and this is the other half of that agreement.
     (call $wit_verify
       (local.get $pp) (local.get $pl)
       (local.get $sp) (local.get $sl)
-      (call $read_N (i32.load offset=4 (local.get $params)))
-      (call $read_N (i32.load offset=8 (local.get $params)))
-      (call $read_N (i32.load offset=12 (local.get $params)))
-      (call $read_N (i32.load offset=16 (local.get $params)))
-      (call $read_N (i32.load offset=20 (local.get $params)))
       (local.get $ep) (local.get $el)
       (local.get $ret))
 
     ;; result<bool, error>: discriminant at 0, payload at 4.  0 is ok, and the
     ;; ok payload is a single byte.  A Rocq bool is 1 for false, 3 for true.
     ;;
-    ;; An out-of-range parameter arrives here as `invalid-params`, hence as
-    ;; `None`, hence as a 500 -- not as `Some false`.  Which is the right way
-    ;; round: a record this service cannot hash is not a wrong password.
+    ;; Invalid inputs become None, not Some false.
     (if (result i32) (i32.load8_u (local.get $ret))
       (then (i32.const 1))  ;; err -> None
       (else
@@ -143,11 +125,11 @@
 
   (func (export "ffi_argon2_verify")
         (param $force i32)
-        (param $password i32) (param $salt i32) (param $params i32)
-        (param $expected i32)
+        (param $password i32) (param $salt i32)
+        (param $hash i32)
     (global.set $result
       (call $argon2_verify (local.get $password) (local.get $salt)
-        (local.get $params) (local.get $expected))))
+        (local.get $hash))))
 
   ;; Secret.t is representation-identical to bytes, but opaque to Rocq callers.
   (func (export "ffi_secret_of_bytes") (param $force i32) (param $bytes i32)
@@ -155,7 +137,7 @@
 
   ;; argon2_hash : Secret.t -> option bytes
   ;; The component generates the random salt and serializes the stored JSON
-  ;; record. The adapter only moves bytes; no salt or tag is constructed here.
+  ;; record. The adapter only moves bytes; no salt or hash is constructed here.
   (func $argon2_hash (param $password i32) (result i32)
     (local $pp i32) (local $pl i32) (local $ret i32)
     (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))

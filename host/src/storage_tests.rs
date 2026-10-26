@@ -73,32 +73,29 @@ fn immutable_records_survive_instances_and_reject_replacement() {
     ];
     for key in &keys {
         let (mut state, guest) = instance(directory.path(), true);
-        assert_eq!(
+        assert!(matches!(
             guest
                 .authentikate_storage_accounts()
                 .call_get(&mut state, key)
-                .unwrap()
                 .unwrap(),
-            None
-        );
-        assert!(
-            guest
-                .authentikate_storage_accounts()
-                .call_create(&mut state, key, b"value\0\xff")
-                .unwrap()
-                .unwrap()
-        );
+            Err(Error::NotFound)
+        ));
+        guest
+            .authentikate_storage_accounts()
+            .call_create(&mut state, key, b"value\0\xff")
+            .unwrap()
+            .unwrap();
     }
     for key in &keys {
         let (mut state, guest) = instance(directory.path(), true);
         for value in [b"replacement".as_slice(), b"value\0\xff"] {
-            assert!(
-                !guest
+            assert!(matches!(
+                guest
                     .authentikate_storage_accounts()
                     .call_create(&mut state, key, value)
-                    .unwrap()
-                    .unwrap()
-            );
+                    .unwrap(),
+                Err(Error::AlreadyExists)
+            ));
         }
         assert_eq!(
             guest
@@ -106,7 +103,7 @@ fn immutable_records_survive_instances_and_reject_replacement() {
                 .call_get(&mut state, key)
                 .unwrap()
                 .unwrap(),
-            Some(b"value\0\xff".to_vec())
+            b"value\0\xff".to_vec()
         );
     }
     let entries: Vec<_> = std::fs::read_dir(directory.path())
@@ -135,13 +132,11 @@ fn storage_errors_do_not_become_absence_or_conflict() {
     ));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     let (mut state, guest) = instance(directory.path(), true);
-    assert!(
-        guest
-            .authentikate_storage_accounts()
-            .call_create(&mut state, "key", b"value")
-            .unwrap()
-            .unwrap()
-    );
+    guest
+        .authentikate_storage_accounts()
+        .call_create(&mut state, "key", b"value")
+        .unwrap()
+        .unwrap();
     let file = std::fs::read_dir(directory.path())
         .unwrap()
         .next()
@@ -163,14 +158,13 @@ fn storage_errors_do_not_become_absence_or_conflict() {
         ));
     }
     std::fs::write(directory.path().join(".tmp-orphan"), b"partial").unwrap();
-    assert_eq!(
+    assert!(matches!(
         guest
             .authentikate_storage_accounts()
             .call_get(&mut state, "missing")
-            .unwrap()
             .unwrap(),
-        None
-    );
+        Err(Error::NotFound)
+    ));
     assert!(matches!(
         guest
             .authentikate_storage_accounts()
@@ -219,14 +213,13 @@ fn process_creator() {
     let path = Path::new(&path);
     let id = std::env::var("STORAGE_TEST_ID").unwrap();
     let (mut state, guest) = instance(path, true);
-    assert_eq!(
+    assert!(matches!(
         guest
             .authentikate_storage_accounts()
             .call_get(&mut state, "racing/key")
-            .unwrap()
             .unwrap(),
-        None
-    );
+        Err(Error::NotFound)
+    ));
     std::fs::write(path.join(format!("ready-{id}")), b"").unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !path.join("go").exists() {
@@ -234,15 +227,18 @@ fn process_creator() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let value = vec![id.as_bytes()[0]; 128 * 1024];
-    let won = guest
+    let won = match guest
         .authentikate_storage_accounts()
         .call_create(&mut state, "racing/key", &value)
         .unwrap()
-        .unwrap();
+    {
+        Ok(()) => true,
+        Err(Error::AlreadyExists) => false,
+        Err(error) => panic!("unexpected create failure: {error:?}"),
+    };
     let current = guest
         .authentikate_storage_accounts()
         .call_get(&mut state, "racing/key")
-        .unwrap()
         .unwrap()
         .unwrap();
     assert_eq!(current.len(), value.len());
@@ -290,16 +286,19 @@ fn publication_is_atomic_across_processes() {
     let (mut state, guest) = instance(directory.path(), false);
     std::fs::write(directory.path().join("go"), b"").unwrap();
     loop {
-        if let Some(value) = guest
+        match guest
             .authentikate_storage_accounts()
             .call_get(&mut state, "racing/key")
             .unwrap()
-            .unwrap()
         {
-            assert_eq!(value.len(), 128 * 1024);
-            assert!(value[0] == b'1' || value[0] == b'2');
-            assert!(value.iter().all(|b| *b == value[0]));
-            break;
+            Ok(value) => {
+                assert_eq!(value.len(), 128 * 1024);
+                assert!(value[0] == b'1' || value[0] == b'2');
+                assert!(value.iter().all(|b| *b == value[0]));
+                break;
+            }
+            Err(Error::NotFound) => {}
+            Err(error) => panic!("unexpected get failure: {error:?}"),
         }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(1));

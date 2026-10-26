@@ -8,7 +8,7 @@
   (import "rocq" "out_of_mem" (global $out_of_mem (mut i32)))
   (import "rocq" "result" (global $result (mut i32)))
   (import "rocq" "main_function" (func $main))
-  (import "argon2" "ffi_argon2_verify" (func $argon2-verify (param i32 i32 i32 i32 i32)))
+  (import "argon2" "ffi_argon2_verify" (func $argon2-verify (param i32 i32 i32 i32)))
   (import "argon2" "ffi_argon2_hash" (func $argon2-hash (param i32 i32)))
   (import "argon2" "ffi_secret_of_bytes" (func $secret (param i32 i32)))
   (import "hmac" "ffi_hmac_sign" (func $sign (param i32 i32 i32)))
@@ -43,8 +43,8 @@
   (func $align-heap
     (global.set $mem_ptr
       (i32.and (i32.add (global.get $mem_ptr) (i32.const 3)) (i32.const -4))))
-  (func (export "ffi_argon2_verify") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $e i32)
-    (call $argon2-verify (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $e))
+  (func (export "ffi_argon2_verify") (param $a i32) (param $b i32) (param $c i32) (param $d i32)
+    (call $argon2-verify (local.get $a) (local.get $b) (local.get $c) (local.get $d))
     (call $align-heap))
   (func (export "ffi_argon2_hash") (param $a i32) (param $b i32)
     (call $argon2-hash (local.get $a) (local.get $b))
@@ -132,10 +132,10 @@
     (i64.store offset=8 (local.get $p) (i64.const 0x7362612d6574616b)) ;; "kate-abs"
     (call $lift_bytes (local.get $p) (i32.const 16)))
 
-  ;; `tag-length` zero bytes.  The value is discarded; only its length has to
-  ;; match the parameters, or `verify` rejects the record on shape and the
+  ;; 32 zero bytes. The value is discarded; its length must match the fixed
+  ;; verification policy, or `verify` rejects the record on shape and the
   ;; absent path stops costing what the present path costs.
-  (func $dummy-tag (param $len i32) (result i32)
+  (func $dummy-hash (param $len i32) (result i32)
     (local $p i32) (local $i i32)
     (local.set $p (call $alloc (local.get $len) (i32.const 4)))
     (call $check)
@@ -173,7 +173,7 @@
     (local $pair i32) (local $body i32) (local $ret i32)
     (local $clock i32) (local $seconds i64)
     (local $set i32) (local $kr i32) (local $par i32)
-    (local $key i32) (local $taglen i32)
+    (local $key i32) (local $hashlen i32)
     (call $initialize)
     ;; Canonical datetime is 16 bytes aligned to 8. Snapshot once per request.
     (local.set $clock (call $alloc (i32.const 16) (i32.const 8)))
@@ -201,7 +201,7 @@
     (local.set $par (call $alloc (i32.const 16) (i32.const 4)))
     (call $check)
     (call $wit_recommended_params (local.get $par))
-    (local.set $taglen (i32.load offset=12 (local.get $par)))
+    (local.set $hashlen (i32.const 32))
     ;; Canonical buffers may leave the bump pointer unaligned before Rocq
     ;; values are built on top of it.
     (call $align-heap)
@@ -212,7 +212,8 @@
     (i32.store (local.get $cfg) (i32.const 0))
     (i32.store (local.get $params) (i32.const 0))
     ;; 2 is argon2id, the algorithm `hash` writes into every record it mints;
-    ;; the other four are `recommended-params` in field order.
+    ;; the costs are retained as unused config metadata. Hash length stays 32
+    ;; regardless of recommended-params, matching the fixed verify policy.
     (i32.store offset=4 (local.get $params) (call $N (i64.const 2)))
     (i32.store offset=8 (local.get $params)
       (call $N (i64.extend_i32_u (i32.load (local.get $par)))))
@@ -221,13 +222,13 @@
     (i32.store offset=16 (local.get $params)
       (call $N (i64.extend_i32_u (i32.load offset=8 (local.get $par)))))
     (i32.store offset=20 (local.get $params)
-      (call $N (i64.extend_i32_u (local.get $taglen))))
+      (call $N (i64.extend_i32_u (local.get $hashlen))))
     (i32.store offset=4 (local.get $cfg) (call $N (i64.extend_i32_u (local.get $key))))
     (i32.store offset=8 (local.get $cfg)
       (call $bytes-at (i32.add (local.get $set) (i32.const 8))))
     (i32.store offset=12 (local.get $cfg) (call $N (i64.load offset=16 (local.get $set))))
     (i32.store offset=16 (local.get $cfg) (call $dummy-salt))
-    (i32.store offset=20 (local.get $cfg) (call $dummy-tag (local.get $taglen)))
+    (i32.store offset=20 (local.get $cfg) (call $dummy-hash (local.get $hashlen)))
     (i32.store offset=24 (local.get $cfg) (local.get $params))
     (i32.store offset=28 (local.get $cfg)
       (call $bytes-at (i32.add (local.get $set) (i32.const 24))))

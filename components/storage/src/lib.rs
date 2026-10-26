@@ -47,7 +47,7 @@ fn decode(key: &str, bytes: &[u8]) -> Result<Vec<u8>, Error> {
     }
     Ok(bytes[12 + length..].to_vec())
 }
-fn get(dir: &Descriptor, key: &str) -> Result<Option<Vec<u8>>, Error> {
+fn get(dir: &Descriptor, key: &str) -> Result<Vec<u8>, Error> {
     let file = match dir.open_at(
         PathFlags::empty(),
         &filename(key),
@@ -55,7 +55,7 @@ fn get(dir: &Descriptor, key: &str) -> Result<Option<Vec<u8>>, Error> {
         DescriptorFlags::READ,
     ) {
         Ok(file) => file,
-        Err(ErrorCode::NoEntry) => return Ok(None),
+        Err(ErrorCode::NoEntry) => return Err(Error::NotFound),
         Err(code) => return Err(io_error(code)),
     };
     let mut bytes = Vec::new();
@@ -72,10 +72,10 @@ fn get(dir: &Descriptor, key: &str) -> Result<Option<Vec<u8>>, Error> {
             break;
         }
     }
-    decode(key, &bytes).map(Some)
+    decode(key, &bytes)
 }
 
-fn create(dir: &Descriptor, key: &str, value: &[u8]) -> Result<bool, Error> {
+fn create(dir: &Descriptor, key: &str, value: &[u8]) -> Result<(), Error> {
     let bytes = encode(key, value)?;
     let mut temporary = String::new();
     let mut opened = None;
@@ -118,9 +118,9 @@ fn create(dir: &Descriptor, key: &str, value: &[u8]) -> Result<bool, Error> {
                 // A sync failure after publication is an uncertain durability outcome,
                 // not permission to remove or overwrite the now-visible account.
                 dir.sync().map_err(io_error)?;
-                Ok(true)
+                Ok(())
             }
-            Err(ErrorCode::Exist) => Ok(false),
+            Err(ErrorCode::Exist) => Err(Error::AlreadyExists),
             Err(code) => Err(io_error(code)),
         }
     })();
@@ -131,10 +131,10 @@ fn create(dir: &Descriptor, key: &str, value: &[u8]) -> Result<bool, Error> {
 }
 
 impl Guest for Component {
-    fn get(key: String) -> Result<Option<Vec<u8>>, Error> {
+    fn get(key: String) -> Result<Vec<u8>, Error> {
         get(&directory()?, &key)
     }
-    fn create(key: String, value: Vec<u8>) -> Result<bool, Error> {
+    fn create(key: String, value: Vec<u8>) -> Result<(), Error> {
         create(&directory()?, &key, &value)
     }
 }

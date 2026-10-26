@@ -27,8 +27,8 @@ interface argon2 {
         iterations: u32,
         /// Degree of parallelism (lanes).  At least 1.
         parallelism: u32,
-        /// Length of the derived tag, in bytes.  At least 4.
-        tag-length: u32,
+        /// Length of the derived hash, in bytes.  At least 4.
+        hash-length: u32,
     }
 
     /// Invalid inputs or an invalid response from the host random source.
@@ -40,21 +40,22 @@ interface argon2 {
         invalid-salt(string),
         /// The password is longer than Argon2 accepts.
         invalid-password(string),
-        /// `expected` is not `tag-length` bytes long.
-        invalid-tag(string),
+        /// The supplied hash is not exactly 32 bytes long.
+        invalid-hash(string),
     }
 
     /// Hash a password with Argon2id, recommended parameters, and a fresh 16-byte salt
-    /// from wasi:random/random. Returns UTF-8 JSON with salt and tag encoded
+    /// from wasi:random/random. Returns UTF-8 JSON with salt and hash encoded
     /// as unpadded base64url, algorithm 2, and numeric memory_kib, iterations,
-    /// parallelism and tag_length fields. Contains no email or password.
+    /// parallelism and hash_length fields. Contains no email or password.
+    /// The password hash is called a tag in the Argon2 specification.
     hash: func(password: list<u8>) -> result<list<u8>, error>;
 
-    /// Derive a tag of `params.tag-length` bytes from `password` and `salt`.
+    /// Derive a hash of `params.hash-length` bytes from `password` and `salt`.
     ///
     /// The salt must be unique per password and at least 8 bytes; 16 random
     /// bytes is the usual choice.  It is not a secret and is stored
-    /// alongside the tag.
+    /// alongside the hash.
     derive: func(
         password: list<u8>,
         salt: list<u8>,
@@ -62,23 +63,23 @@ interface argon2 {
         params: params,
     ) -> result<list<u8>, error>;
 
-    /// Derive a tag the same way and compare it against `expected` in
+    /// Derive with Argon2id v1.3, 19456 KiB, two passes, one lane and a
+    /// 32-byte hash, then compare it against `hash` in
     /// constant time.  `false` means the password is wrong -- it is an
     /// answer, not an error.
     ///
     /// The comparison is the reason this is a function rather than a call to
     /// `derive` followed by a comparison in the caller: a caller comparing
-    /// byte strings in the obvious way leaks the tag one byte at a time.
+    /// byte strings in the obvious way leaks the hash one byte at a time.
     verify: func(
         password: list<u8>,
         salt: list<u8>,
-        algorithm: algorithm,
-        params: params,
-        expected: list<u8>,
+        /// The stored password hash, called a tag in the Argon2 specification.
+        hash: list<u8>,
     ) -> result<bool, error>;
 
     /// Argon2id with the parameters OWASP currently recommends: 19 MiB of
-    /// memory, two passes, one lane, a 32-byte tag.  Exported so the
+    /// memory, two passes, one lane, a 32-byte hash.  Exported so the
     /// recommendation lives next to the primitive it parameterises and moves
     /// when the recommendation does; a caller is free to pass its own.
     recommended-params: func() -> params;

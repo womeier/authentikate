@@ -9,12 +9,12 @@ Definition email := lit "user@example.test"%string.
 Definition signup_body :=
   lit "{""email"":""user@example.test"",""password"":""password""}"%string.
 Definition public_enrollment := lit
-  "{""salt"":""c2FsdA"",""tag"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""tag_length"":3}"%string.
+  "{""salt"":""c2FsdA"",""hash"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""hash_length"":3}"%string.
 Definition stored_record := lit
-  "{""email"":""user@example.test"",""salt"":""c2FsdA"",""tag"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""tag_length"":3}"%string.
+  "{""email"":""user@example.test"",""salt"":""c2FsdA"",""hash"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""hash_length"":3}"%string.
 
 Definition mock_crypto (enrolled : option bytes) : crypto_ops :=
-  MkOps (fun _ _ _ _ => None) (fun _ => enrolled)
+  MkOps (fun _ _ _ => None) (fun _ => enrolled)
         (fun _ _ => None) (fun _ _ _ => None).
 
 Definition mock_store (read : option (option bytes))
@@ -37,6 +37,15 @@ Example enrollment_adds_email :
   Store.enrollment_record email public_enrollment = Some stored_record.
 Proof. vm_compute. reflexivity. Qed.
 
+(* The renamed schema deliberately does not accept legacy Argon2 keys. *)
+Example legacy_hash_keys_rejected :
+  (Store.enrollment_record email (lit
+    "{""salt"":""c2FsdA"",""tag"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""tag_length"":3}"%string),
+   Store.decode (lit
+    "{""email"":""user@example.test"",""salt"":""c2FsdA"",""tag"":""dGFn"",""algorithm"":2,""memory_kib"":19456,""iterations"":2,""parallelism"":1,""tag_length"":3}"%string)) =
+  (None, None).
+Proof. vm_compute. reflexivity. Qed.
+
 Example enrollment_rejects_existing_email :
   Store.enrollment_record email stored_record = None.
 Proof. vm_compute. reflexivity. Qed.
@@ -44,7 +53,7 @@ Proof. vm_compute. reflexivity. Qed.
 Example enrollment_rejects_invalid :
   map (Store.enrollment_record email)
     [lit "[]"%string; lit "{}"%string;
-     lit "{""salt"":""+invalid"",""tag"":""dGFn"",""algorithm"":2,""memory_kib"":1,""iterations"":1,""parallelism"":1,""tag_length"":3}"%string] =
+     lit "{""salt"":""+invalid"",""hash"":""dGFn"",""algorithm"":2,""memory_kib"":1,""iterations"":1,""parallelism"":1,""hash_length"":3}"%string] =
     [None; None; None].
 Proof. vm_compute. reflexivity. Qed.
 
@@ -69,15 +78,15 @@ Example enrollment_accepts_safe_email_edges :
       (MkParams 2 19456 2 1 3))))) [BS.EmptyString; lit " ~"%string].
 Proof. vm_compute. reflexivity. Qed.
 
-Definition enrollment_fixture (salt tag : bytes) (p : argon2_params)
+Definition enrollment_fixture (salt hash : bytes) (p : argon2_params)
     (extra : list (bytes * json)) : bytes :=
   Json.print (JObj
-    ([(lit "salt"%string, JStr salt); (lit "tag"%string, JStr tag);
+    ([(lit "salt"%string, JStr salt); (lit "hash"%string, JStr hash);
       (lit "algorithm"%string, JNum (ap_algorithm p));
       (lit "memory_kib"%string, JNum (ap_memory_kib p));
       (lit "iterations"%string, JNum (ap_iterations p));
       (lit "parallelism"%string, JNum (ap_parallelism p));
-      (lit "tag_length"%string, JNum (ap_tag_length p))] ++ extra)).
+      (lit "hash_length"%string, JNum (ap_hash_length p))] ++ extra)).
 
 Example enrollment_checks_every_u32_bound :
   map (fun p => Store.enrollment_record email
@@ -116,7 +125,7 @@ Example enrollment_checks_both_base64_fields :
      (lit "c2FsdA"%string, lit "A"%string)] = [None; None; None; None].
 Proof. vm_compute. reflexivity. Qed.
 
-(* No new salt/tag length policy: even empty decoded fields retain the old
+(* No new salt/hash length policy: even empty decoded fields retain the old
    behavior, and successful validation stores their original encoded bytes. *)
 Example enrollment_preserves_decodable_base64_bytes :
   map (fun pair => Store.enrollment_record email
@@ -201,12 +210,12 @@ Example signup_existing_mismatched_record :
     let foreign_record := Json.print (JObj
       [(lit "email"%string, JStr (lit "other@example.test"%string));
        (lit "salt"%string, JStr (lit "c2FsdA"%string));
-       (lit "tag"%string, JStr (lit "dGFn"%string));
+       (lit "hash"%string, JStr (lit "dGFn"%string));
        (lit "algorithm"%string, JNum 2);
        (lit "memory_kib"%string, JNum 19456);
        (lit "iterations"%string, JNum 2);
        (lit "parallelism"%string, JNum 1);
-       (lit "tag_length"%string, JNum 3)]) in
+       (lit "hash_length"%string, JNum 3)]) in
     handle ops (MkStore (fun _ => Some (Some foreign_record)) write)
       mail cfg 0 RtSignup signup_body = Conflict.
 Proof. intros. vm_compute. reflexivity. Qed.
@@ -224,7 +233,7 @@ Example signup_sends_configured_welcome :
   map (fun sender =>
     let cfg := MkConfig (Key.of_handle 0)
       (lit "authentikate"%string) 3600 (lit "dummy-salt"%string)
-      (Secret.of_bytes (lit "dummy-tag"%string)) (MkParams 2 19456 2 1 3)
+      (Secret.of_bytes (lit "dummy-hash"%string)) (MkParams 2 19456 2 1 3)
       sender in
     let mail := MkEmail (fun from recipient subject text =>
       andb (bytes_eqb from sender)

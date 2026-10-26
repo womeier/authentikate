@@ -17,7 +17,7 @@ Import ListNotations.
    Secret.of_bytes is a foreign identity, preserving the source-level seal.
    Secret-dependent computation stays in the crypto components. *)
 Axiom ffi_argon2_verify :
-  Secret.t -> bytes -> argon2_params -> Secret.t -> option bool.
+  Secret.t -> bytes -> Secret.t -> option bool.
 Axiom ffi_argon2_hash : Secret.t -> option bytes.
 Axiom ffi_hmac_sign : Key.t -> bytes -> option bytes.
 Axiom ffi_hmac_verify : Key.t -> bytes -> bytes -> option bool.
@@ -46,7 +46,7 @@ Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> bool.
    primitive calls the import prematurely and shifts its real arguments.
    Include is required by the registration syntax; Wasm needs no C headers. *)
 CertiRocq Register [
-  ffi_argon2_verify => "ffi_argon2_verify" 5 with tinfo,
+  ffi_argon2_verify => "ffi_argon2_verify" 4 with tinfo,
   ffi_argon2_hash => "ffi_argon2_hash" 2 with tinfo,
   ffi_hmac_sign => "ffi_hmac_sign" 3 with tinfo,
   ffi_hmac_verify => "ffi_hmac_verify" 4 with tinfo,

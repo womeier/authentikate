@@ -44,23 +44,23 @@ Lemma login_check_token :
   forall ops cfg found email now password t,
     login_check ops cfg found email now password = Token t ->
     exists u, found = Some u /\
-      argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true.
+      argon2_verify ops password (u_salt u) (u_hash u) = Some true.
 Proof.
   intros ops cfg found email now password t.
   unfold login_check. cbv zeta.
   destruct found as [u |]; cbv beta iota.
-  - destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+  - destruct (argon2_verify ops password (u_salt u) (u_hash u))
       as [[|] |] eqn:Ha;
       [ destruct (Jwt.sign ops (cfg_key cfg) _) eqn:Hs | | ];
       intros H; try discriminate.
     exists u. split; [ reflexivity | exact Ha ].
   - destruct (argon2_verify ops password (cfg_dummy_salt cfg)
-                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+                (cfg_dummy_hash cfg)) as [[|] |];
       intros H; discriminate.
 Qed.
 
 (* Not found is refused whatever Argon2 says -- including when it says yes,
-   which is what makes the dummy tag safe to be a real derivable tag rather
+   which is what makes the dummy hash safe to be a real derivable hash rather
    than something that must never verify. *)
 Lemma login_check_none :
   forall ops cfg email now password,
@@ -69,7 +69,7 @@ Proof.
   intros ops cfg email now password.
   unfold login_check. cbv zeta beta iota.
   destruct (argon2_verify ops password (cfg_dummy_salt cfg)
-              (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+              (cfg_dummy_hash cfg)) as [[|] |];
     reflexivity.
 Qed.
 
@@ -80,11 +80,11 @@ Proof.
   intros ops cfg found email now password v oc.
   unfold login_check. cbv zeta.
   destruct found as [u |]; cbv beta iota.
-  - destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+  - destruct (argon2_verify ops password (u_salt u) (u_hash u))
       as [[|] |]; [ destruct (Jwt.sign ops (cfg_key cfg) _) | | ];
       intros H; discriminate.
   - destruct (argon2_verify ops password (cfg_dummy_salt cfg)
-                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+                (cfg_dummy_hash cfg)) as [[|] |];
       intros H; discriminate.
 Qed.
 
@@ -105,7 +105,7 @@ Theorem no_token_without_verify :
     exists email password u,
       parse_request r body = Login email password /\
       Store.stored kv email = Found u /\
-      argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true.
+      argon2_verify ops password (u_salt u) (u_hash u) = Some true.
 Proof.
   intros ops kv mail cfg now r body t.
   unfold handle.
@@ -464,13 +464,13 @@ Proof.
   intros ops cfg found email now password t.
   unfold login_check. cbv zeta.
   destruct found as [u |]; cbv beta iota.
-  - destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+  - destruct (argon2_verify ops password (u_salt u) (u_hash u))
       as [[|] |] eqn:Ha;
       [ destruct (Jwt.sign ops (cfg_key cfg) _) as [t' |] eqn:Hs | | ];
       intros H; try discriminate.
     injection H as E. now rewrite <- E.
   - destruct (argon2_verify ops password (cfg_dummy_salt cfg)
-                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+                (cfg_dummy_hash cfg)) as [[|] |];
       intros H; discriminate.
 Qed.
 
@@ -711,7 +711,7 @@ Definition minted (ops : crypto_ops) (kv : store_ops) (cfg : config)
   exists now email password body u,
     parse_request RtLogin body = Login email password /\
     Store.stored kv email = Found u /\
-    argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true /\
+    argon2_verify ops password (u_salt u) (u_hash u) = Some true /\
     (now + cfg_ttl cfg < 10 ^ 32)%N /\
     msg = Jwt.signing_input Jwt.header_b64
             (Base64.encode (Json.print (Claims.to_json
@@ -854,7 +854,7 @@ Theorem accepted_implies_authenticated :
     exists email password u login_body issued,
       parse_request RtLogin login_body = Login email password /\
       Store.stored kv email = Found u /\
-      argon2_verify ops password (u_salt u) (u_params u) (u_tag u) = Some true /\
+      argon2_verify ops password (u_salt u) (u_hash u) = Some true /\
       c = MkClaims email (cfg_iss cfg) issued (issued + cfg_ttl cfg)%N /\
       c_sub c = email /\
       Claims.fresh now c = true.
@@ -918,7 +918,7 @@ Corollary no_valid_token_without_a_password :
     signing_oracle ops (cfg_key cfg) (minted ops kv cfg) ->
     (forall email password u,
        Store.stored kv email = Found u ->
-       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
+       argon2_verify ops password (u_salt u) (u_hash u) <> Some true) ->
     handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
 Proof.
   intros ops kv mail cfg now body c Horacle Hno H.
@@ -944,7 +944,7 @@ Corollary no_valid_token_for_an_unauthenticated_account :
     ok_string (cfg_iss cfg) ->
     (forall password u,
        Store.stored kv (c_sub c) = Found u ->
-       argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true) ->
+       argon2_verify ops password (u_salt u) (u_hash u) <> Some true) ->
     handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
 Proof.
   intros ops kv mail cfg now body c Horacle Hiss Hno H.
@@ -960,22 +960,22 @@ Qed.
    promise which lives in the logic rather than in a measurement.
 
    This first one is about [login_check] because that is where the choice is
-   made: [found] selects the salt, parameters and tag, but it also sits in the
+   made: [found] selects the salt and hash, but it also sits in the
    second position of the match, so a failing hash yields [Unauthorized]
    whichever way it went.  No hypothesis about the dummy credentials is
-   needed -- not even that the dummy tag fails to verify -- because the
+   needed -- not even that the dummy hash fails to verify -- because the
    [None] case cannot produce a token at all. *)
 Lemma login_check_hides_existence : forall ops cfg now email password u,
-  argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true ->
+  argon2_verify ops password (u_salt u) (u_hash u) <> Some true ->
   login_check ops cfg (Some u) email now password
     = login_check ops cfg None email now password.
 Proof.
   intros ops cfg now email password u Hno.
   unfold login_check. cbn.
-  destruct (argon2_verify ops password (u_salt u) (u_params u) (u_tag u))
+  destruct (argon2_verify ops password (u_salt u) (u_hash u))
     as [[|] |]; [ congruence | | ];
     destruct (argon2_verify ops password (cfg_dummy_salt cfg)
-                (cfg_dummy_params cfg) (cfg_dummy_tag cfg)) as [[|] |];
+                (cfg_dummy_hash cfg)) as [[|] |];
     reflexivity.
 Qed.
 
@@ -996,7 +996,7 @@ Theorem login_hides_existence :
     parse_request RtLogin body = Login email password ->
     Store.stored kv email = Absent ->
     Store.stored kv' email = Found u ->
-    argon2_verify ops password (u_salt u) (u_params u) (u_tag u) <> Some true ->
+    argon2_verify ops password (u_salt u) (u_hash u) <> Some true ->
     handle ops kv mail cfg now RtLogin body
       = handle ops kv' mail cfg now RtLogin body.
 Proof.
@@ -1062,12 +1062,12 @@ Print Assumptions validate_ignores_the_store.
    holding a nested object is printable and reparsable, but not by a theorem
    this development has. *)
 Lemma record_json_round_trip : forall email p,
-  ok_string email -> ok_string (pr_salt64 p) -> ok_string (pr_tag64 p) ->
+  ok_string email -> ok_string (pr_salt64 p) -> ok_string (pr_hash64 p) ->
   (ap_algorithm (pr_params p) < 10 ^ 32)%N ->
   (ap_memory_kib (pr_params p) < 10 ^ 32)%N ->
   (ap_iterations (pr_params p) < 10 ^ 32)%N ->
   (ap_parallelism (pr_params p) < 10 ^ 32)%N ->
-  (ap_tag_length (pr_params p) < 10 ^ 32)%N ->
+  (ap_hash_length (pr_params p) < 10 ^ 32)%N ->
   Json.parse (Json.print (Store.record_json email p))
     = Some (Store.record_json email p).
 Proof.
@@ -1092,17 +1092,17 @@ Qed.
    [fits_u32], which is a far tighter bound than the printer needs. *)
 Lemma public_of_json_facts : forall j p,
   json_ok j -> Store.public_of_json j = Some p ->
-  ok_string (pr_salt64 p) /\ ok_string (pr_tag64 p) /\
+  ok_string (pr_salt64 p) /\ ok_string (pr_hash64 p) /\
   (ap_algorithm (pr_params p) < 10 ^ 32)%N /\
   (ap_memory_kib (pr_params p) < 10 ^ 32)%N /\
   (ap_iterations (pr_params p) < 10 ^ 32)%N /\
   (ap_parallelism (pr_params p) < 10 ^ 32)%N /\
-  (ap_tag_length (pr_params p) < 10 ^ 32)%N.
+  (ap_hash_length (pr_params p) < 10 ^ 32)%N.
 Proof.
   intros j p Hok H. unfold Store.public_of_json in H.
   destruct (Json.get_str (lit ("salt"%string)) j) as [salt64 |] eqn:Esalt;
     [| discriminate].
-  destruct (Json.get_str (lit ("tag"%string)) j) as [tag64 |] eqn:Etag;
+  destruct (Json.get_str (lit ("hash"%string)) j) as [hash64 |] eqn:Ehash;
     [| discriminate].
   destruct (Json.get_num (lit ("algorithm"%string)) j) as [alg |];
     [| discriminate].
@@ -1112,7 +1112,7 @@ Proof.
     [| discriminate].
   destruct (Json.get_num (lit ("parallelism"%string)) j) as [par |];
     [| discriminate].
-  destruct (Json.get_num (lit ("tag_length"%string)) j) as [len |];
+  destruct (Json.get_num (lit ("hash_length"%string)) j) as [len |];
     [| discriminate].
   destruct (andb (andb (andb (Store.fits_u32 alg) (Store.fits_u32 mem))
                        (andb (Store.fits_u32 iter) (Store.fits_u32 par)))
@@ -1120,12 +1120,12 @@ Proof.
   injection H as E. subst p.
   unfold Store.fits_u32 in Hfit.
   repeat (apply andb_prop in Hfit as [Hfit ?]).
-  cbn [pr_salt64 pr_tag64 pr_params ap_algorithm ap_memory_kib ap_iterations
-       ap_parallelism ap_tag_length].
+  cbn [pr_salt64 pr_hash64 pr_params ap_algorithm ap_memory_kib ap_iterations
+       ap_parallelism ap_hash_length].
   apply andb_prop in H0 as [H2 H3].
   apply N.ltb_lt in Hfit, H1, H2, H3, H.
   split; [ eapply get_str_ok; [ exact Hok | exact Esalt ] |].
-  split; [ eapply get_str_ok; [ exact Hok | exact Etag ] |].
+  split; [ eapply get_str_ok; [ exact Hok | exact Ehash ] |].
   repeat split; lia.
 Qed.
 
@@ -1137,9 +1137,9 @@ Qed.
 Lemma of_json_record_json : forall j email p,
   Store.public_of_json j = Some p ->
   Store.of_json (Store.record_json email p)
-    = match Base64.decode (pr_salt64 p), Base64.decode (pr_tag64 p) with
-      | Some salt, Some tag =>
-          Some (MkUser email salt (pr_params p) (Secret.of_bytes tag))
+    = match Base64.decode (pr_salt64 p), Base64.decode (pr_hash64 p) with
+      | Some salt, Some hash =>
+          Some (MkUser email salt (pr_params p) (Secret.of_bytes hash))
       | _, _ => None
       end.
 Proof.
@@ -1147,7 +1147,7 @@ Proof.
   unfold Store.public_of_json in Hp.
   destruct (Json.get_str (lit ("salt"%string)) j) as [salt64 |];
     [| discriminate].
-  destruct (Json.get_str (lit ("tag"%string)) j) as [tag64 |]; [| discriminate].
+  destruct (Json.get_str (lit ("hash"%string)) j) as [hash64 |]; [| discriminate].
   destruct (Json.get_num (lit ("algorithm"%string)) j) as [alg |];
     [| discriminate].
   destruct (Json.get_num (lit ("memory_kib"%string)) j) as [mem |];
@@ -1156,7 +1156,7 @@ Proof.
     [| discriminate].
   destruct (Json.get_num (lit ("parallelism"%string)) j) as [par |];
     [| discriminate].
-  destruct (Json.get_num (lit ("tag_length"%string)) j) as [len |];
+  destruct (Json.get_num (lit ("hash_length"%string)) j) as [len |];
     [| discriminate].
   destruct (andb (andb (andb (Store.fits_u32 alg) (Store.fits_u32 mem))
                        (andb (Store.fits_u32 iter) (Store.fits_u32 par)))
@@ -1217,25 +1217,25 @@ Proof.
   rewrite record_json_round_trip by assumption.
   rewrite (of_json_record_json _ _ _ Ep).
   destruct (Base64.decode (pr_salt64 p));
-    destruct (Base64.decode (pr_tag64 p)); reflexivity.
+    destruct (Base64.decode (pr_hash64 p)); reflexivity.
 Qed.
 
 Print Assumptions enrollment_record_equivalent.
 
 (* The whole of it: what signup wrote is a record naming the email signup was
-   asked for, carrying the salt, parameters and tag the component returned.
+   asked for, carrying the salt, parameters and hash the component returned.
    The email is the part that matters -- [Store.stored] answers [Absent] for
    a record belonging to someone else, so without this a created account
    would be indistinguishable from one that was never created. *)
 Lemma enrollment_record_decode : forall email pj v,
   ok_string email ->
   Store.enrollment_record email pj = Some v ->
-  exists j p salt tag,
+  exists j p salt hash,
     Json.parse pj = Some j /\
     Store.public_of_json j = Some p /\
     Base64.decode (pr_salt64 p) = Some salt /\
-    Base64.decode (pr_tag64 p) = Some tag /\
-    Store.decode v = Some (MkUser email salt (pr_params p) (Secret.of_bytes tag)).
+    Base64.decode (pr_hash64 p) = Some hash /\
+    Store.decode v = Some (MkUser email salt (pr_params p) (Secret.of_bytes hash)).
 Proof.
   intros email pj v He H. rewrite enrollment_record_equivalent in H by exact He.
   destruct (Json.parse pj) as [j |] eqn:Ej; [| discriminate].
@@ -1249,16 +1249,16 @@ Proof.
   { unfold Store.decode. now rewrite record_json_round_trip. }
   rewrite Hdec, (of_json_record_json _ _ _ Ep) in H.
   destruct (Base64.decode (pr_salt64 p)) as [salt |] eqn:Esalt; [| discriminate].
-  destruct (Base64.decode (pr_tag64 p)) as [tag |] eqn:Etag; [| discriminate].
+  destruct (Base64.decode (pr_hash64 p)) as [hash |] eqn:Ehash; [| discriminate].
   (* [subst v] would normalise [print] into its byte chain and leave a goal
      no rewrite can reach; the equation is kept folded instead. *)
   assert (Hv : Json.print (Store.record_json email p) = v) by congruence.
-  exists j, p, salt, tag.
+  exists j, p, salt, hash.
   split; [ reflexivity |].
   split; [ exact Ep |].
   split; [ exact Esalt |].
-  split; [ exact Etag |].
-  rewrite <- Hv, Hdec, (of_json_record_json _ _ _ Ep), Esalt, Etag.
+  split; [ exact Ehash |].
+  rewrite <- Hv, Hdec, (of_json_record_json _ _ _ Ep), Esalt, Ehash.
   reflexivity.
 Qed.
 
@@ -1296,13 +1296,13 @@ Qed.
    says nothing about what else verifies. *)
 Record argon2_spec (ops : crypto_ops) : Prop :=
   MkArgon2Spec {
-    hash_verifies : forall password pj j p salt tag,
+    hash_verifies : forall password pj j p salt hash,
       argon2_hash ops password = Some pj ->
       Json.parse pj = Some j ->
       Store.public_of_json j = Some p ->
       Base64.decode (pr_salt64 p) = Some salt ->
-      Base64.decode (pr_tag64 p) = Some tag ->
-      argon2_verify ops password salt (pr_params p) (Secret.of_bytes tag)
+      Base64.decode (pr_hash64 p) = Some hash ->
+      argon2_verify ops password salt (Secret.of_bytes hash)
         = Some true
   }.
 
@@ -1358,12 +1358,12 @@ Proof.
   destruct (Store.enrollment_record email pj) as [v |] eqn:Ev; [| discriminate].
   destruct (kv_create kv email v) as [[|] |] eqn:Eset; try discriminate.
   apply enrollment_record_decode in Ev as
-    [j [p [salt [tag [Ej [Ep [Esalt [Etag Edec]]]]]]]]; [| exact He].
+    [j [p [salt [hash [Ej [Ep [Esalt [Ehash Edec]]]]]]]]; [| exact He].
   unfold handle. rewrite (signup_is_login _ _ _ Hp).
   unfold Store.stored. rewrite (Hcommit _ _ Eset), Edec.
   cbn [u_email]. rewrite bytes_eqb_refl.
-  unfold login_check. cbn [u_salt u_params u_tag].
-  rewrite (Hargon _ _ _ _ _ _ Epj Ej Ep Esalt Etag).
+  unfold login_check. cbn [u_salt u_params u_hash].
+  rewrite (Hargon _ _ _ _ _ _ Epj Ej Ep Esalt Ehash).
   unfold Jwt.sign. cbv zeta.
   destruct (hmac_sign ops (cfg_key cfg) (Jwt.signing_input Jwt.header_b64
     (Base64.encode (Json.print (Claims.to_json

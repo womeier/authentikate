@@ -123,13 +123,12 @@ try {
     const h = heap();
     let outcome = 0;
     let calls = 0;
-    const password = [0, 128, 255], salt = [1, 2], expected = [254, 0];
+    const password = [0, 128, 255], salt = [1, 2], hash = [254, 0];
     let enrollPassword = password, enrollError = false, enrollCalls = 0;
     const record = [...Buffer.from(JSON.stringify({
       algorithm: 2, memory_kib: 19456, iterations: 2, parallelism: 1,
-      tag_length: 32, salt: 'AAECAwQFBgcICQoLDA0ODw==', tag: 'AP+A',
+      hash_length: 32, salt: 'AAECAwQFBgcICQoLDA0ODw==', hash: 'AP+A',
     }))];
-    const costs = [2, 19456, 2, 1, 32];
     const e = instantiate('components/service/adapters/argon2.wat', h, {
       'authentikate:crypto/argon2@0.1.0': {
         hash(pp, pl, ret) {
@@ -139,19 +138,19 @@ try {
           if (!enrollError) listResult(h, e, ret, record);
           else { h.put(ret + 4, 0); h.put(ret + 8, 0); }
         },
-        verify(pp, pl, sp, sl, ...args) {
+        verify(...args) {
+          assert.equal(args.length, 7, 'canonical verify has seven i32 parameters');
+          const [pp, pl, sp, sl, ep, el, ret] = args;
           calls++;
           assert.deepEqual(h.flat(pp, pl), password);
           assert.deepEqual(h.flat(sp, sl), salt);
-          assert.deepEqual(args.slice(0, 5), costs);
-          const [ep, el, ret] = args.slice(5);
-          assert.deepEqual(h.flat(ep, el), expected);
+          assert.deepEqual(h.flat(ep, el), hash);
           h.put(ret, outcome === 2 ? 1 : 0);
           h.put(ret + 4, outcome === 1 ? 1 : 0);
         },
       },
     });
-    const args = [h.bytes(password), h.bytes(salt), h.block(0, ...costs.map(h.N)), h.bytes(expected)];
+    const args = [h.bytes(password), h.bytes(salt), h.bytes(hash)];
     for (outcome of [0, 1, 2]) {
       const result = h.call(e.ffi_argon2_verify, ...args);
       if (outcome === 2) assert.equal(result, 1);
@@ -171,7 +170,7 @@ try {
       assert.equal(h.call(e.ffi_argon2_hash, secret), 1);
     }
     assert.equal(enrollCalls, 4);
-    console.log('argon2: void/global ABI, stored parameters, Some false/true vs None, secret identity, enrollment JSON/error');
+    console.log('argon2: void/global ABI, fixed-policy verify arity, Some false/true vs None, secret identity, enrollment JSON/error');
   }
 
   {
@@ -231,28 +230,27 @@ try {
     let mode = 'value', outcome = 'created';
     let gets = 0, creates = 0;
     const key = [...Buffer.from('user@example.test')], value = [0, 255, 128, 65];
-    let setValue = [...Buffer.from('{"salt":"AAECAwQFBgcICQoLDA0ODw==","tag":"AP+A"}')];
+    let setValue = [...Buffer.from('{"salt":"AAECAwQFBgcICQoLDA0ODw==","hash":"AP+A"}')];
     const create = (k, v) => h.call(e.ffi_kv_create, k, h.bytes(v));
     const e = instantiate('components/service/adapters/store.wat', h, {
       'authentikate:storage/accounts@0.1.0': {
         get(kp, kl, ret) {
           gets++;
-          assert.ok(h.rocq.mem_ptr.value >= ret + 16);
+          assert.ok(h.rocq.mem_ptr.value >= ret + 12);
           assert.deepEqual(h.flat(kp, kl), key);
-          h.put(ret, mode === 'refusal' ? 1 : 0);
-          h.put(ret + 4, mode === 'missing' || mode === 'refusal' ? 0 : 1);
-          if (mode === 'value' || mode === 'empty') listResult(h, e, ret, mode === 'empty' ? [] : value, 8);
-          else { h.put(ret + 8, 0); h.put(ret + 12, 0); }
+          h.put(ret, Number(mode !== 'value' && mode !== 'empty'));
+          if (mode === 'value' || mode === 'empty') listResult(h, e, ret, mode === 'empty' ? [] : value);
+          else { h.put(ret + 4, { missing: 0, mismatched: 1, refusal: 2, invalid: 255 }[mode]); h.put(ret + 8, 0); }
         },
         create(kp, kl, vp, vl, ret) {
           creates++;
           assert.deepEqual(h.flat(kp, kl), key);
           assert.deepEqual(h.flat(vp, vl), setValue);
           assert.ok(h.rocq.mem_ptr.value >= ret + 2);
-          // result<bool, error> has byte-sized discriminant and payload.
+          // result<_, error> has byte-sized discriminant and error payload.
           const memory = new Uint8Array(h.rocq.memory.buffer);
-          memory[ret] = Number(outcome === 'refusal');
-          memory[ret + 1] = Number(outcome === 'created');
+          memory[ret] = Number(outcome !== 'created');
+          memory[ret + 1] = { created: 0, mismatched: 0, taken: 1, refusal: 2, invalid: 255 }[outcome];
         },
       },
     });
@@ -260,8 +258,9 @@ try {
     assert.equal(h.some(create(k, setValue)), 3);
     outcome = 'taken';
     assert.equal(h.some(create(k, setValue)), 1);
-    outcome = 'refusal';
-    assert.equal(create(k, setValue), 1);
+    for (outcome of ['refusal', 'mismatched', 'invalid']) {
+      assert.equal(create(k, setValue), 1);
+    }
     outcome = 'created';
     for (setValue of [value, []]) {
       assert.equal(h.some(create(k, setValue)), 3);
@@ -271,9 +270,10 @@ try {
     assert.equal(h.some(h.some(h.call(e.ffi_kv_get, k))), 1);
     mode = 'missing';
     assert.equal(h.some(h.call(e.ffi_kv_get, k)), 1);
-    mode = 'refusal';
-    assert.equal(h.call(e.ffi_kv_get, k), 1);
-    assert.deepEqual([gets, creates], [4, 5]);
+    for (mode of ['refusal', 'mismatched', 'invalid']) {
+      assert.equal(h.call(e.ffi_kv_get, k), 1);
+    }
+    assert.deepEqual([gets, creates], [6, 7]);
     const before = [gets, creates];
     for (const invalid of [[255], [0xc0, 0xaf], [0xed, 0xa0, 0x80]]) {
       assert.equal(h.some(h.call(e.ffi_kv_get, h.bytes(invalid))), 1);
@@ -281,7 +281,7 @@ try {
     }
     assert.deepEqual([gets, creates], before, 'invalid UTF-8 must not reach provider');
   }
-  console.log('accounts: nested options, byte-sized create results (created/taken/refused), binary/empty values, UTF-8 rejection');
+  console.log('accounts: public results to nested options/bools, exact error discriminants, mismatched/unknown errors refused, binary/empty values, UTF-8 rejection');
 
   {
     const h = heap();

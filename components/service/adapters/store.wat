@@ -13,20 +13,21 @@
 ;;
 ;; Interface: authentikate:storage/accounts@0.1.0.
 ;;
-;;   get: func(key: string) -> result<option<list<u8>>, error>;
-;;   create: func(key: string, value: list<u8>) -> result<bool, error>;
+;;   get: func(key: string) -> result<list<u8>, error>;
+;;   create: func(key: string, value: list<u8>) -> result<_, error>;
 ;;
 ;; No buckets, resource handles, or overwrite primitive. The provider must make
 ;; create atomic and its successful writes readable, as assumed in Proofs.v.
 ;;
 ;; Canonical ABI return-area layouts, each with a one-byte variant
-;; discriminant padded to the payload's four-byte alignment:
+;; discriminant padded to the payload's alignment:
 ;;
-;; error is a payload-free variant { unavailable }.
+;; error is a payload-free variant { not-found, already-exists, unavailable },
+;; with discriminants 0, 1, 2 respectively (in WIT declaration order).
 ;;
-;;   result<option<list<u8>>, error>     disc @0, inner disc @4,
-;;                                       ptr @8, len @12                (16 b)
-;;   result<bool, error>                disc @0, bool-or-error @1       (2 b)
+;;   result<list<u8>, error>            disc @0, ptr-or-error @4,
+;;                                       len @8                        (12 b)
+;;   result<_, error>                   disc @0, error @1               (2 b)
 (module
   ;; ---- from the CertiRocq module -------------------------------------------
   (import "rocq" "memory" (memory 1))
@@ -64,7 +65,7 @@
   (func $kv_get (param $key i32) (result i32)
     (local $kp i32) (local $kl i32) (local $ret i32)
 
-    (local.set $ret (call $alloc (i32.const 16) (i32.const 4)))
+    (local.set $ret (call $alloc (i32.const 12) (i32.const 4)))
     (if (global.get $out_of_mem) (then (return (i32.const 1))))
 
     (local.set $kp (call $lower (local.get $key)))
@@ -82,17 +83,16 @@
 
     (if (result i32) (i32.load8_u (local.get $ret))
       (then
-        ;; The interface exposes no error details; every failure remains None.
-        (i32.const 1))                                  ;; err -> None
+        ;; Only not-found is absence; even already-exists is a refusal here.
+        (if (result i32) (i32.eqz (i32.load8_u offset=4 (local.get $ret)))
+          (then (call $some (i32.const 1)))
+          (else (i32.const 1))))
       (else
-        (if (result i32) (i32.load8_u offset=4 (local.get $ret))
-          (then                                         ;; Some (Some v)
-            (call $some
-              (call $some
-                (call $lift_bytes
-                  (i32.load offset=8 (local.get $ret))
-                  (i32.load offset=12 (local.get $ret))))))
-          (else (call $some (i32.const 1)))))))          ;; Some None
+        (call $some
+          (call $some
+            (call $lift_bytes
+              (i32.load offset=4 (local.get $ret))
+              (i32.load offset=8 (local.get $ret))))))))
   ;; Registered primitives return void and publish the Rocq value via result.
   ;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
   ;; use actual arity + 1; registered wrappers accept and ignore that i32.
@@ -123,10 +123,12 @@
     (call $accounts_create
       (local.get $kp) (local.get $kl) (local.get $vp) (local.get $vl) (local.get $ret))
     (if (result i32) (i32.load8_u (local.get $ret))
-      (then (i32.const 1))                       ;; error -> None
-      (else (call $some
-        (if (result i32) (i32.load8_u offset=1 (local.get $ret))
-          (then (i32.const 3)) (else (i32.const 1)))))))
+      (then
+        ;; Only already-exists is a conflict; not-found is inappropriate here.
+        (if (result i32) (i32.eq (i32.load8_u offset=1 (local.get $ret)) (i32.const 1))
+          (then (call $some (i32.const 1)))
+          (else (i32.const 1))))
+      (else (call $some (i32.const 3)))))
 
   (func (export "ffi_kv_create")
         (param $force i32) (param $key i32) (param $value i32)

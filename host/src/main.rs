@@ -696,6 +696,8 @@ mod tests {
         assert_eq!(statuses, [201, 409]);
 
         {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
             let records: Vec<_> = std::fs::read_dir(storage.path())
                 .unwrap()
                 .map(|entry| entry.unwrap())
@@ -710,6 +712,16 @@ mod tests {
                 let record: Value = serde_json::from_slice(record).unwrap();
                 assert_eq!(record["memory_kib"], 19456);
                 assert!(record["salt"].as_str().is_some());
+                assert_eq!(record["hash_length"], 32);
+                assert_eq!(
+                    URL_SAFE_NO_PAD
+                        .decode(record["hash"].as_str().unwrap())
+                        .unwrap()
+                        .len(),
+                    32
+                );
+                assert!(record.get("tag").is_none());
+                assert!(record.get("tag_length").is_none());
             }
         }
 
