@@ -2,10 +2,10 @@
 \newcommand{\componentlinks}[4]{\hfill
   \def\iconheight{2.6ex}\def\iconname{#3}\def\rusticon{rust-logo-black}
   \ifx\iconname\rusticon\def\iconheight{3.1ex}\fi
-  \source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#3.pdf}
+  {\hypersetup{pdfborderstyle={/W 0}}\source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#3.pdf}
     {\includegraphics[height=\iconheight]{icons/#3.pdf}}
-    {\includegraphics[height=\iconheight]{report/icons/#3.pdf}}}}\par\nobreak
-  {\fontsize{9}{11}\selectfont\source{#2}{\textcolor{blue!65!black}{\underline{\nolinkurl{#4}}}}\par}\vspace{\baselineskip}}
+    {\includegraphics[height=\iconheight]{report/icons/#3.pdf}}}}}\par\nobreak
+  {\fontsize{9}{11}\selectfont\hypersetup{pdfborderstyle={/W 0}}\source{#2}{\underline{\raisebox{0pt}[\height][1.5pt]{\nolinkurl{#4}}}}\par}\vspace{\baselineskip}}
 % A narrower host-import tab shares the card's bottom edge.
 \newcommand{\wasitab}[2]{%
   \node[wasi tab,anchor=north] (#1-wasi)
@@ -88,12 +88,9 @@
 \node[fit=(storage)(storage-wasi)(email)(email-wasi),inner sep=0pt] (provider-row) {};
 \node[anchor=north,text width=13.6cm,font=\footnotesize,align=left]
   at ($(provider-row.south)+(0,-.35)$) {
-  Simplified interfaces. \code{bytes = list<u8>}.
-  Argon2's hash result is JSON-encoded bytes containing the generated salt and password hash.
-  Arrows denote component calls. Bottom tabs list WASI host imports
-  (all names have the prefix \code{wasi:}), including supporting interfaces.
-  The signature component has no WASI imports.
-  Language logos link to the implementation; identifiers below headers link to WIT definitions.
+  Each box is a Wasm component. \code{bytes = list<u8>}.
+  The tabs at the bottom indicate WASI host imports, the arrows are imports from other components.
+  The language logos link to the implementation; identifiers below headers link to WIT definitions.
 };
 \end{tikzpicture}
 \endgroup

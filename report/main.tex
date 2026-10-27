@@ -11,7 +11,7 @@
 \IfFileExists{refs.bib}
   {\addbibresource{refs.bib}}
   {\addbibresource{report/refs.bib}}
-\usepackage[hidelinks]{hyperref}
+\usepackage[colorlinks=false,pdfborderstyle={/S/U/W 1},allbordercolors={0 0 0}]{hyperref}
 % Draft markers; loaded after hyperref so the list of todos links.
 \usepackage{todonotes}
 
@@ -76,10 +76,9 @@ CertiRocq's Wasm backend generates such a Wasm module.
 A more recent addition to the Wasm ecosystem is the Wasm component model \todo{}.
 In its simplest form, a Wasm component is a Wasm module wrapped in a cleaner interface, listing the module's imported and exported functions (and no other internals).
 The type system is also richer: in addition to Wasm's primitive types (i32, i64, f32, f64\footnote{Since version 3.0, additional heap-allocated arrays and record types.}),
-the component's type system has native strings, user-defined records, and option and result types.
+the component's type system has native strings, user-defined records, option and result types, among others.
 For these types, the component model defines the representation in the embedded Wasm core module and lifting operations.
-
-Wasm components with corresponding imports and exports can be composed, leading to a component containing multiple modules. 
+Wasm components can be composed, leading to a component containing multiple modules. 
 
 Further, using Wasm components allows for straightforward integration with other languages.
 
@@ -91,7 +90,7 @@ Having one would allow verifying the interaction between Wasm core modules and g
 
 \subsection{Wasm system interface (WASI)}
 
-The current version of the component model is 0.3, calling it \`'widely supported\`' would be an overstatement.
+The current version of the component model is 0.3, calling it `widely supported' would be an overstatement.
 However, it is implemented by \textit{wasmtime}, one of the most popular Wasm runtimes.
 
 
@@ -143,7 +142,10 @@ outcomes.
 \end{landscape}
 
 \chapter{Conclusion}
-Summarize the results and discuss future work.
+In the context of Galilei, wrapping a CertiRocq-generated Wasm module inside a component gives a `free' (i.e. we don't have to maintain it ourselves)
+extraction to every language with an up-to-date wasmtime library. \todo{success?}
+Before the start, I anticipated better support for running Wasm components using wasmtime's bindings for more languages.
+ ~\footnote{See \href{https://github.com/orgs/bytecodealliance/repositories?q=wasmtime-}{the Bytecode Alliance's Wasmtime repositories}.}, i.e. for Python, Java, Dotnet, and Rust
 
 \printbibliography[heading=bibintoc]
 

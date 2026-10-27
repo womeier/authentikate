@@ -1,8 +1,8 @@
 \begingroup
 \newcommand{\overviewicon}[3]{\hfill
-  \source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#2.pdf}
+  {\hypersetup{pdfborderstyle={/W 0}}\source{#1}{\raisebox{\dimexpr(\depth-\height)/2\relax}{\IfFileExists{icons/#2.pdf}
     {\includegraphics[height=#3]{icons/#2.pdf}}
-    {\includegraphics[height=#3]{report/icons/#2.pdf}}}}}
+    {\includegraphics[height=#3]{report/icons/#2.pdf}}}}}}
 \resizebox{\linewidth}{!}{%
 \begin{tikzpicture}[
   part/.style={draw=blue!45!black,rounded corners=3pt,line width=.65pt,
