@@ -6,8 +6,9 @@ A local demonstration of the actual Rocq-generated authentication
 service. `cargo run` at the repository root runs the composed Wasm component in
 Wasmtime and hands it HTTP requests.
 
-The host does not handle requests. The composed component exports
-`wasi:http/incoming-handler@0.2.4`, and `components/gateway` is what routes,
+The host bridges socket HTTP to the component rather than implementing application
+routes. The composed component exports `wasi:http/handler@0.3.0`, and
+`components/gateway` is what routes,
 applies the Host/Origin policy, serves the static assets, checks the method and
 media type, enforces the body limit and read deadline, and sets the response
 security headers. What is left here is the part that cannot be a per-request
@@ -17,8 +18,9 @@ directory preopen, and configuration. Accounts persist; the signing key is ephem
 ## Build And Run
 
 Requires Rust >=1.97. Building components also requires the existing Rocq
-toolchain, Node (build/test tooling only), Binaryen, wasm-tools, the Rust
-`wasm32-unknown-unknown` target, and WAC 0.12.0 (included in the Nix development shell):
+toolchain, Node (build/test tooling only), Binaryen, wasm-tools with component-model
+async support, the Rust `wasm32-unknown-unknown` target, and WAC 0.12.0 (included
+in the Nix development shell):
 
 ```sh
 nix develop
@@ -28,6 +30,11 @@ cargo run --locked
 
 The Nix development shell provides a locked Fenix Rust toolchain including the
 Wasm target, WAC and the component build tools; no rustup setup is needed.
+The current Nix lock supplies wasm-tools 1.261.0 and WAC 0.12.0, checked with
+the p3 composition and `wasm-tools validate --features cm-async`. Both
+`make gateway-component` and `make compose-host` enable async validation.
+The gateway uses wit-bindgen 0.57.1 with `async-spawn` and `futures` 0.3;
+the other Rust guests retain wit-bindgen 0.46, resolved together by `Cargo.lock`.
 `make compose-host` composes existing
 `build/{authentikate,argon2,hmac,email-stdout}.component.wasm` without invoking
 Rocq, rebuilding the gateway and storage providers. Both targets produce `build/host.component.wasm`. Once that exists, running
@@ -102,22 +109,34 @@ the final constant-time comparison -- and `login_check` in `Api.v` returns
 `Unauthorized` whenever the lookup found nothing regardless of what the hash
 said. Enrollment salts come from WASI random inside the Argon2 component.
 
-The host provides WASI clock/random, stdout/I/O, a dedicated storage directory
-preopen, and the two configuration interfaces. It rejects composed artifacts with unexpected
+The Wasmtime 50 host enables component-model async execution and links p3 HTTP
+and clocks for the gateway alongside p2 WASI (linked asynchronously) for the existing
+providers (clock/random, stdout/I/O and a dedicated storage directory preopen).
+The gateway's service and policy imports remain synchronous. The host also
+supplies the two configuration interfaces. It rejects composed artifacts with unexpected
 imports, including unresolved crypto and accounts imports. Filesystem access is
 restricted to `STORAGE_DIR`; no environment or network access is granted, and there is no outbound HTTP: `wasmtime-wasi-http`
 is built without `default-send-request` and the host's `send_request` refuses
 with `HttpRequestDenied`.
 
-Each request gets a fresh composed instance to reclaim the Rocq bump heap. The
-response is taken from the component while the guest is still running, because
-the guest writes its body into a bounded channel and would block if nothing
-drained it; the instance is dropped once the body is fully written, so the
-admission permit is held until then. Responses are framed with
-`Transfer-Encoding: chunked`, since the length is not known when the response
-head is sent. Only one request executes at a time; up to eight admitted requests (including the
-active request) may wait/run, with excess returning 503. The permit stays held
-through blocking component execution even if the HTTP request is cancelled.
+Wasmtime 50 labels its p3 support experimental, unstable, and not production-ready.
+
+Each request gets a fresh composed instance to reclaim the Rocq bump heap.
+The host bridges Hyper requests to p3 requests and uses `Store::run_concurrent`
+to drive the async handler, body streams/futures and request I/O together.
+It collects the response body with a 1 MiB limit before returning the response
+to Hyper, rather than streaming it to the socket; the returned body has a known
+length. A component failure, response-read error or response over that limit
+produces a host-level 500.
+
+Execution runs in `spawn_blocking`, using the Tokio runtime handle to drive
+async I/O, so synchronous providers such as Argon2 do not occupy Tokio's I/O
+workers. Only one request executes at a time; up to eight admitted requests
+(including the active request) may wait/run, with excess returning 503.
+The execution and admission permits remain held until request I/O and response
+collection finish and the instance is dropped, even if the HTTP request is
+cancelled. The permits do not cover subsequent socket transmission of the
+buffered response.
 Signup does not depend on this serialization: it creates the record through
 the `authentikate:storage/accounts.create` primitive, which the storage component implements
 by writing and syncing a complete temporary record, then atomically hard-linking
@@ -125,8 +144,15 @@ it to its final hashed path. This works across processes, not just one host.
 Wasmtime fuel is limited to two billion per instance and linear memories to
 128 MiB each (at most eight), with instance/table count limits as well. Fuel is
 an instruction budget, not a wall-clock deadline or full process memory limit.
-Bodies are capped at 16 KiB, including chunked requests, with a 15-second body
-read deadline. Static paths are allowlisted and use a restrictive CSP.
+Request bodies are capped at 16 KiB, including chunked requests, with a single
+15-second read deadline covering both the body stream and final trailers result.
+The gateway returns 413 for oversize bodies, 408 for deadline expiry, and 400 for
+transfer errors or cancelled reads. Static paths are allowlisted and use a
+restrictive CSP.
+
+The 16 KiB cap is a transport ceiling, not a guarantee that every smaller JSON
+input fits the extracted parser's call stack. Valid JSON padded with trailing
+whitespace to that ceiling can exhaust the Wasm call stack and return a host-level 500.
 
 Signup writes one JSON welcome email to stdout after the account write succeeds.
 Only sender, recipient and welcome text are logged, never passwords or hashes.
@@ -141,6 +167,7 @@ make compose-host
 cargo fmt --check
 cargo check --locked
 cargo test --locked
+cargo test --locked -p authentikate-gateway
 ```
 
 Tests require the real composed artifact and fail if it is missing or broken.

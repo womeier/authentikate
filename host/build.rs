@@ -54,9 +54,9 @@ fn main() {
                path: {:?}, \
                world: \"web-host\", \
                imports: {{ default: trappable }}, \
+               exports: {{ default: async | store }}, \
                with: {{ \
-                 \"wasi:http\": wasmtime_wasi_http::p2::bindings::http, \
-                 \"wasi:io\": wasmtime_wasi::p2::bindings::sync::io, \
+                 \"wasi:http\": wasmtime_wasi_http::p3::bindings::http, \
                }} \
              }});",
             wit

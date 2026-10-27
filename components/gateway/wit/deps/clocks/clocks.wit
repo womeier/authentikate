@@ -1,0 +1,25 @@
+// Vendored from wasmtime-wasi-http 50.0.0, src/p3/wit/deps/clocks.wit.
+// Only types and monotonic-clock are needed by this world; signatures unchanged.
+package wasi:clocks@0.3.0;
+
+@since(version = 0.3.0)
+interface types {
+    /// A duration in nanoseconds.
+    @since(version = 0.3.0)
+    type duration = u64;
+}
+
+@since(version = 0.3.0)
+interface monotonic-clock {
+    use types.{duration};
+    @since(version = 0.3.0)
+    type mark = u64;
+    @since(version = 0.3.0)
+    now: func() -> mark;
+    @since(version = 0.3.0)
+    get-resolution: func() -> duration;
+    @since(version = 0.3.0)
+    wait-until: async func(when: mark);
+    @since(version = 0.3.0)
+    wait-for: async func(how-long: duration);
+}

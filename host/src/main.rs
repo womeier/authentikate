@@ -7,7 +7,7 @@
 //! configured.  The host no longer routes, serves assets, sets response
 //! headers, decides a request's method or media type, or calls the service's
 //! `login`/`validate`/`signup` directly -- it hands the composed component an
-//! `incoming-request` and writes back whatever response it produces.
+//! p3 HTTP request and writes back whatever response it produces.
 
 use anyhow::{Context, Result, ensure};
 use http_body_util::BodyExt;
@@ -25,8 +25,8 @@ use wasmtime::{
 };
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
-    WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
-    p2::{bindings::http::types::Scheme, body::HyperOutgoingBody},
+    WasiBody, WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
+    p3::{Request, bindings::Service},
 };
 use zeroize::Zeroizing;
 
@@ -35,10 +35,7 @@ mod bindings {
 }
 #[cfg(test)]
 mod storage_tests;
-use bindings::{
-    WebHost,
-    authentikate::config::{policy, service as service_config},
-};
+use bindings::authentikate::config::{policy, service as service_config};
 
 /// Everything the host configures, in the shape it hands out.  Split in two on
 /// the way to the guests: the seed goes only to the service, the origin rules
@@ -54,19 +51,19 @@ const FUEL: u64 = 2_000_000_000;
 /// No outbound HTTP.  `wasmtime-wasi-http` is built without
 /// `default-send-request`, so there is no `send_request` to override and no
 /// code path that could issue one; the composed artifact imports no
-/// `wasi:http/outgoing-handler` either, and `Runtime::new` rejects one that
+/// `wasi:http/client` either, and `Runtime::new` rejects one that
 /// does.  Every hook here is upstream's default.
 struct NoOutboundHttp;
 
 impl WasiHttpHooks for NoOutboundHttp {
     /// Refuse, rather than inherit a sending implementation.  Nothing in the
     /// composed artifact can reach this -- it imports no
-    /// `wasi:http/outgoing-handler`, and `Runtime::new` rejects one that does
+    /// `wasi:http/client`, and `Runtime::new` rejects one that does
     /// -- so this is the statement that the refusal is deliberate and not an
     /// unbuilt default.
     fn send_request(
         &mut self,
-        _request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        _request: hyper::Request<WasiBody>,
         _options: Option<wasmtime_wasi_http::RequestOptions>,
         _between_bytes_timeout: Box<
             dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send,
@@ -75,7 +72,7 @@ impl WasiHttpHooks for NoOutboundHttp {
         dyn std::future::Future<
                 Output = Result<
                     (
-                        hyper::Response<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+                        hyper::Response<WasiBody>,
                         Box<
                             dyn std::future::Future<Output = Result<(), wasmtime_wasi_http::Error>>
                                 + Send,
@@ -152,6 +149,7 @@ impl Runtime {
     fn new(path: &str, settings: Settings, storage: &Path) -> Result<Self> {
         let mut options = wasmtime::Config::new();
         options.consume_fuel(true);
+        options.wasm_component_model_async(true);
         let engine = Engine::new(&options)?;
         let component = Component::from_file(&engine, path)
             .map_err(anyhow::Error::from)
@@ -162,33 +160,34 @@ impl Runtime {
         // one this host was written for, whatever else it does correctly.
         for (name, _) in component.component_type().imports(&engine) {
             let (interface, version) = name.split_once('@').unwrap_or((name, ""));
-            let wasi = [
+            let p2 = [
                 "wasi:clocks/wall-clock",
-                "wasi:clocks/monotonic-clock",
                 "wasi:random/random",
                 "wasi:cli/stdout",
                 "wasi:io/error",
-                "wasi:io/poll",
                 "wasi:io/streams",
-                "wasi:http/types",
                 "wasi:filesystem/types",
                 "wasi:filesystem/preopens",
             ]
             .contains(&interface)
                 && ["0.2.0", "0.2.4"].contains(&version);
+            let p3 = version == "0.3.0"
+                && ["wasi:http/types", "wasi:clocks/monotonic-clock"].contains(&interface);
             ensure!(
                 [
                     "authentikate:config/service@0.1.0",
                     "authentikate:config/policy@0.1.0",
                 ]
                 .contains(&name)
-                    || wasi,
+                    || p2
+                    || p3,
                 "Unexpected composed-component import: {name}"
             );
         }
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+        wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
         service_config::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
             |state| state,
@@ -203,7 +202,7 @@ impl Runtime {
         })
     }
 
-    fn instantiate(&self) -> Result<(Store<GuestState>, WebHost)> {
+    async fn instantiate(&self) -> Result<(Store<GuestState>, Service)> {
         let state = GuestState {
             wasi: WasiCtxBuilder::new()
                 .inherit_stdout()
@@ -223,43 +222,64 @@ impl Runtime {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
         store.set_fuel(FUEL)?;
-        let guest = WebHost::instantiate(&mut store, &self.component, &self.linker)?;
+        let guest = Service::instantiate_async(&mut store, &self.component, &self.linker).await?;
         Ok((store, guest))
     }
 
-    /// Start one request on a fresh instance.
-    ///
-    /// This returns only once the guest has finished, which is *after* the
-    /// response has gone out: the guest writes its body into a bounded
-    /// channel, so `serve` has to take the response from `receiver` and let
-    /// hyper drain that channel while this is still running.  Draining it
-    /// afterwards would deadlock -- the guest blocks on the first chunk that
-    /// does not fit.  Dropping the instance here is what reclaims the Rocq
-    /// bump heap, and it happens only once the body is fully written.
-    fn run<B>(
-        &self,
-        request: hyper::Request<B>,
-        sender: tokio::sync::oneshot::Sender<
-            Result<
-                hyper::Response<HyperOutgoingBody>,
-                wasmtime_wasi_http::p2::bindings::http::types::ErrorCode,
-            >,
-        >,
-    ) -> Result<()>
+    /// Collect the gateway's bounded response while driving guest streams.
+    /// The fresh instance, including the Rocq bump heap, is then reclaimed.
+    async fn run<B>(&self, request: hyper::Request<B>) -> Result<hyper::Response<WasiBody>>
     where
         B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
         B::Error: Into<wasmtime_wasi_http::Error>,
     {
-        let (mut store, guest) = self.instantiate()?;
-        let incoming = store
-            .data_mut()
-            .http()
-            .new_incoming_request(Scheme::Http, request)?;
-        let outparam = store.data_mut().http().new_response_outparam(sender)?;
-        guest
-            .wasi_http_incoming_handler()
-            .call_handle(&mut store, incoming, outparam)?;
-        Ok(())
+        let (mut store, guest) = self.instantiate().await?;
+        // P3 filters Host from fields rather than deriving the authority from
+        // it. Preserve HTTP/1 origin-form authority before that filtering.
+        let authority = request.uri().authority().cloned().or_else(|| {
+            request
+                .headers()
+                .get(hyper::header::HOST)?
+                .to_str()
+                .ok()?
+                .parse()
+                .ok()
+        });
+        let (mut incoming, io) = Request::from_http(&mut store.data_mut().hooks, request);
+        incoming.authority = authority;
+        store
+            .run_concurrent(async |store| {
+                let response = async {
+                    let response = guest
+                        .handle(store, incoming)
+                        .await?
+                        .map_err(|error| anyhow::anyhow!("HTTP handler failed: {error:?}"))?;
+                    let response =
+                        store.with(|store| response.into_http(store, async { Ok(()) }))?;
+                    let (parts, body) = response.into_parts();
+                    // All current replies are small JSON or embedded assets. Bound
+                    // collection so an unexpected artifact cannot exhaust the host.
+                    let body = http_body_util::Limited::new(body, 1024 * 1024)
+                        .collect()
+                        .await
+                        .map_err(|error| anyhow::anyhow!("Read component response: {error}"))?
+                        .to_bytes();
+                    Ok::<_, anyhow::Error>(hyper::Response::from_parts(
+                        parts,
+                        http_body_util::Full::new(body)
+                            .map_err(|never| match never {})
+                            .boxed_unsync(),
+                    ))
+                };
+                // Request I/O errors are interpreted by the gateway, which maps
+                // interrupted bodies to HTTP 400 rather than a host-level 500.
+                let (response, ()) = tokio::try_join!(response, async {
+                    let _ = io.await;
+                    Ok::<_, anyhow::Error>(())
+                })?;
+                Ok(response)
+            })
+            .await?
     }
 }
 
@@ -269,7 +289,7 @@ struct App {
     slots: Arc<Semaphore>,
 }
 
-fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<HyperOutgoingBody> {
+fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<WasiBody> {
     let body = format!("{{\"error\":\"{message}\"}}");
     hyper::Response::builder()
         .status(status)
@@ -290,10 +310,7 @@ fn unavailable(status: hyper::StatusCode, message: &str) -> hyper::Response<Hype
 ///
 /// The two responses this host still writes itself are both refusals to run
 /// the component at all, which is why they are here and not in the gateway.
-async fn serve<B>(
-    app: Arc<App>,
-    request: hyper::Request<B>,
-) -> Result<hyper::Response<HyperOutgoingBody>>
+async fn serve<B>(app: Arc<App>, request: hyper::Request<B>) -> Result<hyper::Response<WasiBody>>
 where
     B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
     B::Error: Into<wasmtime_wasi_http::Error>,
@@ -306,24 +323,26 @@ where
         ));
     };
     let permit = app.gate.clone().acquire_owned().await.unwrap();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    // The permit and the slot are released when the guest finishes, not when
-    // the response is returned, so a streaming body still counts as work in
-    // flight.  Dropping this handle does not cancel the task.
+    // Keep CPU-heavy synchronous providers off Tokio's I/O workers. The
+    // permits remain held until streams finish and the instance is dropped,
+    // even if the client disconnects and drops this task's JoinHandle.
+    let handle = tokio::runtime::Handle::current();
     let guest = {
         let app = app.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _slot = slot;
-            app.runtime.run(request, sender)
+            handle.block_on(app.runtime.run(request))
         })
     };
-    match receiver.await {
-        Ok(Ok(response)) => Ok(response),
-        // The guest set the outparam to an error, or returned without setting
-        // it at all -- the WIT forbids the latter, so both are broken guests.
-        Ok(Err(_)) | Err(_) => {
-            let _ = guest.await;
+    match guest
+        .await
+        .context("Run component request")
+        .and_then(|result| result)
+    {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            eprintln!("Component request failed: {error:#}");
             Ok(unavailable(
                 hyper::StatusCode::INTERNAL_SERVER_ERROR,
                 "Component request failed",

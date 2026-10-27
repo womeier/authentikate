@@ -4,9 +4,10 @@
 // limit, and the response security headers -- is decided here, inside a
 // component, and the host is left with the engine, storage preopen and configuration.
 //
-// Three imports, and the shape of that list is the point.  It forwards a byte
+// The capability list is the point.  It forwards a byte
 // body to `authentikate:service/api`, reads the origin policy from
-// `authentikate:config/policy`, and streams through `wasi:http`.  It parses no
+// `authentikate:config/policy`, streams through `wasi:http`, and uses the
+// monotonic clock to bound body reads.  It parses no
 // JSON, inspects no credentials, holds no key and cannot reach one: the
 // signing seed is in `authentikate:config/service`, which only the service
 // imports.  The proofs in components/service/theories/Proofs.v are about
@@ -16,7 +17,8 @@ package authentikate:gateway@0.1.0;
 
 world gateway {
     // Parsed by the runtime, not here; see README's Trusted Computing Base.
-    export wasi:http/incoming-handler@0.2.4;
+    export wasi:http/handler@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.0;
 
     import authentikate:service/api@0.1.0;
     import authentikate:config/policy@0.1.0;

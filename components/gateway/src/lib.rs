@@ -1,6 +1,6 @@
 //! The HTTP gateway.
 //!
-//! The runtime hands us a parsed `incoming-request`; we decide the request's
+//! The runtime hands us a parsed `request`; we decide the request's
 //! fate, forward a byte body to `authentikate:service/api`, and write back the
 //! status and body the Rocq service returned.  No JSON is parsed here and no
 //! credential is inspected.  Nor is any key held, and that is now structural
@@ -15,21 +15,21 @@
 //! and the storage directory preopen. The separate storage component preserves
 //! accounts on disk across fresh per-request instances.
 
+// Honor WIT async annotations, leaving the service/config imports synchronous.
 wit_bindgen::generate!({ world: "gateway", path: "wit", generate_all });
 
 mod policy;
 
 use authentikate::config;
 use authentikate::service::api;
-use exports::wasi::http::incoming_handler::Guest;
+use exports::wasi::http::handler::Guest;
+use futures::future::{select, Either};
 use policy::{
     is_json, is_origin_form, route, Operation, Policy, Route, BODY_LIMIT, READ_DEADLINE_NS,
 };
 use wasi::clocks::monotonic_clock;
-use wasi::http::types::{
-    Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
-};
-use wasi::io::{poll, streams::StreamError};
+use wasi::http::types::{ErrorCode, Fields, Method, Request, Response};
+use wit_bindgen::StreamResult;
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
                    connect-src 'self'; img-src 'self'; base-uri 'none'; \
@@ -65,44 +65,63 @@ enum BodyError {
 /// Drain the request body, counting bytes rather than trusting Content-Length,
 /// so the limit binds on a chunked body too.  The deadline is polled alongside
 /// the stream: a client that opens a body and stalls does not pin an instance.
-fn read_body(request: &IncomingRequest) -> Result<Vec<u8>, BodyError> {
-    let body = request.consume().map_err(|()| BodyError::Interrupted)?;
-    let stream = body.stream().map_err(|()| BodyError::Interrupted)?;
-    let deadline = monotonic_clock::subscribe_duration(READ_DEADLINE_NS);
-    let ready = stream.subscribe();
-    let mut buffer = Vec::new();
-    loop {
-        // Only the deadline being ready is the timeout; a stream that is also
-        // ready gets read first.
-        if !poll::poll(&[&ready, &deadline]).contains(&0) {
-            return Err(BodyError::TimedOut);
-        }
-        match stream.read(4096) {
-            Ok(chunk) => {
-                buffer.extend_from_slice(&chunk);
-                if buffer.len() > BODY_LIMIT {
-                    return Err(BodyError::TooLarge);
-                }
+async fn read_body(request: Request) -> Result<Vec<u8>, BodyError> {
+    let (result_tx, result_rx) = wit_future::new(|| Ok(()));
+    let (mut stream, trailers) = Request::consume_body(request, result_rx);
+    // Keep the result writer alive until reading ends. Its default acknowledges
+    // consumption even on early rejection; the HTTP error is our response.
+    let _result_tx = result_tx;
+    let deadline = monotonic_clock::now().saturating_add(READ_DEADLINE_NS);
+    let read = async move {
+        let mut buffer = Vec::with_capacity(BODY_LIMIT + 1);
+        loop {
+            // Check time even when every read is immediately ready.
+            if monotonic_clock::now() >= deadline {
+                return Err(BodyError::TimedOut);
             }
-            Err(StreamError::Closed) => return Ok(buffer),
-            Err(StreamError::LastOperationFailed(_)) => return Err(BodyError::Interrupted),
+            let (status, bytes) = stream.read(buffer).await;
+            buffer = bytes;
+            // read appends into spare capacity. Refuse the sentinel byte before
+            // another read, so even a full buffer never causes a zero-byte read.
+            if buffer.len() > BODY_LIMIT {
+                return Err(BodyError::TooLarge);
+            }
+            match status {
+                StreamResult::Complete(_) => {}
+                StreamResult::Dropped => break,
+                StreamResult::Cancelled => return Err(BodyError::Interrupted),
+            }
         }
+        // EOF alone is not success: p3 carries transport errors in trailers.
+        trailers.await.map_err(|_| BodyError::Interrupted)?;
+        Ok(buffer)
+    };
+    match select(
+        std::pin::pin!(read),
+        std::pin::pin!(monotonic_clock::wait_until(deadline)),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result,
+        Either::Right(_) => Err(BodyError::TimedOut),
     }
 }
 
-fn respond(request: &IncomingRequest) -> Reply {
+async fn respond(request: Request) -> Reply {
     let rules = config::policy::get();
     let allowed = Policy {
         approved_origin: rules.approved_origin,
         approved_authorities: rules.approved_authorities,
     };
-    let Some(target) = request.path_with_query() else {
+    let Some(target) = request.get_path_with_query() else {
         return error(400, "Use an origin-form relative request target");
     };
-    if !is_origin_form(&target) {
+    // P3 splits absolute URIs into scheme/authority/path; the path alone can
+    // look like origin-form even when the original target was absolute-form.
+    if !is_origin_form(&target, request.get_scheme().is_some()) {
         return error(400, "Use an origin-form relative request target");
     }
-    let headers = request.headers();
+    let headers = request.get_headers();
     let field = |name: &str| {
         headers
             .get(name)
@@ -110,12 +129,12 @@ fn respond(request: &IncomingRequest) -> Reply {
             .map(|value| String::from_utf8_lossy(&value).into_owned())
             .collect::<Vec<_>>()
     };
-    if !allowed.permits(request.authority().as_deref(), &field("origin")) {
+    if !allowed.permits(request.get_authority().as_deref(), &field("origin")) {
         return error(403, "Host or Origin is not allowed");
     }
     let operation = match route(&target) {
         Route::Asset { kind, body } => {
-            return match request.method() {
+            return match request.get_method() {
                 Method::Get => Reply {
                     status: 200,
                     content_type: kind,
@@ -134,7 +153,7 @@ fn respond(request: &IncomingRequest) -> Reply {
         Route::NotFound => return error(404, "Not found"),
         Route::Api(operation) => operation,
     };
-    if !matches!(request.method(), Method::Post) {
+    if !matches!(request.get_method(), Method::Post) {
         return Reply {
             allow_post: true,
             ..error(405, "Use POST")
@@ -152,7 +171,7 @@ fn respond(request: &IncomingRequest) -> Reply {
     {
         return error(413, "Request body exceeds 16 KiB");
     }
-    let body = match read_body(request) {
+    let body = match read_body(request).await {
         Ok(body) => body,
         Err(BodyError::TooLarge) => return error(413, "Request body exceeds 16 KiB"),
         Err(BodyError::TimedOut) => return error(408, "Request body timed out"),
@@ -177,44 +196,41 @@ fn respond(request: &IncomingRequest) -> Reply {
     }
 }
 
-fn send(outparam: ResponseOutparam, reply: Reply) {
+fn send(reply: Reply) -> Result<Response, ErrorCode> {
     let headers = Fields::new();
     let set = |name: &str, value: &str| {
-        // A rejected header name would be a bug here, not input-dependent.
-        let _ = headers.append(name, value.as_bytes());
+        headers
+            .append(name, value.as_bytes())
+            .map_err(|_| ErrorCode::InternalError(None))
     };
-    set("content-type", reply.content_type);
-    set("cache-control", "no-store");
-    set("x-content-type-options", "nosniff");
-    set("referrer-policy", "no-referrer");
-    set("content-security-policy", CSP);
+    set("content-type", reply.content_type)?;
+    set("cache-control", "no-store")?;
+    set("x-content-type-options", "nosniff")?;
+    set("referrer-policy", "no-referrer")?;
+    set("content-security-policy", CSP)?;
     if reply.allow_post {
-        set("allow", "POST");
+        set("allow", "POST")?;
     }
-    let response = OutgoingResponse::new(headers);
-    let _ = response.set_status_code(reply.status);
-    let Ok(body) = response.body() else {
-        return ResponseOutparam::set(
-            outparam,
-            Err(wasi::http::types::ErrorCode::InternalError(None)),
-        );
-    };
-    ResponseOutparam::set(outparam, Ok(response));
-    {
-        let Ok(stream) = body.write() else { return };
-        // WASI blocking-write-and-flush accepts at most 4096 bytes per call.
-        for chunk in reply.body.chunks(4096) {
-            if stream.blocking_write_and_flush(chunk).is_err() {
-                break;
-            }
-        }
-    }
-    let _ = OutgoingBody::finish(body, None);
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (response, transmission) = Response::new(headers, Some(body_rx), trailers_rx);
+    response
+        .set_status_code(reply.status)
+        .map_err(|_| ErrorCode::InternalError(None))?;
+    // The reader is driven only after handle returns the response. Do not await
+    // these writes in handle, or backpressure would deadlock the response.
+    wit_bindgen::spawn(async move {
+        let _unsent = body_tx.write_all(reply.body).await;
+        drop(body_tx);
+        drop(trailers_tx);
+        let _ = transmission.await;
+    });
+    Ok(response)
 }
 
 impl Guest for Component {
-    fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
-        send(response_out, respond(&request));
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        send(respond(request).await)
     }
 }
 

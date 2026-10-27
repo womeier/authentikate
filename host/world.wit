@@ -17,7 +17,7 @@ package authentikate:host@0.1.0;
 world web-host {
     import authentikate:config/service@0.1.0;
     import authentikate:config/policy@0.1.0;
-    export wasi:http/incoming-handler@0.2.4;
+    export wasi:http/handler@0.3.0;
 }
 
 // Test the storage provider directly, independently of HTTP admission control.

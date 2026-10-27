@@ -46,8 +46,8 @@ const SCRIPT: &str = include_str!("../assets/app.js");
 /// Absolute-form (`http://elsewhere/`) and a protocol-relative target
 /// (`//elsewhere/`) are both rejected, because both invite a reader -- or a
 /// proxy -- to disagree with us about which authority the request names.
-pub fn is_origin_form(target: &str) -> bool {
-    target.starts_with('/') && !target.starts_with("//")
+pub fn is_origin_form(target: &str, has_scheme: bool) -> bool {
+    !has_scheme && target.starts_with('/') && !target.starts_with("//")
 }
 
 /// Route on the path alone; a query string selects nothing here.
@@ -146,10 +146,12 @@ mod tests {
     #[test]
     fn origin_form_only() {
         for target in ["/", "/api/login", "/style.css?v=2"] {
-            assert!(is_origin_form(target), "{target}");
+            assert!(is_origin_form(target, false), "{target}");
+            // P3 exposes an absolute URI's path separately from its scheme.
+            assert!(!is_origin_form(target, true), "{target}");
         }
         for target in ["//rebound.test/", "http://rebound.test/", "", "rebound"] {
-            assert!(!is_origin_form(target), "{target}");
+            assert!(!is_origin_form(target, false), "{target}");
         }
     }
 

@@ -50,7 +50,8 @@ Request and response bodies are JSON. The table uses shorthand field notation.
   accepts request bytes and returns a status code and response bytes.
 - **Rust gateway:** routes HTTP requests, enforces Host/Origin policy, media
   types, a 16 KiB body limit and a 15-second body-read deadline, serves demo
-  assets and sets security headers. It has no access to the signing key.
+  assets and sets security headers. HTTP bodies use WASI p3 streams/futures;
+  service and policy calls remain synchronous. It has no access to the signing key.
 - **Providers:** [Argon2](components/crypto/argon2) for passwords,
   [HMAC-SHA-256](components/crypto/hmac) for HS256 tokens,
   [file-backed storage](components/storage) with atomic create-if-absent, and
@@ -58,11 +59,13 @@ Request and response bodies are JSON. The table uses shorthand field notation.
   outside the Rocq heap behind opaque handles.
 - **Rust host:** runs Wasmtime, supplies configuration and capabilities, and
   enforces admission and execution limits. Each request gets a fresh component
-  instance. Only storage receives filesystem access, restricted to
-  `STORAGE_DIR` (default `run/`); no environment or outbound network access
-  is granted to the components.
+  instance, with execution on a blocking worker and responses buffered up to
+  1 MiB before returning to the socket. Only storage receives filesystem access,
+  restricted to `STORAGE_DIR` (default `accounts/`, or `run/` with the Nix demo
+  wrapper); no environment or outbound network access is granted to the components.
 
-The composed artifact exports `wasi:http/incoming-handler@0.2.4`. See
+The composed artifact exports `wasi:http/handler@0.3.0`. The existing providers
+still use WASI p2 for clocks, random, stdout and filesystem access. See
 [host/README.md](host/README.md) for composition and runtime details.
 
 ## Security And Limits

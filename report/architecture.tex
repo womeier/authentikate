@@ -23,11 +23,11 @@
 ]
 \node[card,text width=10cm,minimum height=1.8cm] (gateway) at (0,0) {
   \textbf{HTTP gateway}\componentlinks{components/gateway/src/lib.rs}{components/gateway/wit/gateway.wit}{rust-logo-black}{authentikate:gateway}\par\smallskip
-  \textbf{handle}\ty{(request, response-out)}\par
-  (from \code{wasi:http/incoming-handler})
+  \textbf{handle}\ty{(request) -> result<response, error-code>}\par
+  (async; from \code{wasi:http/handler})
 };
-\wasitab{gateway}{\code{http/types}, \code{io/streams}, \code{io/poll},
-  \code{io/error},\\ \code{clocks/monotonic-clock}}
+\wasitab{gateway}{\code{http/types@0.3.0},\\
+  \code{clocks/monotonic-clock@0.3.0}}
 
 \node[service] (service) at ($(gateway-wasi.south)+(0,-.85)$) {
   \textbf{Authentication service}\componentlinks{components/service/theories/Api.v}{components/service/wit/world.wit}{rocq-icon-black}{authentikate:service}\par\smallskip

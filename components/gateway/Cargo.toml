@@ -9,4 +9,5 @@ description = "WebAssembly HTTP gateway: routing, origin policy and static asset
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.46"
+wit-bindgen = { version = "0.57.1", features = ["async-spawn"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }

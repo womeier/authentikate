@@ -29,4 +29,4 @@ let gateway = new authentikate:gateway {
     ...
 };
 
-export gateway["wasi:http/incoming-handler@0.2.4"];
+export gateway["wasi:http/handler@0.3.0"];

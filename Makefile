@@ -16,7 +16,7 @@ gateway-component: check-wit
 	mkdir -p build
 	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-gateway
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_gateway.wasm -o build/gateway.component.wasm
-	wasm-tools validate build/gateway.component.wasm
+	wasm-tools validate --features cm-async build/gateway.component.wasm
 
 storage-component:
 	mkdir -p build
@@ -53,7 +53,7 @@ compose-host: gateway-component storage-component
 		-d authentikate:gateway=build/gateway.component.wasm \
 		-d authentikate:storage=build/storage.component.wasm \
 		-o build/host.component.wasm
-	wasm-tools validate build/host.component.wasm
+	wasm-tools validate --features cm-async build/host.component.wasm
 
 test-host: compose-host
 	cargo test --locked -p authentikate-host -p authentikate-storage
