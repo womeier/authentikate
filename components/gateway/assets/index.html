@@ -9,6 +9,19 @@
     <script type="module" src="/app.js"></script>
   </head>
   <body>
+    <main id="javascript-required" role="alert">
+      <section class="intro">
+        <div>
+          <h1>JavaScript is required.</h1>
+          <p class="lede">
+            Enable JavaScript and allow the demo script to load, then reload
+            this page to use the demo.
+          </p>
+          <noscript><p>JavaScript is disabled in your browser.</p></noscript>
+        </div>
+      </section>
+    </main>
+    <div id="demo" hidden>
     <header class="topbar">
       <a class="wordmark" href="/"
         >a<span>uthentikate</span><span class="mark">/</span></a
@@ -170,15 +183,16 @@ Start with 01 / Create an account.</pre>
       <aside class="notice">
         <strong>For local testing only.</strong>
         <p>
-          Accounts live in an in-memory Map. Restarting the server clears all
-          accounts and replaces the signing key, invalidating old tokens. This
-          demo is not intended for production use.
+          Accounts are stored on disk, and the signing key is loaded from a file.
+          Restarting the server does not clear accounts or replace the signing
+          key. This demo is not intended for production use.
         </p>
       </aside>
     </main>
     <footer>
       <span>AUTHENTIKATE</span
-      ><span>Data is cleared when the server restarts.</span>
+      ><span>Account data persists across server restarts.</span>
     </footer>
+    </div>
   </body>
 </html>

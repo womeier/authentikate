@@ -25,7 +25,7 @@ async function fixture(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const name of ['accounts', 'config']) await mkdir(join(directory, name), { mode: 0o700 });
   const key = randomBytes(32);
-  await writeFile(join(directory, 'config/signing.key'), key, { mode: 0o600 });
+  await writeFile(join(directory, 'config/signing.key'), `${key.toString('base64url')}\n`, { mode: 0o600 });
   return { directory, key };
 }
 
@@ -254,7 +254,10 @@ test('approved origin overrides fallback authorities', { timeout: 120_000 }, asy
 test('missing or malformed provisioning fails closed', { timeout: 600_000 }, async t => {
   const cases = [
     ['missing key', undefined, null],
-    ...[0, 31, 33, 64].map(length => [`key length ${length}`, undefined, randomBytes(length)]),
+    ...[0, 31, 33, 64].map(length => [`key length ${length}`, undefined, randomBytes(length).toString('base64url')]),
+    ['invalid base64url key', undefined, '!'.repeat(43)],
+    ['standard base64 key', undefined, Buffer.alloc(32, 255).toString('base64')],
+    ['raw binary key', undefined, Buffer.alloc(32)],
     ['missing config', () => undefined],
     ['malformed JSON', () => '{'],
     ['unknown field', value => ({ ...value, unexpected: true })],
@@ -282,6 +285,7 @@ test('missing or malformed provisioning fails closed', { timeout: 600_000 }, asy
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       assert.equal(response.status, 500, `${name}: ${response.body}\n${server.diagnostics()}`);
       assert.ok(!response.body.includes(f.key.toString('hex')));
+      assert.ok(!response.body.includes(f.key.toString('base64url')));
     }
     assert.deepEqual(await readdir(join(f.directory, 'accounts')), []);
     await server.stop();

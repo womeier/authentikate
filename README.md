@@ -9,30 +9,39 @@ and composed with Rust providers into a single Wasm component.
 
 ## Run The Demo
 
-Run from the repository root. Provision the configuration, persistent signing key
-and account directory before starting:
+Run from the repository root:
 
 ```sh
 cachix use womeier
-mkdir -p run/config run/accounts
-chmod 700 run/config run/accounts
-umask 077
-cp config.example.json run/config/config.json
-node -e 'require("node:fs").writeFileSync("run/config/signing.key", require("node:crypto").randomBytes(32), {flag: "wx", mode: 0o600})'
 nix run .#authentikate-local
 # open http://localhost:3000
 ```
 
-The key-creation command is one-time provisioning: `wx` fails if the file already
-exists and never truncates an existing key. On subsequent starts, run only the
-launcher. Do not overwrite configuration or regenerate the key as a startup step.
-The provider requires exactly 32 raw binary key bytes and never creates or repairs
-a missing or malformed key. Back up and protect it along with the accounts;
+On first run, the launcher creates private `run/config` and `run/accounts`
+directories, copies the bundled `config.example.json` to `run/config/config.json`,
+and generates a persistent 32-byte random signing key. Existing configuration
+directories are left untouched: the launcher never overwrites configuration or
+regenerates a missing or malformed key inside them. The provider requires exactly
+unpadded base64url (RFC 4648 Section 5) decoding to 32 key bytes, with an optional trailing LF or
+CRLF. Back up and protect the key along with the accounts;
 keeping it preserves token validity across restarts, subject to expiry.
+
+Existing raw binary `signing.key` files must be converted before starting this
+version. Stop the server, then encode the existing key rather than generating a
+new one, preserving token validity:
+
+```sh
+(umask 077; set -C; set -o pipefail; openssl base64 -A -in run/config/signing.key | tr '+/' '-_' | tr -d '=' > run/config/signing.key.base64) &&
+  mv run/config/signing.key.base64 run/config/signing.key
+```
+
+Adjust the paths when using a custom configuration directory. Only run this
+conversion on an old raw 32-byte key, not an already base64-encoded key.
 
 The launcher uses Wasmtime from the pinned flake, not a custom Rust host.
 `CONFIG_DIR` and `ACCOUNTS_DIR` override its default `./run/config` and
-`./run/accounts` directories. It binds `127.0.0.1:3000`.
+`./run/accounts` directories. Override directories must be provisioned manually;
+automatic setup applies only to the defaults. It binds `127.0.0.1:3000`.
 Tested on Linux. Apple Silicon macOS support is experimental and untested:
 it uses the portable Linux-built Wasm components and a native Wasmtime launcher.
 

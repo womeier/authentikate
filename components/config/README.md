@@ -11,9 +11,13 @@ WASI 0.2.4 filesystem imports.
 The provider reads a directory preopen named exactly `/config`:
 
 - `config.json`: at most 65,536 bytes, including whitespace, UTF-8 JSON.
-- `signing.key`: exactly 32 raw binary bytes, provisioned with a cryptographically
-  secure random generator and persisted across requests, instances and restarts.
-  Not hex, base64, a password, or a newline-terminated text file.
+- `signing.key`: unpadded base64url (RFC 4648 Section 5) decoding to exactly 32 bytes, provisioned
+  with a cryptographically secure random generator and persisted across requests,
+  instances and restarts. An optional trailing LF or CRLF is accepted; other
+  whitespace, raw binary, hex, standard base64, and padded encodings are rejected. The file is
+  bounded to 45 bytes. Generate a new key with
+  `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, never a
+  password.
 
 The root [config.example.json](../../config.example.json) contains this example:
 
@@ -52,7 +56,7 @@ and the listener/proxy; the CLI has no custom host safety validation.
 
 Each `get` rereads and validates JSON. Service `get` additionally reads the key;
 policy `get` never opens it and cannot return it. Missing files/preopen, symlinks,
-nonregular files, read failures, malformed configuration and incorrect key length
+nonregular files, read failures, malformed configuration, invalid base64url and incorrect decoded key length
 trap with a constant message, rather than returning defaults. There is no key
 generation or write operation. Temporary read/key buffers are zeroized; the
 service export necessarily transfers key bytes to the service consumer.
@@ -60,7 +64,7 @@ service export necessarily transfers key bytes to the service consumer.
 Configuration is reread on every request. Stop all serving processes before
 multi-file updates: separate files and separate exports are not an atomic snapshot.
 See the [root provisioning commands](../../README.md#run-the-demo) for restrictive
-directory permissions and one-time random key creation using exclusive `wx`.
+directory permissions and one-time random key creation using shell noclobber.
 Never truncate or regenerate an existing key during startup; a missing or malformed
 key fails closed. A retained key preserves token validity across restarts.
 
@@ -96,7 +100,7 @@ configuration export is re-exported publicly. `make compose-app` rebuilds config
 storage and gateway and composes existing service/crypto/email artifacts into
 `build/app.component.wasm`; `make app-component` builds all prerequisites.
 
-Native tests exercise only the pure parser and key-length validator. They do not
+Native tests exercise only the pure parser, base64url decoding and decoded-key-length validator. They do not
 invoke WASI or test runtime preopen permissions, trapping, or composition wiring.
 `make test-app` exercises the composed provider through the real Wasmtime CLI,
 including missing/malformed provisioning and persistent-key restart behavior.

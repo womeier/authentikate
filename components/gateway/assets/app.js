@@ -58,3 +58,6 @@ for (const form of forms) {
     }
   });
 }
+
+document.querySelector('#javascript-required').hidden = true;
+document.querySelector('#demo').hidden = false;

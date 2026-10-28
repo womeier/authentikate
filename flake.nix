@@ -304,9 +304,20 @@
         pkgs:
         pkgs.writeShellApplication {
           name = "authentikate-local";
+          runtimeInputs = [ pkgs.coreutils pkgs.openssl ];
           text = ''
             config_dir="''${CONFIG_DIR:-./run/config}"
             accounts_dir="''${ACCOUNTS_DIR:-./run/accounts}"
+            umask 077
+            if [[ -z "''${CONFIG_DIR:-}" && ! -e "$config_dir" && ! -L "$config_dir" ]]; then
+              mkdir -p ./run
+              mkdir -m 700 "$config_dir"
+              cp ${./config.example.json} "$config_dir/config.json"
+              (set -C; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > "$config_dir/signing.key")
+            fi
+            if [[ -z "''${ACCOUNTS_DIR:-}" ]]; then
+              mkdir -p "$accounts_dir"
+            fi
             if [[ ! -d "$config_dir" || ! -d "$accounts_dir" ]]; then
               echo "Provision CONFIG_DIR ($config_dir) and ACCOUNTS_DIR ($accounts_dir) before starting." >&2
               exit 1
@@ -330,7 +341,7 @@
               ${authentikate-app-component}/app.component.wasm
           '';
           meta = {
-            description = "Provisioned local authentication service using stock Wasmtime";
+            description = "Local authentication demo using stock Wasmtime";
             license = lib.licenses.mit;
           };
         };
