@@ -450,7 +450,11 @@
               WASMTIME = lib.getExe pkgs.wasmtime;
             }
             ''
-              mkdir -p tests
+              # Wasmtime caches compiled modules under $XDG_CACHE_HOME (or
+              # $HOME/.cache); the sandbox's $HOME is unwritable, and running
+              # the suite without the cache recompiles the component 25 times.
+              export XDG_CACHE_HOME="$TMPDIR/cache"
+              mkdir -p "$XDG_CACHE_HOME" tests
               cp ${./tests/http.mjs} tests/http.mjs
               mkdir -p build
               cp ${authentikate-app-component}/*.component.wasm build/
