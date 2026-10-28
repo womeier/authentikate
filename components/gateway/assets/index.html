@@ -54,11 +54,11 @@
             </div>
             <div>
               <dt>Signature</dt>
-              <dd>Ed25519</dd>
+              <dd>HS256 / HMAC-SHA-256</dd>
             </div>
             <div>
               <dt>Token lifetime</dt>
-              <dd>600 seconds</dd>
+              <dd>600 seconds (configurable)</dd>
             </div>
           </dl>
         </aside>
@@ -75,7 +75,8 @@
           </div>
           <h3>Create an account</h3>
           <p class="description">
-            Register with an email address and password.
+            Register with an email address and password. A successful signup
+            also sends a welcome email.
           </p>
           <form id="signup-form">
             <label for="signup-email">Email address</label
