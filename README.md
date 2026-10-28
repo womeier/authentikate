@@ -45,6 +45,52 @@ automatic setup applies only to the defaults. It binds `127.0.0.1:3000`.
 Tested on Linux. Apple Silicon macOS support is experimental and untested:
 it uses the portable Linux-built Wasm components and a native Wasmtime launcher.
 
+## Live Email
+
+`nix run .#authentikate-live` runs the same loopback demo with direct SMTP
+instead of stdout. First provision the configuration and signing key
+as above (or start and stop `authentikate-local` once), then set
+`service.email_from` in `run/config/config.json` to a sender accepted by your
+mail setup: a bare ASCII mailbox or a simple ASCII display name followed by
+`<mailbox>`. The example's `example.test` sender cannot deliver.
+`CONFIG_DIR` and `ACCOUNTS_DIR` work as in the local launcher; the live launcher
+requires existing configuration and never generates a signing key. The providers
+validate the configuration and sender when handling requests.
+
+Install and configure a local SMTP MTA listening on `127.0.0.1:25`, allowing
+submission without authentication or TLS and queueing messages for onward
+delivery. Nix does not install or configure the MTA. Restrict this submission
+listener to loopback and its relay permissions accordingly; do not expose an open
+relay. No `mail` command, Node helper, tokens, Lettermint account, or HTTP egress
+is required:
+
+```sh
+nix run .#authentikate-live
+```
+
+The component connects directly to the fixed SMTP endpoint using WASI TCP.
+See the [email provider](components/email/README.md) for the SMTP flow and
+message-format restrictions.
+
+Open `http://localhost:3000` and sign up with an address you control. Signup sends
+a real welcome email through your configured mail system. Existing accounts return
+`409` without sending another email. A successful send means the SMTP server's
+final `250` acceptance after `DATA`, not confirmed delivery. An email failure
+returns `500` after account creation;
+the account remains stored and retrying signup does not resend.
+
+The live launcher enables TCP with inherited host network access
+(`-S tcp=y,inherit-network=y,allow-ip-name-lookup=n,udp=n,inherit-env=n`).
+IP name lookup, UDP, and environment inheritance remain disabled. The trusted
+email component fixes its destination to `127.0.0.1:25`, but stock Wasmtime has no
+destination-specific TCP allowlist. Use OS firewall rules if that restriction
+must be enforced independently of the component.
+No outgoing WASI HTTP capability is needed. SMTP uses streams, polling, and a
+30-second monotonic deadline across connection and protocol I/O; the launcher
+adds a 90-second execution timeout. There are no automatic retries or
+deduplication. The optional idempotency key is validated but otherwise unused
+by SMTP.
+
 ## Build And Test
 
 ```sh
@@ -53,10 +99,20 @@ nix develop --command make test-app
 nix develop --command make test
 nix develop --command cargo test --locked --workspace
 nix build .#authentikate-app-component
+nix develop --command make test-email-stdout test-email-smtp
+nix build .#authentikate-live-component
 ```
+
+`nix develop --command make test-smtp-runtime` additionally tests the live
+composition against a fake SMTP server on `127.0.0.1:25`, without delivering mail.
+It requires permission to bind that port and no existing listener on it.
 
 `make app-component` builds the service and providers, then composes
 `build/app.component.wasm` using root [composition.wac](composition.wac).
+`make app-live-component` instead builds `build/app-live.component.wasm` with
+the SMTP backend. `make compose-live-app` reuses its service, crypto, and SMTP
+email artifacts. Both compositions enforce separate exact WASI capability lists.
+The live email artifact is `build/email-smtp.component.wasm` (Cargo feature `smtp`).
 `make compose-app` reuses existing service, Argon2, HMAC and stdout-email artifacts
 in `build/`, rebuilding gateway, storage and config before composition.
 `make test-app` composes and runs the real Wasmtime HTTP tests; build those reused
@@ -148,7 +204,8 @@ Request and response bodies are JSON. The table uses shorthand field notation.
 - **Providers:** [Argon2](components/crypto/argon2) for passwords,
   [HMAC-SHA-256](components/crypto/hmac) for HS256 tokens,
   [file-backed storage](components/storage) with atomic create-if-absent, and
-  [email](components/email) that currently writes to stdout. Secret keys stay
+  [email](components/email) that writes to stdout by default or sends through
+  direct SMTP to the local MTA in the live composition. Secret keys stay
   outside the Rocq heap behind opaque handles.
 - **Config provider:** reads provisioned JSON and the persistent signing key,
   exporting service settings to the service and origin policy to the gateway.

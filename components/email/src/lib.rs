@@ -1,4 +1,13 @@
-//! JSON-line email output using WASI 0.2 stdout and streams.
+//! One interface, built with exactly one backend. Host capabilities use WASI 0.2.
+
+#[cfg(any(
+    all(feature = "stdout", feature = "smtp"),
+    not(any(feature = "stdout", feature = "smtp"))
+))]
+compile_error!("select exactly one email backend: stdout or smtp");
+
+#[cfg(feature = "smtp")]
+mod smtp;
 
 wit_bindgen::generate!({ world: "email-provider", path: "wit" });
 
@@ -47,6 +56,7 @@ fn payload(email: &Message) -> Result<Value, Error> {
 }
 
 // WASI blocking-write-and-flush accepts at most 4096 bytes per call.
+#[cfg(feature = "stdout")]
 fn write(stream: &wasi::io::streams::OutputStream, bytes: &[u8]) -> Result<(), Error> {
     for chunk in bytes.chunks(4096) {
         stream
@@ -58,13 +68,20 @@ fn write(stream: &wasi::io::streams::OutputStream, bytes: &[u8]) -> Result<(), E
 
 impl Guest for Component {
     fn send(email: Message) -> Result<(), Error> {
-        let payload = payload(&email)?;
-        let mut record = json!({"backend": "stdout", "email": payload});
-        if let Some(key) = email.idempotency_key {
-            record["idempotency_key"] = json!(key);
+        #[cfg(feature = "stdout")]
+        {
+            let payload = payload(&email)?;
+            let mut record = json!({"backend": "stdout", "email": payload});
+            if let Some(key) = email.idempotency_key {
+                record["idempotency_key"] = json!(key);
+            }
+            let line = format!("{record}\n");
+            write(&wasi::cli::stdout::get_stdout(), line.as_bytes())
         }
-        let line = format!("{record}\n");
-        write(&wasi::cli::stdout::get_stdout(), line.as_bytes())
+        #[cfg(feature = "smtp")]
+        {
+            smtp::send(&email)
+        }
     }
 }
 
@@ -85,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn serializes_api_payload() {
+    fn serializes_payload() {
         let email = message();
         let value = payload(&email).unwrap();
         let value: Value = serde_json::from_str(&value.to_string()).unwrap();

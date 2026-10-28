@@ -1,10 +1,13 @@
 # Deferred Work
 
-- [ ] Experiment with a Lettermint email component behind the existing sender
-  interface, keeping stdout as the default. Commit `c0c33f9` removed the previous
-  backend; its parent retains the implementation and mocked HTTP tests for
-  reference. Evaluate credential provisioning, restricted outbound HTTPS,
-  timeouts, retries/idempotency and acceptance versus actual delivery.
+- [ ] Add a durable email outbox and delivery tracking. The optional direct SMTP
+  backend sends synchronously with no automatic retries or deduplication;
+  its optional idempotency key is validated but otherwise unused. Signup persists an
+  account before email acceptance and supplies no idempotency key. A transport
+  failure can leave acceptance uncertain, and the server's final SMTP `250`
+  acceptance does not confirm delivery. Ensure the local MTA's unauthenticated,
+  plaintext submission listener is restricted to loopback with appropriate relay
+  permissions; do not expose an open relay.
 - [ ] Implement rate limiting only after settling counter keying, enumeration,
   account lockout, bounded storage, trustworthy time and atomic enforcement.
   Commit `077c9be` removed the unwired `Backoff.v` policy and trace proofs;

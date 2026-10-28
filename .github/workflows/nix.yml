@@ -36,8 +36,8 @@ jobs:
       - name: Build and test service component
         run: nix build --print-build-logs
 
-      - name: Build composed application and stock Wasmtime launcher
-        run: nix build --print-build-logs .#authentikate-app-component .#authentikate-local --out-link app-component
+      - name: Build composed applications and stock Wasmtime launchers
+        run: nix build --print-build-logs .#authentikate-app-component .#authentikate-local .#authentikate-live-component .#authentikate-live --out-link app-component
 
       - name: Print component interface
         run: |
@@ -53,12 +53,12 @@ jobs:
         run: |
           nix develop --command cargo test --locked -p authentikate-argon2 -p authentikate-hmac
 
-      - name: Test stdout email component
-        run: nix develop --command make test-email-stdout
+      - name: Test stdout and localhost SMTP email components
+        run: nix develop --command make test-email-stdout test-email-smtp
 
       - name: Compose actual Rust providers and test stock Wasmtime HTTP
         run: |
-          nix develop --command make crypto-components test-app
+          nix develop --command make crypto-components test-app compose-live-app
           nix develop --command cargo fmt --all -- --check
           nix flake check --print-build-logs
           nix develop --command cargo test --locked -p authentikate-config -p authentikate-gateway -p authentikate-storage
@@ -70,9 +70,11 @@ jobs:
             result/*.wasm
             build/authentikate.component.wit
             build/email-stdout.component.wasm
+            build/email-smtp.component.wasm
             build/argon2.component.wasm
             build/hmac.component.wasm
             build/app.component.wasm
+            build/app-live.component.wasm
             build/config.component.wasm
             build/storage.component.wasm
           if-no-files-found: error

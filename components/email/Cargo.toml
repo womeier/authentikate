@@ -3,10 +3,15 @@ name = "authentikate-email"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Stdout WebAssembly email component"
+description = "Interchangeable stdout and localhost SMTP WebAssembly email components"
 
 [lib]
 crate-type = ["cdylib"]
+
+[features]
+default = ["stdout"]
+stdout = []
+smtp = []
 
 [dependencies]
 serde_json = "1"

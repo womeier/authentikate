@@ -320,6 +320,17 @@ Proof.
       intros H; discriminate.
 Qed.
 
+Corollary expired_token_not_valid :
+  forall ops kv mail cfg now body c,
+    (c_exp c <= now)%N ->
+    handle ops kv mail cfg now RtValidate body <> Validity true (Some c).
+Proof.
+  intros ops kv mail cfg now body c Hexpired Hvalid.
+  apply valid_implies_fresh_and_ours in Hvalid as [Hfresh _].
+  unfold Claims.fresh in Hfresh.
+  apply N.ltb_lt in Hfresh. lia.
+Qed.
+
 (* ---- claims survive the JSON round trip --------------------------------- *)
 
 Lemma of_json_to_json : forall c, Claims.of_json (Claims.to_json c) = Some c.

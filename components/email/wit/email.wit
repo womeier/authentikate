@@ -6,7 +6,7 @@ interface sender {
         to: list<string>,
         subject: string,
         text: string,
-        /// Reuse the same key and message when retrying an uncertain send.
+        /// Reserved for backends with deduplication; stdout and SMTP do not deduplicate.
         idempotency-key: option<string>,
     }
 
@@ -14,7 +14,7 @@ interface sender {
         invalid-message(string),
         configuration(string),
         transport(string),
-        /// HTTP status from the provider. Response bodies are not exposed.
+        /// SMTP rejection status. Server reply text is not exposed.
         rejected(u16),
     }
 

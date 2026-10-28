@@ -260,54 +260,71 @@
       '') workspace.members;
 
       # Cache this Linux-built output for all hosts, including macOS.
-      authentikate-app-component = rustPlatform.buildRustPackage {
-        pname = "authentikate-app-component";
-        version = "0.1.0";
-        src = rustSrc [
-          ./Makefile
-          ./composition.wac
-          ./tests/app-interface.mjs
-          ./components/config/build.rs
-          ./components/config/src
-          ./components/config/wit
-          ./components/crypto
-          ./components/email
-          ./components/gateway
-          ./components/storage
-          ./components/service/wit
-          ./wit
-        ];
-        postPatch = rustPostPatch;
-        cargoLock.lockFile = ./Cargo.lock;
-        nativeBuildInputs = [
-          pkgs.wasm-tools
-          pkgs.wac-cli
-          pkgs.nodejs
-        ];
-        buildPhase = ''
-          runHook preBuild
-          mkdir -p build
-          cp ${authentikate-wasm}/authentikate.component.wasm build/
-          make check-wit crypto-components email-stdout-component compose-app
-          runHook postBuild
-        '';
-        doCheck = false;
-        installPhase = ''
-          runHook preInstall
-          mkdir -p $out
-          cp build/*.component.wasm $out/
-          runHook postInstall
-        '';
-      };
+      mkAppComponent =
+        live:
+        rustPlatform.buildRustPackage {
+          pname = if live then "authentikate-live-component" else "authentikate-app-component";
+          version = "0.1.0";
+          src = rustSrc [
+            ./Makefile
+            ./composition.wac
+            ./tests/app-interface.mjs
+            ./components/config/build.rs
+            ./components/config/src
+            ./components/config/wit
+            ./components/crypto
+            ./components/email
+            ./components/gateway
+            ./components/storage
+            ./components/service/wit
+            ./wit
+          ];
+          postPatch = rustPostPatch;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [
+            pkgs.wasm-tools
+            pkgs.wac-cli
+            pkgs.nodejs
+          ];
+          buildPhase = ''
+            runHook preBuild
+            mkdir -p build
+            cp ${authentikate-wasm}/authentikate.component.wasm build/
+            make check-wit crypto-components email-${if live then "smtp" else "stdout"}-component ${
+              if live then "compose-live-app" else "compose-app"
+            }
+            runHook postBuild
+          '';
+          doCheck = false;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp build/*.component.wasm $out/
+            runHook postInstall
+          '';
+        };
+
+      authentikate-app-component = mkAppComponent false;
+      authentikate-live-component = mkAppComponent true;
 
       mkLocal =
-        pkgs:
+        pkgs: live:
         pkgs.writeShellApplication {
-          name = "authentikate-local";
-          runtimeInputs = [ pkgs.coreutils pkgs.openssl ];
+          name = if live then "authentikate-live" else "authentikate-local";
+          runtimeInputs = [
+            pkgs.coreutils
+            pkgs.openssl
+          ];
           text = ''
             config_dir="''${CONFIG_DIR:-./run/config}"
             accounts_dir="''${ACCOUNTS_DIR:-./run/accounts}"
+            ${lib.optionalString live ''
+              if [[ ! -f "$config_dir/config.json" || ! -f "$config_dir/signing.key" ]]; then
+                echo "Provision $config_dir with config.json, signing.key, and a deliverable service.email_from before starting live delivery." >&2
+                echo "You can initialize the default directories with nix run .#authentikate-local first." >&2
+                exit 1
+              fi
+            ''}
             umask 077
             if [[ -z "''${CONFIG_DIR:-}" && ! -e "$config_dir" && ! -L "$config_dir" ]]; then
               mkdir -p ./run
@@ -331,25 +348,36 @@
               --max-concurrent-requests 1 \
               --max-concurrent-connections 8 \
               --no-logging-prefix \
-              -S cli=y,inherit-network=n,allow-ip-name-lookup=n,tcp=n,udp=n,inherit-env=n \
-              -W fuel=2000000000 \
+              -S cli=y,inherit-network=${if live then "y" else "n"},allow-ip-name-lookup=n,tcp=${if live then "y" else "n"},udp=n,inherit-env=n \
+              -W fuel=2000000000${lib.optionalString live ",timeout=90s"} \
               -W max-memory-size=134217728 \
               -W max-memories=8 \
               -W max-instances=32 \
               -W max-tables=16 \
               -W max-wasm-stack=8388608,async-stack-size=16777216 \
-              ${authentikate-app-component}/app.component.wasm
+              ${
+                if live then
+                  "${authentikate-live-component}/app-live.component.wasm"
+                else
+                  "${authentikate-app-component}/app.component.wasm"
+              }
           '';
           meta = {
-            description = "Local authentication demo using stock Wasmtime";
+            description =
+              if live then
+                "Authentication demo sending email through localhost SMTP"
+              else
+                "Local authentication demo using stock Wasmtime";
             license = lib.licenses.mit;
           };
         };
 
-      authentikate-local = mkLocal pkgs;
+      authentikate-local = mkLocal pkgs false;
+      authentikate-live = mkLocal pkgs true;
       darwinPackages = lib.genAttrs [ "aarch64-darwin" ] (system: {
-        authentikate-local = mkLocal (import nixpkgs { inherit system; });
-        authentikate = mkLocal (import nixpkgs { inherit system; });
+        authentikate-local = mkLocal (import nixpkgs { inherit system; }) false;
+        authentikate-live = mkLocal (import nixpkgs { inherit system; }) true;
+        authentikate = mkLocal (import nixpkgs { inherit system; }) false;
       });
 
     in
@@ -358,7 +386,12 @@
         ${system} = {
           default = authentikate-wasm;
           inherit authentikate-wasm;
-          inherit authentikate-local authentikate-app-component;
+          inherit
+            authentikate-local
+            authentikate-app-component
+            authentikate-live
+            authentikate-live-component
+            ;
           wasmtime = pkgs.wasmtime;
           authentikate = authentikate-local;
           # The heavy prebuilt dependency, exposed so CI can fetch it
@@ -382,6 +415,10 @@
             type = "app";
             program = lib.getExe packages.authentikate-local;
           };
+          authentikate-live = {
+            type = "app";
+            program = lib.getExe packages.authentikate-live;
+          };
         }) darwinPackages)
         // {
           ${system} = {
@@ -393,25 +430,33 @@
               type = "app";
               program = lib.getExe authentikate-local;
             };
+            authentikate-live = {
+              type = "app";
+              program = lib.getExe authentikate-live;
+            };
           };
         };
 
       # The proofs are checked by building, so building is the test suite.
       checks.${system} = {
         build = authentikate-wasm;
-        app = pkgs.runCommand "authentikate-http-tests"
-          {
-            nativeBuildInputs = [ pkgs.nodejs pkgs.wasmtime ];
-            WASMTIME = lib.getExe pkgs.wasmtime;
-          }
-          ''
-            mkdir -p tests
-            cp ${./tests/http.mjs} tests/http.mjs
-            mkdir -p build
-            cp ${authentikate-app-component}/*.component.wasm build/
-            node tests/http.mjs
-            touch $out
-          '';
+        app =
+          pkgs.runCommand "authentikate-http-tests"
+            {
+              nativeBuildInputs = [
+                pkgs.nodejs
+                pkgs.wasmtime
+              ];
+              WASMTIME = lib.getExe pkgs.wasmtime;
+            }
+            ''
+              mkdir -p tests
+              cp ${./tests/http.mjs} tests/http.mjs
+              mkdir -p build
+              cp ${authentikate-app-component}/*.component.wasm build/
+              node tests/http.mjs
+              touch $out
+            '';
       };
 
       devShells.${system} = {
