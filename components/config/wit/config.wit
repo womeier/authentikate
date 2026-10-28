@@ -1,0 +1,6 @@
+package authentikate:config@0.1.0;
+
+world config-provider {
+    export service;
+    export policy;
+}

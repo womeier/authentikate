@@ -40,7 +40,7 @@ result
 test-results/
 node_modules/
 
-# Rust host and component build output.
+# Rust component build output.
 target/
 build/
 accounts/

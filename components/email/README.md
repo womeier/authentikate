@@ -12,7 +12,7 @@ Build with `make email-stdout-component`, or `nix develop --command make email-s
 The Nix development shell includes the Rust `wasm32-unknown-unknown` target. `make test-email-stdout` also runs
 Rust unit tests and component tests with mocked WASI capabilities (no real email).
 The development shell also supplies JCO for component tests; no npm installation
-is needed. These Node tools are not used by the Rust web host.
+is needed. These Node tools are not used by the Wasmtime runtime launcher.
 CI runs the same complete stdout test suite.
 The default Nix service build does not bundle this provider.
 Run these commands from the repository root. The crate lives in
@@ -53,6 +53,8 @@ send again. This synchronous flow has no durable email retries or verification
 tokens, and does not make account creation atomic.
 
 The web demo and CI HTTP tests bind the real stdout Wasm component, not a
-JavaScript replacement. `SIGNUP_EMAIL_FROM` configures the demo's sender and
-defaults to `Authentikate <hello@example.test>`. Actual delivery requires a separate
-implementation of the shared sender interface.
+JavaScript replacement. Set `service.email_from` in `/config/config.json`; the
+root example uses `Authentikate <hello@example.test>`. There is no sender
+environment-variable setting. Use Wasmtime's `--no-logging-prefix` for plain JSON
+stdout records. Actual delivery requires a separate implementation of the shared
+sender interface.

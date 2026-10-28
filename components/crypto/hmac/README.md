@@ -8,20 +8,21 @@ Written by LLMs. TODO: check.
 Wrong-sized tags and unknown handles are errors; an unequal full-size tag is
 `false`. There is no algorithm negotiation or tag truncation.
 
-The host provisions exactly 32 random key bytes, meeting HS256's minimum key
+The operator provisions exactly 32 random key bytes, meeting HS256's minimum key
 length. Both generation and verification take the same opaque integer handle.
 An instance has a bounded append-only table of 1024 keys; handles are never
 reused. Imported and stored key buffers are zeroized on drop. Neither key bytes
 nor a public key are exposed through this component's exports. The service's
 adapter imports the configured key for each fresh request instance; the Rocq
-heap and HTTP gateway receive no secret bytes. The host and canonical ABI
+heap and HTTP gateway receive no secret bytes. The config provider and canonical ABI
 marshalling still handle copies. There is no complete secret-erasure guarantee.
 
 HMAC is symmetric: anyone given the verification secret can mint tokens too.
-The host currently keeps the key only in memory, so restarting it invalidates
-existing JWTs. Persisting the key is deferred in `TODO.md`; account persistence
-is independent. This replaces Ed25519/EdDSA rather than adding another accepted
-algorithm. Old EdDSA tokens are rejected.
+The config provider reads the persistent `/config/signing.key`; it never generates
+or repairs it. Retain this key across process restarts to preserve unexpired JWTs,
+and never truncate it as a startup step. See the root README for exclusive one-time
+provisioning. Account persistence is independent. This replaces Ed25519/EdDSA
+rather than adding another accepted algorithm. Old EdDSA tokens are rejected.
 
 ## Verification Scope
 
@@ -34,6 +35,6 @@ key-derived temporary buffers are not guaranteed wiped by this wrapper.
 
 `cargo test --locked -p authentikate-hmac` checks RFC 4231 SHA-256 vectors,
 generation/verification, tampered messages/tags, wrong keys and lengths, and
-handle bounds. The composed-host suite independently verifies generated JWTs
-with RustCrypto HMAC (a test-only dependency), accepts externally generated
+handle bounds. `make test-app` independently verifies generated JWTs
+with Node's HMAC implementation, accepts externally generated
 HS256 tokens and rejects alternate algorithms and truncated/oversized tags.

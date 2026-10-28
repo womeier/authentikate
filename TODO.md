@@ -10,11 +10,11 @@
   Commit `077c9be` removed the unwired `Backoff.v` policy and trace proofs;
   its parent retains the model for reference. Any replacement must connect its
   bounds to actual request handling, including concurrent requests and resets.
-- [ ] Preserve authentication-token validity across restarts by persisting the
-  HMAC signing key, rather than generating a new one on every host startup.
-  Create it atomically on first run with narrowly scoped filesystem access and
-  restrictive permissions; concurrent starts must use the same winning key.
-  Persist the key, not individual JWTs. Keep key rotation and expiry explicit.
+- [ ] Define signing-key rotation and backup/recovery procedures. The config
+  provider now reads a manually provisioned persistent 32-byte key and never
+  generates or repairs it. Keep restrictive permissions and exclusive one-time
+  creation; never truncate an existing key during startup. Persist the key, not
+  individual JWTs. Stop serving processes for multi-file configuration changes.
 - [ ] Replace `components/service/build.mjs`'s internal `wasm-merge` step with explicit
   component-model wiring of the generated core module and adapters. Retain the
   current merge for now; Rust crypto/email providers already use component-level
@@ -25,15 +25,15 @@
   `max(required_bytes, 65536)` and update static headroom accounting accordingly.
 - [ ] Once the helper semantics are fixed, simplify adapter allocation glue to
   use the exported helper and add allocation/growth regression tests.
-- [ ] Extract `authentikate:config/service` and `authentikate:config/policy` into
-  a config component, with the HMAC key generated atomically into persistent
-  storage from `wasi:random` on first run. This is separate from the completed
-  storage extraction: the signing key remains ephemeral and the custom config
-  imports still require the host. Wasmtime 50's `serve -S cli` enables the full
-  WASI linker and honors `--dir` preopens, so the target is
-  `wasmtime serve -S cli --dir <storage>::/accounts ...` once config is composed.
-  The custom accounts interface is already resolved inside the composition;
-  no runtime keyvalue provider or atomics draft is needed.
+- [ ] Review deployment capabilities and resource policy after production host
+  removal. Root `composition.wac` now resolves config and accounts internally;
+  `build/app.component.wasm` runs with the pinned Wasmtime `serve -S cli` and
+  provisioned `/config` and `/accounts` preopens. Config and storage see all
+  preopens with writable CLI grants, not per-provider isolation; the gateway has
+  no filesystem imports. Conservative CLI limits do not reproduce the old exact
+  overload-503 contract. Non-loopback deployments need an explicit approved
+  origin provisioned manually, without custom host safety validation.
+  No runtime keyvalue provider or atomics draft is needed.
   Rejected alternative: `atomics.increment` on a per-email claim counter plus
   `set` preserves one winner but separates the claim from writing the record.
   A crash leaves a permanently claimed, empty account, and failed attempts grow
@@ -69,7 +69,7 @@
   again, so the `wasi::clocks0_2_4` workaround is retired. What remains is the
   pinned `wasi:http`/`wasi:io`/`wasi:clocks` set plus `authentikate:config`
   and `api.wit`, copied because `wit_bindgen::generate!` needs a literal path
-  and cannot stage sources the way `host/build.rs` does. `make check-wit`
+  and cannot stage sources the way `components/config/build.rs` does. `make check-wit`
   fails on drift in the two that have an authoritative source elsewhere,
   which is a guard rather than a fix.
 
@@ -91,8 +91,9 @@
   wrong: split `Bytes.v` in place into the JSON half and the JWT half and
   compile `Json.v` and `JsonProofs.v` against the JSON half alone.
 - [ ] If the component model is ever mechanized to cover this artifact, layer it
-  deliberately. The shipped thing is a composition -- `host/composition.wac`
-  wires the service to the Argon2, HMAC-SHA-256 and stdout-email components -- so
+  deliberately. The shipped thing is a composition -- root `composition.wac`
+  wires the service to config, storage, Argon2, HMAC-SHA-256 and stdout-email
+  components -- so
   wac-style linking belongs inside the mechanization, not beyond it: a theorem
   about one component in isolation says nothing about what runs. Three layers,
   and the decision is which of them get Iris.
@@ -111,9 +112,9 @@
     Rocq heap" into a claim about every composition rather than an observation
     about this one. Resource integrity: handles are renumbered per instance and
     resource types are nominal to the defining component, so the service cannot
-    forge a `cas` or key handle -- which is what the host's runtime allow-list
-    over composed imports stands in for today. Both are statements about the
-    instantiation relation, so neither waits on soundness for the whole model,
+    forge a key handle. The current production runtime is the stock Wasmtime CLI,
+    not the former custom host's composed-import allow-list. Both are statements
+    about the instantiation relation, so neither waits on soundness for the whole model,
     and neither needs Iris.
   - **Iris on top, for specific adapters and compositions.** Here the fit is
     good rather than merely available: shared-nothing is an ownership property

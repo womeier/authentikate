@@ -7,15 +7,15 @@ assumptions. They do not establish end-to-end implementation security or
 whole-service constant-time behavior.
 
 This document records the current design, verification boundary and priorities.
-Build/run instructions live in [README.md](README.md) and
-[host/README.md](host/README.md); detailed pending tasks live in [TODO.md](TODO.md).
+Build/run instructions live in [README.md](README.md); detailed pending tasks
+live in [TODO.md](TODO.md).
 
 ## Current Architecture
 
 ```text
 HTTP client
     |
-Rust host: Wasmtime, admission control, configuration, capabilities
+Wasmtime CLI: WASI capabilities and conservative resource limits
     |
 Rust gateway: HTTP policy, routing, assets, body limits, response headers
     |
@@ -25,22 +25,26 @@ Rocq service: parsing, authentication, account records, JWT claims
     +-- HMAC: HS256 tag generation and verification
     +-- Accounts: opaque get / atomic create-if-absent
     +-- Email: welcome notification, currently stdout
+    +-- Config: provisioned JSON policy/settings and persistent signing key
 ```
 
-[host/composition.wac](host/composition.wac) connects the service directly to
-these providers. The composed artifact exports
+[composition.wac](composition.wac) connects the service directly to
+these providers. The composed artifact `build/app.component.wasm` exports
 `wasi:http/incoming-handler@0.2.4`; the service alone exports
 `authentikate:service/api@0.1.0`, taking body bytes and returning status/body.
 
-Each HTTP request gets a fresh composition, reclaiming the Rocq bump heap and
-provider state. Account files outlive instances. The host's HMAC key survives
-requests but not a process restart, so existing tokens stop validating after
-restart while accounts remain usable.
+With instance reuse disabled, each HTTP request gets a fresh composition,
+reclaiming the Rocq bump heap and provider state. Account files and the manually
+provisioned HMAC key outlive instances and process restarts. The config provider
+rereads configuration on every request and never regenerates the key. Stop all
+serving processes for multi-file updates; reads are not an atomic snapshot.
 
 The gateway imports the service API and origin-policy configuration, not the
 HMAC key or filesystem. The service's adapter reads its own configuration and
 imports the shared key into the crypto component. Only opaque key handles enter
-the Rocq heap. The provisioning host and ABI marshalling still handle key copies.
+the Rocq heap. The config provider and ABI marshalling still handle key copies.
+Config and storage share all filesystem preopens, with writable CLI grants for
+both `/config` and `/accounts`; there is no per-provider preopen isolation.
 
 Request behavior and input restrictions are documented in
 [README.md](README.md#request-behavior).
@@ -65,7 +69,7 @@ and not provisioning it to other issuers.
 
 Libcrux's HACL*-origin primitive verification does not automatically cover our
 wrapper, tag comparison, compilation to Wasm, or runtime side channels. Imported
-and stored key buffers are zeroized, but host/ABI copies and internal library
+and stored key buffers are zeroized, but runtime/ABI copies and internal library
 temporaries are not guaranteed wiped.
 
 [components/crypto/argon2](components/crypto/argon2) uses RustCrypto Argon2id.
@@ -90,7 +94,8 @@ or lost race, and `Some true` this caller creating the record. Failures must not
 be collapsed into absence or conflict.
 
 The Rust [storage component](components/storage/README.md) stores immutable files
-under the `/accounts` preopen, backed by `STORAGE_DIR`. Filenames hash the exact
+under the `/accounts` preopen, backed by the provisioned account directory
+(`ACCOUNTS_DIR` in the launcher). Filenames hash the exact
 key bytes; a versioned envelope includes the original key to detect mismatches.
 The value is opaque to storage and decoded by Rocq.
 
@@ -185,7 +190,10 @@ a new atomic-counter capability. Immutable account storage supplies no counters.
 
 The gateway enforces Host/Origin policy, a 16 KiB streaming body limit and a
 15-second read deadline; these decisions are unit-tested Rust, not proved Rocq.
-The host bounds admission, fuel and memory. Those limits are not a wall-clock
+The CLI bounds concurrency, fuel and memory conservatively, not equivalently to
+the removed host's admission controls or exact overload-503 contract. It has no
+custom non-loopback safety validation; operators must provision an explicit
+approved origin for non-loopback use. These limits are not a wall-clock
 deadline for crypto or a production resource policy. Replay protection,
 revocation, TLS, key rotation and recovery tooling are not provided.
 
@@ -195,28 +203,31 @@ Run from the repository root with the project toolchain:
 
 ```sh
 nix develop --command make test
-nix develop --command make host-component
-make test-host
+nix develop --command make app-component
+nix develop --command make test-app
 cargo test --locked -p authentikate-argon2 -p authentikate-hmac
-cargo test --locked -p authentikate-gateway
+cargo test --locked -p authentikate-gateway -p authentikate-config -p authentikate-storage
 cargo fmt --all --check
 ```
 
 The first command compiles the proofs and extraction and tests adapter ABI and
-extracted control flow. Composed-host tests exercise actual Wasm providers:
+extracted control flow. Composed-app tests use the pinned Wasmtime CLI and actual
+Wasm providers:
 signup/login/validation, independent HS256 interoperability, tampered tokens,
 alternate algorithms, malformed inputs, HTTP policy and body limits, email
-failure, cross-process atomic creation and persistence across fresh instances
-and host restarts. Native crypto tests include RFC 4231 HMAC vectors.
+failure, malformed provisioning and account/key persistence across fresh instances
+and process restarts. Native crypto tests include RFC 4231 HMAC vectors.
 
 The default `nix build` checks and installs the uncomposed service artifacts.
-CI additionally builds providers, composes the HTTP artifact and runs the Rust
-tests. Component/provider READMEs describe additional commands and test scope.
+`nix build .#authentikate-app-component` builds the final HTTP artifact;
+`nix run .#authentikate-local` runs it with the flake-pinned Wasmtime after
+provisioning. CI additionally builds providers, composes the HTTP artifact and
+runs runtime/Rust tests. Component/provider READMEs describe test scope.
 
 ## Priorities
 
-1. Persist the HMAC key atomically so authentication tokens remain valid across
-   restarts, with restrictive access and an explicit rotation policy.
+1. Define signing-key rotation and backup/recovery policy for the manually
+   provisioned persistent key, retaining restrictive access and exclusive creation.
 2. Move HTTP routing and Host/Origin policy into a separate proved layer while
    keeping transport and authentication concerns separate.
 3. Define the leakage/threat model, Argon2 policy, cost migration and timing
@@ -225,8 +236,8 @@ tests. Component/provider READMEs describe additional commands and test scope.
    clock and atomic-counter semantics.
 5. Harden storage and deployment: filesystem guarantees, backup/recovery,
    resource budgets, TLS and observability without leaking secrets.
-6. Simplify configuration, WIT staging and adapter composition; pursue host
-   removal only while accounting for its capability and resource controls.
+6. Simplify WIT staging and adapter composition; assess shared filesystem
+   capabilities and CLI resource controls now that the production host is removed.
 7. Add an HTTP/OpenAPI contract and reproducibly generated client.
 
 Detailed implementation tasks and compiler constraints remain in

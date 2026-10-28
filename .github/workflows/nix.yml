@@ -32,15 +32,12 @@ jobs:
       - name: Build development environment including MetaRocq and CertiRocq
         run: nix develop --profile dev-profile -c true
 
-      - name: Build compiled host dependencies
-        run: nix build --print-build-logs .#authentikate-host-deps --out-link host-deps
-
       # The derivation checks Rocq proofs, primitive adapters and extracted runtime.
       - name: Build and test service component
         run: nix build --print-build-logs
 
-      - name: Build composed component for Linux and macOS hosts
-        run: nix build --print-build-logs .#authentikate-host-component --out-link host-component
+      - name: Build composed application and stock Wasmtime launcher
+        run: nix build --print-build-logs .#authentikate-app-component .#authentikate-local --out-link app-component
 
       - name: Print component interface
         run: |
@@ -59,12 +56,12 @@ jobs:
       - name: Test stdout email component
         run: nix develop --command make test-email-stdout
 
-      - name: Compose actual Rust providers and test Rust HTTP host
+      - name: Compose actual Rust providers and test stock Wasmtime HTTP
         run: |
-          nix develop --command make crypto-components compose-host
+          nix develop --command make crypto-components test-app
           nix develop --command cargo fmt --all -- --check
           nix flake check --print-build-logs
-          nix develop --command cargo test --locked -p authentikate-storage
+          nix develop --command cargo test --locked -p authentikate-config -p authentikate-gateway -p authentikate-storage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -75,6 +72,7 @@ jobs:
             build/email-stdout.component.wasm
             build/argon2.component.wasm
             build/hmac.component.wasm
-            build/host.component.wasm
+            build/app.component.wasm
+            build/config.component.wasm
             build/storage.component.wasm
           if-no-files-found: error

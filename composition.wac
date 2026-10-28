@@ -1,0 +1,24 @@
+package authentikate:web;
+
+let config = new authentikate:config { ... };
+let argon2 = new authentikate:argon2 { ... };
+let signer = new authentikate:hmac {};
+let email = new authentikate:email-stdout { ... };
+let storage = new authentikate:storage { ... };
+
+let service = new authentikate:service {
+    "authentikate:config/service@0.1.0": config["authentikate:config/service@0.1.0"],
+    "authentikate:storage/accounts@0.1.0": storage["authentikate:storage/accounts@0.1.0"],
+    "authentikate:crypto/argon2@0.1.0": argon2["authentikate:crypto/argon2@0.1.0"],
+    "authentikate:crypto/hmac@0.1.0": signer["authentikate:crypto/hmac@0.1.0"],
+    "authentikate:email/sender@0.1.0": email["authentikate:email/sender@0.1.0"],
+    ...
+};
+
+let gateway = new authentikate:gateway {
+    "authentikate:config/policy@0.1.0": config["authentikate:config/policy@0.1.0"],
+    "authentikate:service/api@0.1.0": service["authentikate:service/api@0.1.0"],
+    ...
+};
+
+export gateway["wasi:http/incoming-handler@0.2.4"];

@@ -5,7 +5,6 @@
   # (rocqPackages.base64 and the MetaRocq bridge base64-bytestring), which
   # upstream nixpkgs does not have yet.
   inputs.nixpkgs.url = "github:womeier/nixpkgs";
-  inputs.crane.url = "github:ipetkov/crane";
   inputs.fenix = {
     url = "github:nix-community/fenix";
     inputs.nixpkgs.follows = "nixpkgs";
@@ -16,10 +15,9 @@
       self,
       nixpkgs,
       fenix,
-      crane,
     }:
     let
-      # Build the portable Wasm artifacts on Linux; Darwin only builds the host.
+      # Build the portable Wasm artifacts on Linux; Darwin uses the same component.
       system = "x86_64-linux";
       lib = nixpkgs.lib;
 
@@ -170,7 +168,7 @@
                 "components/service"
                 "components/crypto/wit"
                 "components/email/wit"
-                # The host-to-component configuration contract, staged into the
+                # The configuration contract, staged into the
                 # service's WIT tree by build.mjs.
                 "wit"
               ]
@@ -257,19 +255,21 @@
       rustPostPatch = lib.concatMapStringsSep "\n" (member: ''
         if [ ! -d ${member}/src ]; then
           mkdir -p ${member}/src
-          cp ${pkgs.writeText "empty-rust-target.rs" "fn main() {}\n"} ${member}/src/${
-            if member == "host" then "main" else "lib"
-          }.rs
+          cp ${pkgs.writeText "empty-rust-target.rs" ""} ${member}/src/lib.rs
         fi
       '') workspace.members;
 
       # Cache this Linux-built output for all hosts, including macOS.
-      authentikate-host-component = rustPlatform.buildRustPackage {
-        pname = "authentikate-host-component";
+      authentikate-app-component = rustPlatform.buildRustPackage {
+        pname = "authentikate-app-component";
         version = "0.1.0";
         src = rustSrc [
           ./Makefile
-          ./host/composition.wac
+          ./composition.wac
+          ./tests/app-interface.mjs
+          ./components/config/build.rs
+          ./components/config/src
+          ./components/config/wit
           ./components/crypto
           ./components/email
           ./components/gateway
@@ -282,86 +282,56 @@
         nativeBuildInputs = [
           pkgs.wasm-tools
           pkgs.wac-cli
+          pkgs.nodejs
         ];
         buildPhase = ''
           runHook preBuild
           mkdir -p build
           cp ${authentikate-wasm}/authentikate.component.wasm build/
-          make check-wit crypto-components email-stdout-component gateway-component compose-host
+          make check-wit crypto-components email-stdout-component compose-app
           runHook postBuild
         '';
         doCheck = false;
         installPhase = ''
           runHook preInstall
           mkdir -p $out
-          cp build/host.component.wasm $out/
-          cp build/storage.component.wasm $out/
+          cp build/*.component.wasm $out/
           runHook postInstall
         '';
       };
 
-      mkHost =
-        pkgs:
-        let
-          craneLib = (crane.mkLib pkgs).overrideToolchain (mkRustToolchain pkgs.stdenv.hostPlatform.system);
-          commonArgs = {
-            pname = "authentikate-host";
-            version = "0.1.0";
-            src = rustSrc [
-              ./host
-              ./components/gateway/wit
-              ./components/service/wit
-              ./wit
-            ];
-            postPatch = rustPostPatch;
-            cargoExtraArgs = "--locked -p authentikate-host";
-            cargoBuildExtraArgs = "--all-targets";
-          };
-          # Dummy workspace targets keep this cache independent of host sources
-          # and WIT. Include test dependencies so flake checks reuse them too.
-          cargoArtifacts = craneLib.buildDepsOnly (
-            commonArgs
-            // {
-              doCheck = true;
-            }
-          );
-        in
-        craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
-            passthru = { inherit cargoArtifacts; };
-            # Integration tests use the composed component and run as a separate
-            # flake check, so component changes do not rebuild the native binary.
-            doCheck = false;
-
-            meta = {
-              description = "Local authentication demo with persistent accounts and stdout email";
-              mainProgram = "authentikate-host";
-              license = lib.licenses.mit;
-              platforms = [
-                system
-                "aarch64-darwin"
-              ];
-            };
-          }
-        );
-
       mkLocal =
         pkgs:
-        pkgs.symlinkJoin {
+        pkgs.writeShellApplication {
           name = "authentikate-local";
-          paths = [ (mkHost pkgs) ];
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          postBuild = ''
-            mkdir -p $out/share/authentikate
-            ln -s ${authentikate-host-component}/host.component.wasm $out/share/authentikate/host.component.wasm
-            makeWrapper $out/bin/authentikate-host $out/bin/authentikate-local \
-              --set HOST_COMPONENT $out/share/authentikate/host.component.wasm \
-              --set-default STORAGE_DIR ./run
+          text = ''
+            config_dir="''${CONFIG_DIR:-./run/config}"
+            accounts_dir="''${ACCOUNTS_DIR:-./run/accounts}"
+            if [[ ! -d "$config_dir" || ! -d "$accounts_dir" ]]; then
+              echo "Provision CONFIG_DIR ($config_dir) and ACCOUNTS_DIR ($accounts_dir) before starting." >&2
+              exit 1
+            fi
+            exec ${lib.getExe pkgs.wasmtime} serve \
+              --addr 127.0.0.1:3000 \
+              --dir "$config_dir::/config" \
+              --dir "$accounts_dir::/accounts" \
+              --max-instance-reuse-count 1 \
+              --max-instance-concurrent-reuse-count 1 \
+              --max-concurrent-requests 1 \
+              --max-concurrent-connections 8 \
+              --no-logging-prefix \
+              -S cli=y,inherit-network=n,allow-ip-name-lookup=n,tcp=n,udp=n,inherit-env=n \
+              -W fuel=2000000000 \
+              -W max-memory-size=134217728 \
+              -W max-memories=8 \
+              -W max-instances=32 \
+              -W max-tables=16 \
+              -W max-wasm-stack=8388608,async-stack-size=16777216 \
+              ${authentikate-app-component}/app.component.wasm
           '';
-          meta = (mkHost pkgs).meta // {
-            mainProgram = "authentikate-local";
+          meta = {
+            description = "Provisioned local authentication service using stock Wasmtime";
+            license = lib.licenses.mit;
           };
         };
 
@@ -371,21 +341,15 @@
         authentikate = mkLocal (import nixpkgs { inherit system; });
       });
 
-      authentikate-production = pkgs.writeShellScriptBin "authentikate-production" ''
-        echo "not yet supported"
-      '';
-
     in
     {
       packages = darwinPackages // {
         ${system} = {
           default = authentikate-wasm;
           inherit authentikate-wasm;
-          inherit authentikate-local authentikate-production;
-          inherit authentikate-host-component;
+          inherit authentikate-local authentikate-app-component;
+          wasmtime = pkgs.wasmtime;
           authentikate = authentikate-local;
-          authentikate-host = mkHost pkgs;
-          authentikate-host-deps = (mkHost pkgs).cargoArtifacts;
           # The heavy prebuilt dependency, exposed so CI can fetch it
           # substitute-only before building anything:
           #   nix build --max-jobs 0 .#CertiRocq
@@ -418,24 +382,25 @@
               type = "app";
               program = lib.getExe authentikate-local;
             };
-            authentikate-production = {
-              type = "app";
-              program = lib.getExe authentikate-production;
-            };
           };
         };
 
       # The proofs are checked by building, so building is the test suite.
       checks.${system} = {
         build = authentikate-wasm;
-        host = (mkHost pkgs).overrideAttrs {
-          doCheck = true;
-          preCheck = ''
+        app = pkgs.runCommand "authentikate-http-tests"
+          {
+            nativeBuildInputs = [ pkgs.nodejs pkgs.wasmtime ];
+            WASMTIME = lib.getExe pkgs.wasmtime;
+          }
+          ''
+            mkdir -p tests
+            cp ${./tests/http.mjs} tests/http.mjs
             mkdir -p build
-            cp ${authentikate-host-component}/host.component.wasm build/
-            cp ${authentikate-host-component}/storage.component.wasm build/
+            cp ${authentikate-app-component}/*.component.wasm build/
+            node tests/http.mjs
+            touch $out
           '';
-        };
       };
 
       devShells.${system} = {
@@ -464,6 +429,7 @@
             # To look at what came out, and to inspect the module's imports.
             pkgs.wasm-tools
             pkgs.wac-cli
+            pkgs.wasmtime
             pkgs.binaryen
 
           ];

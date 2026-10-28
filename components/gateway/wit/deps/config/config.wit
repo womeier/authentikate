@@ -1,4 +1,4 @@
-// The host-to-component configuration contract.
+// The configuration-provider-to-component contract.
 //
 // Owned by neither component: the service reads `service` and the gateway
 // reads `policy`, and the split is the point. The shared HMAC key is in the
@@ -30,12 +30,12 @@ interface service {
 interface policy {
     record rules {
         /// Exactly one approved origin, when the operator configured one.
-        /// Checked and normalized by the host; the gateway compares against
+        /// Checked and normalized by the provider; the gateway compares against
         /// it rather than re-parsing.
         approved-origin: option<string>,
-        /// Otherwise, the authorities the host is actually listening on.  The
-        /// bound port is host knowledge -- `LISTEN=127.0.0.1:0` picks it at
-        /// runtime -- while the rule applied to it is the gateway's.
+        /// Otherwise, the explicitly provisioned authorities, including ports.
+        /// These must match the deployment; the provider cannot discover the
+        /// runtime's listening address.
         approved-authorities: list<string>,
     }
 

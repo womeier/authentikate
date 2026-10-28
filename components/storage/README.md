@@ -10,9 +10,12 @@ on failure. No buckets, CAS resources, overwrites, deletion, counters, or
 enumeration are exposed. This directly matches the Rocq storage operations and
 does not depend on a WASI keyvalue draft.
 
-The host grants a dedicated read/write directory preopen named `/accounts`.
+The runtime grants a read/write directory preopen named `/accounts`.
 No absolute host paths, environment variables, or networking are needed by the
 provider. The service and gateway do not import filesystem interfaces.
+In the final composition, config and storage share all filesystem preopens:
+both can access `/accounts` and `/config`, and the CLI grants are writable.
+The provider uses `/accounts` by convention, not per-provider runtime isolation.
 
 ## Disk Format
 
@@ -58,10 +61,11 @@ provider does not defend against a host or local user modifying its files.
 
 ## Verification
 
-`make compose-host` builds the provider and wires it into the service.
-`cargo test --locked -p authentikate-storage -p authentikate-host` checks the
-envelope and exercises the actual Wasm provider: fresh-instance persistence,
-exact and long keys, restricted mutations, corruption, read-only failures,
-orphan temporaries, two-process create contention, and concurrent complete reads.
-HTTP tests also check account persistence across host restart. The signing key
-is still regenerated on restart, so previously issued tokens stop validating.
+From the repository root, `make app-component` builds all providers and the
+service; `make compose-app` rebuilds storage, config and gateway and wires them
+to existing service/crypto/email artifacts via root `composition.wac`.
+`cargo test --locked -p authentikate-storage` checks the native storage logic.
+`make test-app` exercises the actual Wasm provider through Wasmtime HTTP requests,
+including duplicate creation and account persistence across process restarts.
+The provisioned signing key is retained too, so unexpired tokens remain valid.
+These tests do not establish filesystem durability or all concurrent failure modes.

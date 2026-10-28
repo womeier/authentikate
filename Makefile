@@ -24,9 +24,15 @@ storage-component:
 	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_storage.wasm -o build/storage.component.wasm
 	wasm-tools validate build/storage.component.wasm
 
+config-component:
+	mkdir -p build
+	cargo build --locked --release --target wasm32-unknown-unknown -p authentikate-config
+	wasm-tools component new target/wasm32-unknown-unknown/release/authentikate_config.wasm -o build/config.component.wasm
+	wasm-tools validate build/config.component.wasm
+
 # The gateway vendors the pinned WASI copies plus `authentikate:config` and the
 # service's `api` interface, because `wit_bindgen::generate!` needs a literal
-# path and cannot stage sources the way host/build.rs does.  Only two of those
+# path. Only two of those
 # have an authoritative source elsewhere in the tree; fail loudly if a copy has
 # drifted.  The list used to be six: splitting `world service` out of api.wit
 # removed the keyvalue, email, wall-clock and wasi:random packages, which were
@@ -36,27 +42,29 @@ check-wit:
 	diff -u components/service/wit/api.wit components/gateway/wit/deps/service/api.wit
 
 # Component-level composition; wasm-merge remains internal to the Rocq build.
-host-component: component crypto-components email-stdout-component
-	$(MAKE) compose-host
+app-component: component crypto-components email-stdout-component
+	$(MAKE) compose-app
 
 # Also usable with existing build/*.component.wasm, without rebuilding Rocq --
 # which is the expensive part, so the gateway is a prerequisite rather than
 # something the caller has to remember.  CI composes a downloaded Rocq
 # component with freshly built providers, and would otherwise need the list
 # kept in step with this file.
-compose-host: gateway-component storage-component
-	wac compose host/composition.wac \
+compose-app: gateway-component storage-component config-component
+	wac compose composition.wac \
 		-d authentikate:service=build/authentikate.component.wasm \
 		-d authentikate:argon2=build/argon2.component.wasm \
 		-d authentikate:hmac=build/hmac.component.wasm \
 		-d authentikate:email-stdout=build/email-stdout.component.wasm \
 		-d authentikate:gateway=build/gateway.component.wasm \
 		-d authentikate:storage=build/storage.component.wasm \
-		-o build/host.component.wasm
-	wasm-tools validate build/host.component.wasm
+		-d authentikate:config=build/config.component.wasm \
+		-o build/app.component.wasm
+	wasm-tools validate build/app.component.wasm
+	node tests/app-interface.mjs
 
-test-host: compose-host
-	cargo test --locked -p authentikate-host -p authentikate-storage
+test-app: compose-app
+	node tests/http.mjs
 
 test-email-stdout: email-stdout-component
 	cargo test --locked -p authentikate-email
@@ -65,4 +73,4 @@ test-email-stdout: email-stdout-component
 rocq component test clean:
 	$(MAKE) -C components/service $@
 
-.PHONY: all rocq component test clean crypto-components email-stdout-component gateway-component storage-component check-wit host-component compose-host test-host test-email-stdout
+.PHONY: all rocq component test clean crypto-components email-stdout-component gateway-component storage-component config-component check-wit app-component compose-app test-app test-email-stdout
