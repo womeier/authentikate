@@ -126,7 +126,7 @@ Proof.
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
-      (lit ("Your Authentikate account has been created."%string))) as [|];
+      (lit ("Your Authentikate account has been created. Here could be a verification link."%string))) as [|];
       intros H; discriminate.
 Qed.
 
@@ -159,7 +159,7 @@ Theorem created_requires_persistence :
       kv_create kv email record = Some true /\
       send_email mail (cfg_email_from cfg) email
         (lit ("Welcome to Authentikate"%string))
-        (lit ("Your Authentikate account has been created."%string)) = true.
+        (lit ("Your Authentikate account has been created. Here could be a verification link."%string)) = true.
 Proof.
   intros ops kv mail cfg now body.
   unfold handle, parse_request.
@@ -176,7 +176,7 @@ Proof.
   destruct (kv_create kv e record) as [[|] |] eqn:Hset; try discriminate.
   destruct (send_email mail (cfg_email_from cfg) e
     (lit ("Welcome to Authentikate"%string))
-    (lit ("Your Authentikate account has been created."%string))) as [|]
+    (lit ("Your Authentikate account has been created. Here could be a verification link."%string))) as [|]
     eqn:Hmail; try discriminate.
   intros _. exists e, (Secret.of_bytes p), v, record.
   repeat split; try assumption; try reflexivity.
@@ -316,7 +316,7 @@ Proof.
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
-      (lit ("Your Authentikate account has been created."%string))) as [|];
+      (lit ("Your Authentikate account has been created. Here could be a verification link."%string))) as [|];
       intros H; discriminate.
 Qed.
 
@@ -812,7 +812,7 @@ Proof.
     destruct (kv_create kv email record) as [[|] |]; try (intros H; discriminate).
     destruct (send_email mail (cfg_email_from cfg) email
       (lit ("Welcome to Authentikate"%string))
-      (lit ("Your Authentikate account has been created."%string))) as [|];
+      (lit ("Your Authentikate account has been created. Here could be a verification link."%string))) as [|];
       intros H; discriminate.
 Qed.
 

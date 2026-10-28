@@ -153,7 +153,7 @@ Definition handle (ops : crypto_ops) (kv : store_ops) (mail : email_ops)
                          rollback: a retry finding this key conflicts. *)
                       match send_email mail (cfg_email_from cfg) email
                         (lit ("Welcome to Authentikate"%string))
-                        (lit ("Your Authentikate account has been created."%string)) with
+                        (lit ("Your Authentikate account has been created. Here could be a verification link."%string)) with
                       | true => Created
                       | false => Internal
                       end

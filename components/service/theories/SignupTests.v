@@ -240,7 +240,7 @@ Example signup_sends_configured_welcome :
         (andb (bytes_eqb recipient email)
           (andb (bytes_eqb subject (lit "Welcome to Authentikate"%string))
             (bytes_eqb text
-              (lit "Your Authentikate account has been created."%string))))) in
+              (lit "Your Authentikate account has been created. Here could be a verification link."%string))))) in
     handle (mock_crypto (Some public_enrollment))
       (mock_store (Some None) (Some true)) mail cfg 0 RtSignup signup_body)
     [lit "welcome@example.test"%string; lit "accounts@example.test"%string] =

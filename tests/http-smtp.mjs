@@ -185,7 +185,7 @@ test('real HTTP signup delivers SMTP once, and SMTP rejection preserves the acco
       const encoded = transaction.data.slice(separator + 4);
       assert.match(encoded, /^(?:[A-Za-z0-9+/=]{1,76}\r\n)+$/);
       const decoded = Buffer.from(encoded.replace(/\r\n/g, ''), 'base64').toString('utf8');
-      assert.equal(decoded, 'Your Authentikate account has been created.');
+      assert.equal(decoded, 'Your Authentikate account has been created. Here could be a verification link.');
       assert.ok(!`${transaction.commands.join('\n')}${transaction.data}${decoded}${stdout}${stderr}`.includes(credentials.password),
         'SMTP and process output must not disclose the password');
     }

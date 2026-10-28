@@ -214,7 +214,7 @@ test('real HTTP policy, body limits, accounts, HS256, email and restart persiste
   const emails = server.stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
   assert.deepEqual(emails, [{ backend: 'stdout', email: {
     from: sender, to: [credentials.email], subject: 'Welcome to Authentikate',
-    text: 'Your Authentikate account has been created.',
+    text: 'Your Authentikate account has been created. Here could be a verification link.',
   } }]);
   assert.ok(!`${server.stdout}${server.stderr}`.includes(credentials.password));
   assert.ok(!`${server.stdout}${server.stderr}`.includes(f.key.toString('hex')));

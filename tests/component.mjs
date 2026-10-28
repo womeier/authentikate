@@ -383,7 +383,7 @@ const imports = {
       };
       assert.deepEqual(message, {
         from: 'Authentikate <hello@example.test>', to: ['user@example.test'],
-        subject: 'Welcome to Authentikate', text: 'Your Authentikate account has been created.',
+        subject: 'Welcome to Authentikate', text: 'Your Authentikate account has been created. Here could be a verification link.',
         idempotencyKey: null,
       });
       assert.equal(events.at(-1), 'write', 'send must follow a successful account write');
