@@ -1,4 +1,4 @@
-Written by LLMs. TODO: check.
+(Written by LLM. revised)
 
 # HS256 Crypto Component
 
@@ -21,8 +21,8 @@ HMAC is symmetric: anyone given the verification secret can mint tokens too.
 The config provider reads the persistent `/config/signing.key`; it never generates
 or repairs it. Retain this key across process restarts to preserve unexpired JWTs,
 and never truncate it as a startup step. See the root README for exclusive one-time
-provisioning. Account persistence is independent. This replaces Ed25519/EdDSA
-rather than adding another accepted algorithm. Old EdDSA tokens are rejected.
+provisioning. Account persistence is independent.
+Asymmetric Ed25519/EdDSA may be used alternatively in the future.
 
 ## Verification Scope
 

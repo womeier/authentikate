@@ -1,4 +1,4 @@
-Written by LLMs. TODO: check.
+(Written by LLM. revised)
 
 # Immutable Account Storage
 
@@ -58,14 +58,3 @@ stopped, operators may remove `.tmp-*` files; do not sweep them while writers
 are active. Backup, quotas, automated garbage collection, and recovery tooling
 are not implemented. The directory must be protected from other writers; the
 provider does not defend against a host or local user modifying its files.
-
-## Verification
-
-From the repository root, `make app-component` builds all providers and the
-service; `make compose-app` rebuilds storage, config and gateway and wires them
-to existing service/crypto/email artifacts via root `composition.wac`.
-`cargo test --locked -p authentikate-storage` checks the native storage logic.
-`make test-app` exercises the actual Wasm provider through Wasmtime HTTP requests,
-including duplicate creation and account persistence across process restarts.
-The provisioned signing key is retained too, so unexpired tokens remain valid.
-These tests do not establish filesystem durability or all concurrent failure modes.

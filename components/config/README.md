@@ -1,3 +1,4 @@
+(written by LLM. revised)
 # Configuration Provider
 
 Exports the unchanged `authentikate:config/service@0.1.0` and
@@ -10,14 +11,12 @@ WASI 0.2.4 filesystem imports.
 
 The provider reads a directory preopen named exactly `/config`:
 
-- `config.json`: at most 65,536 bytes, including whitespace, UTF-8 JSON.
+- `config.json`: UTF-8 JSON.
 - `signing.key`: unpadded base64url (RFC 4648 Section 5) decoding to exactly 32 bytes, provisioned
   with a cryptographically secure random generator and persisted across requests,
   instances and restarts. An optional trailing LF or CRLF is accepted; other
   whitespace, raw binary, hex, standard base64, and padded encodings are rejected. The file is
-  bounded to 45 bytes. Generate a new key with
-  `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, never a
-  password.
+  bounded to 45 bytes. Generate a new key with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`
 
 The root [config.example.json](../../config.example.json) contains this example:
 
