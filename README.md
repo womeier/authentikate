@@ -1,5 +1,3 @@
-Written by LLMs. TODO: check.
-
 # authentikate
 
 An experimental authentication backend with signup, login and JWT validation.
@@ -17,60 +15,14 @@ nix run .#authentikate-local
 # open http://localhost:3000
 ```
 
-On first run, the launcher creates private `run/config` and `run/accounts`
-directories, copies the bundled `config.example.json` to `run/config/config.json`,
-and generates a persistent 32-byte random signing key. Existing configuration
-directories are left untouched: the launcher never overwrites configuration or
-regenerates a missing or malformed key inside them. The provider requires exactly
-unpadded base64url (RFC 4648 Section 5) decoding to 32 key bytes, with an optional trailing LF or
-CRLF. Back up and protect the key along with the accounts;
-keeping it preserves token validity across restarts, subject to expiry.
-
-Existing raw binary `signing.key` files must be converted before starting this
-version. Stop the server, then encode the existing key rather than generating a
-new one, preserving token validity:
-
-```sh
-(umask 077; set -C; set -o pipefail; openssl base64 -A -in run/config/signing.key | tr '+/' '-_' | tr -d '=' > run/config/signing.key.base64) &&
-  mv run/config/signing.key.base64 run/config/signing.key
-```
-
-Adjust the paths when using a custom configuration directory. Only run this
-conversion on an old raw 32-byte key, not an already base64-encoded key.
-
-The launcher uses Wasmtime from the pinned flake, not a custom Rust host.
-`CONFIG_DIR` and `ACCOUNTS_DIR` override its default `./run/config` and
-`./run/accounts` directories. Override directories must be provisioned manually;
-automatic setup applies only to the defaults. It binds `127.0.0.1:3000`.
-Tested on Linux. Apple Silicon macOS support is experimental and untested:
-it uses the portable Linux-built Wasm components and a native Wasmtime launcher.
-
 ## Live Email
 
 `nix run .#authentikate-live` runs the same loopback demo with direct SMTP
-instead of stdout. First provision the configuration and signing key
-as above (or start and stop `authentikate-local` once), then set
-`service.email_from` in `run/config/config.json` to a sender accepted by your
-mail setup: a bare ASCII mailbox or a simple ASCII display name followed by
-`<mailbox>`. The example's `example.test` sender cannot deliver.
-`CONFIG_DIR` and `ACCOUNTS_DIR` work as in the local launcher; the live launcher
-requires existing configuration and never generates a signing key. The providers
-validate the configuration and sender when handling requests.
-
-Install and configure a local SMTP MTA listening on `127.0.0.1:25`, allowing
-submission without authentication or TLS and queueing messages for onward
-delivery. Nix does not install or configure the MTA. Restrict this submission
-listener to loopback and its relay permissions accordingly; do not expose an open
-relay. No `mail` command, Node helper, tokens, Lettermint account, or HTTP egress
-is required:
-
+instead of stdout. 
+Requires local SMTP MTA listening on `127.0.0.1:25`.
 ```sh
 nix run .#authentikate-live
 ```
-
-The component connects directly to the fixed SMTP endpoint using WASI TCP.
-See the [email provider](components/email/README.md) for the SMTP flow and
-message-format restrictions.
 
 Open `http://localhost:3000` and sign up with an address you control. Signup sends
 a real welcome email through your configured mail system. Existing accounts return
@@ -78,18 +30,6 @@ a real welcome email through your configured mail system. Existing accounts retu
 final `250` acceptance after `DATA`, not confirmed delivery. An email failure
 returns `500` after account creation;
 the account remains stored and retrying signup does not resend.
-
-The live launcher enables TCP with inherited host network access
-(`-S tcp=y,inherit-network=y,allow-ip-name-lookup=n,udp=n,inherit-env=n`).
-IP name lookup, UDP, and environment inheritance remain disabled. The trusted
-email component fixes its destination to `127.0.0.1:25`, but stock Wasmtime has no
-destination-specific TCP allowlist. Use OS firewall rules if that restriction
-must be enforced independently of the component.
-No outgoing WASI HTTP capability is needed. SMTP uses streams, polling, and a
-30-second monotonic deadline across connection and protocol I/O; the launcher
-adds a 90-second execution timeout. There are no automatic retries or
-deduplication. The optional idempotency key is validated but otherwise unused
-by SMTP.
 
 ## Build And Test
 
@@ -103,49 +43,6 @@ nix develop --command make test-email-stdout test-email-smtp
 nix build .#authentikate-live-component
 ```
 
-`nix develop --command make test-smtp-runtime` additionally tests the live
-composition against a fake SMTP server on `127.0.0.1:25`, without delivering mail.
-It requires permission to bind that port and no existing listener on it.
-
-`make app-component` builds the service and providers, then composes
-`build/app.component.wasm` using root [composition.wac](composition.wac).
-`make app-live-component` instead builds `build/app-live.component.wasm` with
-the SMTP backend. `make compose-live-app` reuses its service, crypto, and SMTP
-email artifacts. Both compositions enforce separate exact WASI capability lists.
-The live email artifact is `build/email-smtp.component.wasm` (Cargo feature `smtp`).
-`make compose-app` reuses existing service, Argon2, HMAC and stdout-email artifacts
-in `build/`, rebuilding gateway, storage and config before composition.
-`make test-app` composes and runs the real Wasmtime HTTP tests; build those reused
-artifacts first. `make test` checks the Rocq/extraction and adapter tests.
-The default `nix build` still builds the uncomposed service, not the final app.
-
-To run the local build with the flake-pinned Wasmtime:
-
-```sh
-nix run .#wasmtime -- serve \
-  --addr 127.0.0.1:3000 \
-  -S cli=y,inherit-network=n,allow-ip-name-lookup=n,tcp=n,udp=n,inherit-env=n \
-  --dir ./run/config::/config \
-  --dir ./run/accounts::/accounts \
-  --max-instance-reuse-count 1 \
-  --max-instance-concurrent-reuse-count 1 \
-  --max-concurrent-requests 1 \
-  --max-concurrent-connections 8 \
-  -W fuel=2000000000 \
-  -W max-memory-size=134217728 \
-  -W max-memories=8 \
-  -W max-instances=32 \
-  -W max-tables=16 \
-  -W max-wasm-stack=8388608,async-stack-size=16777216 \
-  --no-logging-prefix \
-  build/app.component.wasm
-```
-
-`-S cli` enables the WASI CLI interfaces and directory preopens used by config,
-storage and stdout email. `--no-logging-prefix` keeps email output as plain JSON
-lines; the launcher includes this flag too. The explicit stack bounds accommodate
-the extracted parser at the 16 KiB request boundary.
-
 ## Configuration
 
 [config.example.json](config.example.json) supplies a safe printable, escape-free
@@ -156,18 +53,6 @@ be nonblank printable ASCII without quotes or backslashes, because the Rocq JSON
 printer does not escape them. See the [config provider](components/config/README.md)
 for validation rules.
 
-Configuration is read and validated on every request, not cached at startup.
-Service configuration also reads `/config/signing.key`. Stop all serving processes
-before changing multiple files: separate reads are not an atomic snapshot. There
-is no automatic key regeneration or rotation. Replacing the key invalidates old
-tokens.
-
-For non-loopback use, manually provision an explicit `policy.approved_origin`
-(for example `https://auth.example.test`) and configure the listener/proxy and TLS
-accordingly. With `approved_origin: null`, the gateway uses the listed
-`approved_authorities`; update their ports if the listening port changes. The CLI
-does not implement the removed host's custom non-loopback safety validation or
-derive policy from its listener address. Keep the demo on loopback by default.
 
 ## Request Behavior
 
@@ -214,13 +99,7 @@ Request and response bodies are JSON. The table uses shorthand field notation.
   state. The custom Rust host is no longer part of the production path.
 
 The composed artifact exports `wasi:http/incoming-handler@0.2.4`. See
-[composition.wac](composition.wac) for the provider wiring. Config and storage
-share the composition's WASI filesystem imports and see **all** preopens, including
-both `/config` and `/accounts`. The CLI `--dir` grants are writable, not per-provider
-read-only isolation. Config's implementation only reads, but it and storage are
-trusted with these shared capabilities. OS permissions protect files from other
-users, not from components running as the same user. The gateway has no filesystem
-imports; this is an interface boundary, not separate runtime preopen sandboxing.
+[composition.wac](composition.wac) for the provider wiring.
 
 ## Security And Limits
 
