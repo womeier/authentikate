@@ -1,9 +1,9 @@
 {
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
-  # The womeier fork of nixpkgs: it carries the rocq-base64 packages
-  # (rocqPackages.base64 and the MetaRocq bridge base64-bytestring), which
-  # upstream nixpkgs does not have yet.
+  # The womeier fork of nixpkgs: it carries rocqPackages.base64 (rocq-base64,
+  # including its MetaRocq bytestring bridge), which upstream nixpkgs does not
+  # have yet.
   inputs.nixpkgs.url = "github:womeier/nixpkgs";
   inputs.fenix = {
     url = "github:nix-community/fenix";
@@ -193,7 +193,7 @@
         nativeBuildInputs = [
           rocqPackages.coq
           CertiRocq
-          rocqPackages.base64-bytestring
+          rocqPackages.base64
           pkgs.nodejs
           pkgs.wasm-tools
           pkgs.binaryen
@@ -470,7 +470,7 @@
             rocqPackages.rocq-core
             rocqPackages.coq
             CertiRocq
-            rocqPackages.base64-bytestring
+            rocqPackages.base64
             rocqPackages.stdlib
             rocqPackages.coq-lsp
             pkgs.gnumake

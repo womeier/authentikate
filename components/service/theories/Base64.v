@@ -5,10 +5,10 @@ From Authentikate Require Import Bytes.
 From Base64 Require Import Alphabet.
 From Base64 Require ByteString.
 (* The [ByteString] instance for MetaRocq's byte strings, which is what makes
-   the generic operations below run on [bytes].  It lives in rocq-base64's own
-   rocq-base64-bytestring package -- the bridge is kept there so that nothing
-   about it has to be restated here. *)
-From Base64.MetaRocq Require Export InstanceBytestring.
+   the generic operations below run on [bytes].  It ships with rocq-base64
+   itself -- the bridge is kept there so that nothing about it has to be
+   restated here. *)
+From Base64 Require Export InstanceBytestring.
 
 Definition encode (s : bytes) : bytes := ByteString.encode url_unpadded s.
 Definition decode (s : bytes) : option bytes := ByteString.decode url_unpadded s.
