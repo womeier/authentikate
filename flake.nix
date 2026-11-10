@@ -1,10 +1,14 @@
 {
   description = "An authentication backend written in Rocq, compiled to WebAssembly by CertiRocq";
 
-  # The womeier fork of nixpkgs: it carries rocqPackages.base64 (rocq-base64,
-  # including its MetaRocq bytestring bridge), which upstream nixpkgs does not
-  # have yet.
-  inputs.nixpkgs.url = "github:womeier/nixpkgs";
+  # Upstream nixpkgs, pinned: rocqPackages.base64 (rocq-base64, including its
+  # MetaRocq bytestring bridge) is in master since NixOS/nixpkgs@5406e3b4 but
+  # has not reached nixos-unstable yet, so this pins that commit rather than
+  # the channel branch.  Its tree is otherwise identical to the womeier fork
+  # this input used to track, so the rest of the toolchain is unchanged.
+  # Once base64 reaches nixos-unstable, this can become
+  # "github:NixOS/nixpkgs/nixos-unstable".
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/5406e3b4f49d1be515fe38edc0f29b414d8ac664";
   inputs.fenix = {
     url = "github:nix-community/fenix";
     inputs.nixpkgs.follows = "nixpkgs";
@@ -81,6 +85,12 @@
         _self: super:
         let
           wasmcert = super.wasmcert.override { version = "2.2.1"; };
+          # nixpkgs' base64 picks its default version from a (rocq,
+          # metarocq-utils) table that wants metarocq-utils >= 1.4; MetaRocq is
+          # overridden below to its "9.1" development branch, whose version
+          # string ("unstable-...") fails that test and leaves base64 with no
+          # default version.  0.1.1 is the release the table would select.
+          base64 = super.base64.override { version = "0.1.1"; };
           metarocq = super.metarocq.override {
             version = {
               version = "unstable-c8cd4605";
@@ -92,7 +102,7 @@
           };
         in
         {
-          inherit wasmcert metarocq;
+          inherit base64 wasmcert metarocq;
         }
       );
 
