@@ -73,30 +73,24 @@
         '';
       };
 
-      # One Rocq 9.1 toolchain.
-      # Two dependencies are different:
-      #   * WasmCert (nixpkgs' coq-wasm) 2.2.1 instead of 2.2.0.
-      #   * MetaRocq from its "9.1" development branch instead of the 1.5.1-9.1
-      #     release.  CertiRocq has needed that branch since
-      #     https://github.com/CertiRocq/certirocq/pull/158, and its own
-      #     .nix/config.nix pins `metarocq.override.version = "9.1"`
-      #     accordingly. Pin that branch below so builds are reproducible.
-      rocqPackages = pkgs.rocqPackages_9_1.overrideScope (
+      # One Rocq 9.2 toolchain, with MetaRocq's matching development branch
+      # pinned by revision and WasmCert 2.2.1.
+      rocqPackages = pkgs.rocqPackages_9_2.overrideScope (
         _self: super:
         let
           wasmcert = super.wasmcert.override { version = "2.2.1"; };
           # nixpkgs' base64 picks its default version from a (rocq,
           # metarocq-utils) table that wants metarocq-utils >= 1.4; MetaRocq is
-          # overridden below to its "9.1" development branch, whose version
+          # overridden below to its "9.2" development branch, whose version
           # string ("unstable-...") fails that test and leaves base64 with no
           # default version.  0.1.1 is the release the table would select.
           base64 = super.base64.override { version = "0.1.1"; };
           metarocq = super.metarocq.override {
             version = {
-              version = "unstable-0f34d182";
+              version = "unstable-0231b430";
               location = {
-                rev = "0f34d1826cb8672474e699b0a1cbf51c39638fda";
-                hash = "sha256-AV8yyB1zodrI65G4ALlq6ea2g+ufKUKKyN8jcQ9HtaA=";
+                rev = "0231b430258a9702f258c37e9b55fd896c88c92e";
+                hash = "sha256-hDN+Zj7UJT55eVHv6zP/XlI9fZ1O/vdI7Gavbkj3Oaw=";
               };
             };
           };
@@ -106,38 +100,28 @@
         }
       );
 
-      # Upstream CertiRocq main, pinned to a commit for reproducible builds.
+      # Upstream CertiRocq rocq-9.2, pinned to a commit for reproducible builds.
       # Use the build recipe shipped with that same revision.
       certirocqSrc = pkgs.fetchFromGitHub {
         owner = "CertiRocq";
         repo = "certirocq";
-        rev = "ce05eb4d016e49868ef1eb8da89b3b4865adc0ea";
-        hash = "sha256-y0c+/24D4HJYA1GZHFqYEp2+K9ca7RanrQaPrY7h6zM=";
+        rev = "5e3cce598af8c0964608c7134015a86bfd1e2247";
+        hash = "sha256-1s6uLjXTAo3ydW5/lk6UOiB5IuNvZP0Cg2eeCET8I1Q=";
       };
 
-      # CertiRocq itself: built from upstream's own overlay
-      # (.nix/coq-overlays/CertiRocq/default.nix) rather than nixpkgs'
-      # rocqPackages_9_1.CertiRocq. nixpkgs' recipe is a snapshot of an older
-      # directory layout (top-level plugin/ and cplugin/, built with `make
-      # plugins`); upstream has since moved those under plugins/ and split
-      # the build into `make plugin` / `make cplugin`
-      # (CertiRocq/certirocq@fb1cf3e), which breaks nixpkgs' buildPhase with
-      # "make: *** plugin: No such file or directory". Building from
-      # upstream's own overlay keeps the recipe in sync with the sources instead
-      # of hand-patching a stale one.
+      # Use the upstream Rocq 9.2 overlay, which builds and installs with Dune.
       CertiRocq =
-        (rocqPackages.callPackage "${certirocqSrc}/.nix/coq-overlays/CertiRocq/default.nix" {
+        (rocqPackages.callPackage "${certirocqSrc}/.nix/rocq-overlays/CertiRocq/default.nix" {
           inherit pkgs;
-          version = certirocqSrc;
         }).overrideAttrs
           (old: {
-            version = "unstable-ce05eb4d";
+            version = "unstable-5e3cce59";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "coq9.1-CertiRocq-unstable-ce05eb4d";
+            name = "rocq9.2-CertiRocq-unstable-5e3cce59";
             meta = (old.meta or { }) // {
               broken = false;
             };
