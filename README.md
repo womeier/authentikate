@@ -54,6 +54,15 @@ nix develop --command make test-email-stdout test-email-smtp
 nix build .#authentikate-live-component
 ```
 
+The development shell includes the VsRocq 2.5.1 language server (`vsrocqtop`)
+built against the same Rocq 9.2 toolchain. Use a matching VsRocq editor
+extension and launch the editor from `nix develop`, or configure it to use
+that server. To build the server independently:
+
+```sh
+nix build .#vsrocq-language-server
+```
+
 ## Configuration
 
 See [config.example.json](config.example.json) for an example config, for

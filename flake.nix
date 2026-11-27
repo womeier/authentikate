@@ -94,9 +94,62 @@
               };
             };
           };
+          # nixpkgs only selects VsRocq through Rocq 9.1. Pin the newer
+          # release and use its current OCaml dependencies (no GTK frontend).
+          vsrocq-language-server =
+            (super.vsrocq-language-server.override {
+              version = {
+                version = "2.5.1";
+                location = {
+                  rev = "v2.5.1";
+                  hash = "sha256-4s0L0JHUR7u5wvhexIG7SduJlq4LKejjX2bkIipvNXw=";
+                };
+              };
+            }).overrideAttrs (
+              _:
+              let
+                ocamlPackages = _self.rocq-core.ocamlPackages;
+                # nixpkgs' 0.2.1 predates OCaml 5 support; 0.3.0 supports
+                # OCaml >= 5.3, including this toolchain's OCaml 5.5.
+                memprofLimits = ocamlPackages.buildDunePackage {
+                  pname = "memprof-limits";
+                  version = "0.3.0";
+                  src = pkgs.fetchFromGitLab {
+                    owner = "gadmm";
+                    repo = "memprof-limits";
+                    rev = "v0.3.0";
+                    hash = "sha256-k/uB1jDQtE/PkVPU8zg8cpOmlPttTWVpKerQ0HuWfuI=";
+                  };
+                  nativeBuildInputs = [ ocamlPackages.cppo ];
+                  meta.license = lib.licenses.lgpl3;
+                };
+              in
+              {
+                buildInputs = [
+                  _self.coq
+                  _self.rocq-core
+                ] ++ (with ocamlPackages; [
+                  findlib
+                  yojson
+                  jsonrpc
+                  ppx_blob
+                  ppx_inline_test
+                  ppx_assert
+                  ppx_sexp_conv
+                  ppx_deriving
+                  ppx_import
+                  sexplib
+                  ppx_yojson_conv
+                  lsp
+                  sel
+                  ppx_optcomp
+                  result
+                ]) ++ [ memprofLimits ];
+              }
+            );
         in
         {
-          inherit base64 wasmcert metarocq;
+          inherit base64 wasmcert metarocq vsrocq-language-server;
         }
       );
 
@@ -395,6 +448,7 @@
           # matches; otherwise it rebuilds from the fork.)
           inherit CertiRocq;
           inherit jco;
+          vsrocq-language-server = rocqPackages.vsrocq-language-server;
           rust-toolchain = rustToolchain;
         };
       };
@@ -466,9 +520,7 @@
             CertiRocq
             rocqPackages.base64
             rocqPackages.stdlib
-            # The pinned nixpkgs only packages coq-lsp through Rocq 9.1.
-            # Keep this optional editor tool out of the Rocq 9.2 build shell
-            # until a compatible release is packaged.
+            rocqPackages.vsrocq-language-server
             pkgs.gnumake
             pkgs.curl
             pkgs.python3
