@@ -80,7 +80,7 @@
       #     release.  CertiRocq has needed that branch since
       #     https://github.com/CertiRocq/certirocq/pull/158, and its own
       #     .nix/config.nix pins `metarocq.override.version = "9.1"`
-      #     accordingly; the fork's config.nix says the same.
+      #     accordingly. Pin that branch below so builds are reproducible.
       rocqPackages = pkgs.rocqPackages_9_1.overrideScope (
         _self: super:
         let
@@ -93,10 +93,10 @@
           base64 = super.base64.override { version = "0.1.1"; };
           metarocq = super.metarocq.override {
             version = {
-              version = "unstable-c8cd4605";
+              version = "unstable-0f34d182";
               location = {
-                rev = "c8cd46054518193103c3bb33aa6e15c7f489e72c";
-                hash = "sha256-Lcr6B4gYSS57zVinn+e2tk1Kfy9XzJs+sd3CTuSTvX0=";
+                rev = "0f34d1826cb8672474e699b0a1cbf51c39638fda";
+                hash = "sha256-AV8yyB1zodrI65G4ALlq6ea2g+ufKUKKyN8jcQ9HtaA=";
               };
             };
           };
@@ -106,38 +106,38 @@
         }
       );
 
-      # CertiRocq's own sources at one pinned commit of the womeier fork
-      # (github.com/womeier/CertiRocq), used both as the package's src and as
-      # the place its Nix build recipe is pulled from below.
+      # Upstream CertiRocq main, pinned to a commit for reproducible builds.
+      # Use the build recipe shipped with that same revision.
       certirocqSrc = pkgs.fetchFromGitHub {
-        owner = "womeier";
-        repo = "CertiRocq";
-        rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
-        hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
+        owner = "CertiRocq";
+        repo = "certirocq";
+        rev = "ce05eb4d016e49868ef1eb8da89b3b4865adc0ea";
+        hash = "sha256-y0c+/24D4HJYA1GZHFqYEp2+K9ca7RanrQaPrY7h6zM=";
       };
 
       # CertiRocq itself: built from upstream's own overlay
       # (.nix/coq-overlays/CertiRocq/default.nix) rather than nixpkgs'
       # rocqPackages_9_1.CertiRocq. nixpkgs' recipe is a snapshot of an older
       # directory layout (top-level plugin/ and cplugin/, built with `make
-      # plugins`); this fork has since moved those under plugins/ and split
+      # plugins`); upstream has since moved those under plugins/ and split
       # the build into `make plugin` / `make cplugin`
       # (CertiRocq/certirocq@fb1cf3e), which breaks nixpkgs' buildPhase with
       # "make: *** plugin: No such file or directory". Building from
-      # upstream's own overlay keeps the recipe in sync with the fork instead
+      # upstream's own overlay keeps the recipe in sync with the sources instead
       # of hand-patching a stale one.
       CertiRocq =
         (rocqPackages.callPackage "${certirocqSrc}/.nix/coq-overlays/CertiRocq/default.nix" {
           inherit pkgs;
+          version = certirocqSrc;
         }).overrideAttrs
           (old: {
-            version = "unstable-6d34b50b";
+            version = "unstable-ce05eb4d";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "coq9.1-CertiRocq-unstable-6d34b50b";
+            name = "coq9.1-CertiRocq-unstable-ce05eb4d";
             meta = (old.meta or { }) // {
               broken = false;
             };
