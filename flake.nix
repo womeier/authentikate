@@ -466,7 +466,9 @@
             CertiRocq
             rocqPackages.base64
             rocqPackages.stdlib
-            rocqPackages.coq-lsp
+            # The pinned nixpkgs only packages coq-lsp through Rocq 9.1.
+            # Keep this optional editor tool out of the Rocq 9.2 build shell
+            # until a compatible release is packaged.
             pkgs.gnumake
             pkgs.curl
             pkgs.python3
