@@ -67,10 +67,6 @@ cargo test --locked --workspace
 make test-email-stdout test-email-smtp
 ```
 
-The shell includes Rocq 9.2 and the matching VsRocq 2.5.1 server
-(`vsrocqtop`). Launch your editor from the shell and use a matching VsRocq
-extension.
-
 ## Configuration
 
 See [config.example.json](config.example.json) for the sender address, issuer,
