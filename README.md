@@ -4,20 +4,19 @@ An experimental authentication backend with signup, login and JWT validation.
 The main logic is written in Rocq, compiled to WebAssembly with CertiRocq
 and composed with Rust providers into a single Wasm component.
 
-
-## Local Demo
+## Demo
 
 Run from the repository root:
 
 ```sh
 cachix use womeier
 nix run .#authentikate-local
-# open http://localhost:3000
 ```
 
-## Live Demo
+Open <http://localhost:3000>. The local demo writes welcome emails to stdout.
 
-`nix run .#authentikate-live` runs the same demo, but actually sends emails via SMTP on `127.0.0.1:25`.
+To send emails through a local SMTP server on `127.0.0.1:25` instead:
+
 ```sh
 nix run .#authentikate-live
 ```
@@ -41,35 +40,48 @@ Request and response bodies are JSON.
   `200 {valid:false}`. Validation never reads account storage, so account
   changes cannot revoke tokens.
 
+## Build and test
 
-## Build And Test
+Build the composed HTTP component and run the flake checks, including service
+proofs, adapter tests and HTTP integration tests with real providers:
 
 ```sh
-nix develop --command make app-component
-nix develop --command make test-app
-nix develop --command make test
-nix develop --command cargo test --locked --workspace
 nix build .#authentikate-app-component
-nix develop --command make test-email-stdout test-email-smtp
+nix flake check
+```
+
+Build the SMTP composition:
+
+```sh
 nix build .#authentikate-live-component
 ```
 
-The development shell includes the VsRocq 2.5.1 language server (`vsrocqtop`)
-built against the same Rocq 9.2 toolchain. Use a matching VsRocq editor
-extension and launch the editor from `nix develop`, or configure it to use
-that server. To build the server independently:
+For incremental development and additional provider tests:
 
 ```sh
-nix build .#vsrocq-language-server
+nix develop
+make app-component
+make test
+make test-app
+cargo test --locked --workspace
+make test-email-stdout test-email-smtp
 ```
+
+The shell includes Rocq 9.2 and the matching VsRocq 2.5.1 server
+(`vsrocqtop`). Launch your editor from the shell and use a matching VsRocq
+extension.
 
 ## Configuration
 
-See [config.example.json](config.example.json) for an example config, for
-email_from, issuer, token TTL, sender and HTTP security policies.
+See [config.example.json](config.example.json) for the sender address, issuer,
+token lifetime and HTTP security policies. The
+[configuration provider documentation](components/config/README.md) describes
+provisioning and signing-key management.
 
 ## Architecture
-The individual components are in `components/*`, their WIT interface in `components/*/wit`.
+
+Components live under `components/`, with WIT interfaces alongside them and
+shared definitions in `wit/`.
 
 - **Rocq service:** parses requests, implements authentication and constructs
   account records and JWT claims. Its [API](components/service/wit/api.wit)
@@ -92,7 +104,7 @@ Instance reuse is disabled so each request has fresh component state.
 The composed artifact exports `wasi:http/incoming-handler@0.2.4`.
 See [composition.wac](composition.wac) for the provider wiring.
 
-## Security And Limits
+## Security and limits
 
 This is a demo, not an end-to-end verified authentication system.
 
@@ -110,11 +122,11 @@ This is a demo, not an end-to-end verified authentication system.
 - Expiry requires `now < exp` and trusts the host's UTC-referenced POSIX clock.
   Clock rollback is not detected, and no clock-skew allowance is applied.
 - There is no rate limiting, token revocation, built-in TLS, key rotation or
-  account recovery tooling. Keep the demo on loopback unless testing a controlled proxy.
+  account recovery tooling. Keep the demo on loopback unless testing a
+  controlled proxy.
 
-## Further Reading
+## Further reading
 
-- [Configuration provider](components/config/README.md): provisioning and validation.
 - [Design and verification boundary](PLAN.md).
 - [Pending work](TODO.md).
 - [Storage guarantees and filesystem assumptions](components/storage/README.md).

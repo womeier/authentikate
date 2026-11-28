@@ -158,7 +158,7 @@
       # and use its upstream Rocq 9.2 build recipe. Foreign calls remain outside
       # the backend correctness proof (see PLAN.md).
       certirocqSrc = pkgs.fetchFromGitHub {
-        owner = "womeier-bot";
+        owner = "womeier";
         repo = "certirocq";
         rev = "015a9b36d307fe51ba72aa6643dd560dd6e9320e";
         hash = "sha256-d18joJJN7MqdZSYLwgyUFEOzqItxphu6zIehKe9Em44=";
@@ -450,7 +450,6 @@
           # matches; otherwise it rebuilds from the fork.)
           inherit CertiRocq;
           inherit jco;
-          vsrocq-language-server = rocqPackages.vsrocq-language-server;
           rust-toolchain = rustToolchain;
         };
       };
