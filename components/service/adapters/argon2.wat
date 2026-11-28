@@ -14,8 +14,7 @@
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
 ;; their Rocq return value into the imported mutable `rocq.result` global.
-;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
-;; use actual arity + 1; registered wrappers accept and ignore that i32.
+;; The Rocq 9.2 frontend uses the actual Rocq arity, with no force dummy.
 ;;
 ;; Value representation, as probed from the backend's output:
 ;;
@@ -124,7 +123,6 @@
             (i32.const 1))))))
 
   (func (export "ffi_argon2_verify")
-        (param $force i32)
         (param $password i32) (param $salt i32)
         (param $hash i32)
     (global.set $result
@@ -132,7 +130,7 @@
         (local.get $hash))))
 
   ;; Secret.t is representation-identical to bytes, but opaque to Rocq callers.
-  (func (export "ffi_secret_of_bytes") (param $force i32) (param $bytes i32)
+  (func (export "ffi_secret_of_bytes") (param $bytes i32)
     (global.set $result (local.get $bytes)))
 
   ;; argon2_hash : Secret.t -> option bytes
@@ -155,7 +153,7 @@
             (i32.load offset=4 (local.get $ret))
             (i32.load offset=8 (local.get $ret)))))))
 
-  (func (export "ffi_argon2_hash") (param $force i32) (param $password i32)
+  (func (export "ffi_argon2_hash") (param $password i32)
     (global.set $result (call $argon2_hash (local.get $password))))
 
 )

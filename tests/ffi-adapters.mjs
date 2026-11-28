@@ -58,9 +58,8 @@ function heap(maximum = 65536) {
   };
   const call = (fn, ...args) => {
     rocq.result.value = -1;
-    // CertiRocq 6d34b50b adds a force dummy before the actual Rocq arguments.
-    assert.equal(fn.length, args.length + 1, 'registered FFI must accept force dummy');
-    assert.equal(fn(1, ...args), undefined, 'registered FFI must return void');
+    assert.equal(fn.length, args.length, 'registered FFI uses the actual Rocq arity');
+    assert.equal(fn(...args), undefined, 'registered FFI must return void');
     assert.notEqual(rocq.result.value, -1, 'registered FFI must set result');
     assert.equal(rocq.out_of_mem.value, 0);
     return rocq.result.value;

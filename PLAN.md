@@ -126,6 +126,11 @@ to extraction too.
 
 The compiler boundary, hand-written adapters, internal `wasm-merge` assembly,
 component tooling and execution engine remain outside the service proofs.
+The pinned compiler ports foreign-call import generation onto CertiRocq's
+`rocq-9.2` branch. This extension is not verified: the backend's top-level
+theorem assumes no foreign imports, and the foreign-call case in
+`bs_wasm_related_Eprim` remains admitted. Compiler regression tests do not
+discharge those proof obligations.
 See [README.md's trusted computing base](README.md#trusted-computing-base) for
 the inventory and adapter source comments for representation details.
 

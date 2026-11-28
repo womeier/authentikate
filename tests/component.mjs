@@ -90,7 +90,7 @@ const out = resolve(process.argv[2] ?? 'build');
     let boundaryArgs, boundaryResidue, boundaryResult;
     const adapter = (...args) => {
       assert.ok(boundaryArgs, 'Synthetic closure test must not call adapters');
-      assert.deepEqual(args, boundaryArgs, 'FFI boundary must forward every argument, including force');
+      assert.deepEqual(args, boundaryArgs, 'FFI boundary must forward every Rocq argument');
       rocq.mem_ptr.value = 65532 + boundaryResidue;
       rocq.result.value = boundaryResult;
     };
@@ -168,9 +168,9 @@ const out = resolve(process.argv[2] ?? 'build');
       clockSeconds = clockSeconds === 0xffffffffffffffffn ? 0n : 0x100000001n;
     }
     assert.equal(calls, 3);
-    for (const [name, arity] of [['ffi_argon2_verify', 4], ['ffi_argon2_hash', 2],
-      ['ffi_secret_of_bytes', 2], ['ffi_hmac_sign', 3], ['ffi_hmac_verify', 4],
-      ['ffi_kv_get', 2], ['ffi_kv_create', 3], ['ffi_email_send', 5]]) {
+    for (const [name, arity] of [['ffi_argon2_verify', 3], ['ffi_argon2_hash', 1],
+      ['ffi_secret_of_bytes', 1], ['ffi_hmac_sign', 2], ['ffi_hmac_verify', 3],
+      ['ffi_kv_get', 1], ['ffi_kv_create', 2], ['ffi_email_send', 4]]) {
       assert.equal(wrapper[name].length, arity);
       boundaryArgs = Array.from({ length: arity }, (_, i) => i + 10);
       for (boundaryResult of name === 'ffi_email_send' ? [1, 3] : [1]) {

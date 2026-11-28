@@ -49,9 +49,9 @@
     (if (i32.load8_u (local.get $ret)) (then (return (i32.const 1))))
     (i32.const 3)) ;; Immediate true (accepted); every refusal above is false (1).
 
-  ;; Force argument plus four Rocq byte strings. The inspected result keeps the
+  ;; Four Rocq byte strings, with no force argument. The inspected result keeps the
   ;; foreign effect live through extraction and optimization.
-  (func (export "ffi_email_send") (param $force i32) (param $from i32)
+  (func (export "ffi_email_send") (param $from i32)
         (param $to i32) (param $subject i32) (param $text i32)
     (global.set $result (call $email-send
       (local.get $from) (local.get $to) (local.get $subject) (local.get $text))))

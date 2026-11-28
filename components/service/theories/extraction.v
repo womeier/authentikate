@@ -9,8 +9,7 @@ From CertiRocq.Plugin Require Import CertiRocq.
 Import ListNotations.
 
 (* Foreign arguments are CertiRocq heap values, not canonical ABI values.
-   Registered primitives import env.ffi_* with a leading force argument followed
-   by their Rocq arguments as i32s.
+   Registered primitives import env.ffi_* with their Rocq arguments as i32s.
    Imports return no Wasm value: adapters publish the
    Rocq result through the shared result global (and update allocation globals
    as needed).  The adapters translate to the component ABI using shared memory.
@@ -40,20 +39,18 @@ Axiom ffi_kv_create : bytes -> bytes -> option bool.
    false is any refusal, which does not undo the write. *)
 Axiom ffi_email_send : bytes -> bytes -> bytes -> bytes -> bool.
 
-(* CertiRocq 6d34b50b's consts_to_values/implement_lazy_force passes apply
-   constants to a dummy box before their Rocq arguments.  Explicit arities count
-   this extra argument; foreign adapters ignore it.  Otherwise forcing a bare
-   primitive calls the import prematurely and shifts its real arguments.
+(* The Rocq 9.2 frontend registers the actual Rocq arity, without the old
+   frontend's dummy force argument. Adapter signatures must match these arities.
    Include is required by the registration syntax; Wasm needs no C headers. *)
 CertiRocq Register [
-  ffi_argon2_verify => "ffi_argon2_verify" 4 with tinfo,
-  ffi_argon2_hash => "ffi_argon2_hash" 2 with tinfo,
-  ffi_hmac_sign => "ffi_hmac_sign" 3 with tinfo,
-  ffi_hmac_verify => "ffi_hmac_verify" 4 with tinfo,
-  ffi_kv_get => "ffi_kv_get" 2 with tinfo,
-  ffi_kv_create => "ffi_kv_create" 3 with tinfo,
-  ffi_email_send => "ffi_email_send" 5 with tinfo,
-  Secret.of_bytes => "ffi_secret_of_bytes" 2
+  ffi_argon2_verify => "ffi_argon2_verify" 3 with tinfo,
+  ffi_argon2_hash => "ffi_argon2_hash" 1 with tinfo,
+  ffi_hmac_sign => "ffi_hmac_sign" 2 with tinfo,
+  ffi_hmac_verify => "ffi_hmac_verify" 3 with tinfo,
+  ffi_kv_get => "ffi_kv_get" 1 with tinfo,
+  ffi_kv_create => "ffi_kv_create" 2 with tinfo,
+  ffi_email_send => "ffi_email_send" 4 with tinfo,
+  Secret.of_bytes => "ffi_secret_of_bytes" 1
 ]
 Include [ ].
 

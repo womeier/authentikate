@@ -73,71 +73,110 @@
         '';
       };
 
-      # One Rocq 9.1 toolchain.
-      # Two dependencies are different:
-      #   * WasmCert (nixpkgs' coq-wasm) 2.2.1 instead of 2.2.0.
-      #   * MetaRocq from its "9.1" development branch instead of the 1.5.1-9.1
-      #     release.  CertiRocq has needed that branch since
-      #     https://github.com/CertiRocq/certirocq/pull/158, and its own
-      #     .nix/config.nix pins `metarocq.override.version = "9.1"`
-      #     accordingly; the fork's config.nix says the same.
-      rocqPackages = pkgs.rocqPackages_9_1.overrideScope (
+      # One Rocq 9.2 toolchain, with MetaRocq's matching development branch
+      # pinned by revision and WasmCert 2.2.1.
+      rocqPackages = pkgs.rocqPackages_9_2.overrideScope (
         _self: super:
         let
           wasmcert = super.wasmcert.override { version = "2.2.1"; };
           # nixpkgs' base64 picks its default version from a (rocq,
           # metarocq-utils) table that wants metarocq-utils >= 1.4; MetaRocq is
-          # overridden below to its "9.1" development branch, whose version
+          # overridden below to its "9.2" development branch, whose version
           # string ("unstable-...") fails that test and leaves base64 with no
           # default version.  0.1.1 is the release the table would select.
           base64 = super.base64.override { version = "0.1.1"; };
           metarocq = super.metarocq.override {
             version = {
-              version = "unstable-c8cd4605";
+              version = "unstable-0231b430";
               location = {
-                rev = "c8cd46054518193103c3bb33aa6e15c7f489e72c";
-                hash = "sha256-Lcr6B4gYSS57zVinn+e2tk1Kfy9XzJs+sd3CTuSTvX0=";
+                rev = "0231b430258a9702f258c37e9b55fd896c88c92e";
+                hash = "sha256-hDN+Zj7UJT55eVHv6zP/XlI9fZ1O/vdI7Gavbkj3Oaw=";
               };
             };
           };
+          # nixpkgs only selects VsRocq through Rocq 9.1. Pin the newer
+          # release and use its current OCaml dependencies (no GTK frontend).
+          vsrocq-language-server =
+            (super.vsrocq-language-server.override {
+              version = {
+                version = "2.5.1";
+                location = {
+                  rev = "v2.5.1";
+                  hash = "sha256-4s0L0JHUR7u5wvhexIG7SduJlq4LKejjX2bkIipvNXw=";
+                };
+              };
+            }).overrideAttrs (
+              _:
+              let
+                ocamlPackages = _self.rocq-core.ocamlPackages;
+                # nixpkgs' 0.2.1 predates OCaml 5 support; 0.3.0 supports
+                # OCaml >= 5.3, including this toolchain's OCaml 5.5.
+                memprofLimits = ocamlPackages.buildDunePackage {
+                  pname = "memprof-limits";
+                  version = "0.3.0";
+                  src = pkgs.fetchFromGitLab {
+                    owner = "gadmm";
+                    repo = "memprof-limits";
+                    rev = "v0.3.0";
+                    hash = "sha256-k/uB1jDQtE/PkVPU8zg8cpOmlPttTWVpKerQ0HuWfuI=";
+                  };
+                  nativeBuildInputs = [ ocamlPackages.cppo ];
+                  meta.license = lib.licenses.lgpl3;
+                };
+              in
+              {
+                buildInputs = [
+                  _self.coq
+                  _self.rocq-core
+                ] ++ (with ocamlPackages; [
+                  findlib
+                  yojson
+                  jsonrpc
+                  ppx_blob
+                  ppx_inline_test
+                  ppx_assert
+                  ppx_sexp_conv
+                  ppx_deriving
+                  ppx_import
+                  sexplib
+                  ppx_yojson_conv
+                  lsp
+                  sel
+                  ppx_optcomp
+                  result
+                ]) ++ [ memprofLimits ];
+              }
+            );
         in
         {
-          inherit base64 wasmcert metarocq;
+          inherit base64 wasmcert metarocq vsrocq-language-server;
         }
       );
 
-      # CertiRocq's own sources at one pinned commit of the womeier fork
-      # (github.com/womeier/CertiRocq), used both as the package's src and as
-      # the place its Nix build recipe is pulled from below.
+      # Upstream rocq-9.2 plus the rebased Wasm foreign-call import extension,
+      # required by the service's registered provider primitives. Pin the port
+      # and use its upstream Rocq 9.2 build recipe. Foreign calls remain outside
+      # the backend correctness proof (see PLAN.md).
       certirocqSrc = pkgs.fetchFromGitHub {
         owner = "womeier";
-        repo = "CertiRocq";
-        rev = "6d34b50bfea92aece62712ae120890c9fda8e514";
-        hash = "sha256-7NVJcNfX/q59iDA7/Y0cb8CsgP5E1iddqW/Emk4f9mE=";
+        repo = "certirocq";
+        rev = "015a9b36d307fe51ba72aa6643dd560dd6e9320e";
+        hash = "sha256-d18joJJN7MqdZSYLwgyUFEOzqItxphu6zIehKe9Em44=";
       };
 
-      # CertiRocq itself: built from upstream's own overlay
-      # (.nix/coq-overlays/CertiRocq/default.nix) rather than nixpkgs'
-      # rocqPackages_9_1.CertiRocq. nixpkgs' recipe is a snapshot of an older
-      # directory layout (top-level plugin/ and cplugin/, built with `make
-      # plugins`); this fork has since moved those under plugins/ and split
-      # the build into `make plugin` / `make cplugin`
-      # (CertiRocq/certirocq@fb1cf3e), which breaks nixpkgs' buildPhase with
-      # "make: *** plugin: No such file or directory". Building from
-      # upstream's own overlay keeps the recipe in sync with the fork instead
-      # of hand-patching a stale one.
+      # Use the upstream Rocq 9.2 overlay, which builds and installs with Dune.
       CertiRocq =
-        (rocqPackages.callPackage "${certirocqSrc}/.nix/coq-overlays/CertiRocq/default.nix" {
+        (rocqPackages.callPackage "${certirocqSrc}/.nix/rocq-overlays/CertiRocq/default.nix" {
           inherit pkgs;
         }).overrideAttrs
           (old: {
-            version = "unstable-6d34b50b";
+            version = "unstable-015a9b36";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "coq9.1-CertiRocq-unstable-6d34b50b";
+            name = "rocq9.2-CertiRocq-unstable-015a9b36";
             meta = (old.meta or { }) // {
               broken = false;
             };
@@ -482,7 +521,7 @@
             CertiRocq
             rocqPackages.base64
             rocqPackages.stdlib
-            rocqPackages.coq-lsp
+            rocqPackages.vsrocq-language-server
             pkgs.gnumake
             pkgs.curl
             pkgs.python3
