@@ -160,8 +160,8 @@
       certirocqSrc = pkgs.fetchFromGitHub {
         owner = "womeier-bot";
         repo = "certirocq";
-        rev = "4c865643cdcbb7c3e4538eebccbba9ad89a871a8";
-        hash = "sha256-MLh8v4edLOcCmBRwGmQVCnJwQGcVl+6VYZB+nZwu/uw=";
+        rev = "015a9b36d307fe51ba72aa6643dd560dd6e9320e";
+        hash = "sha256-d18joJJN7MqdZSYLwgyUFEOzqItxphu6zIehKe9Em44=";
       };
 
       # Use the upstream Rocq 9.2 overlay, which builds and installs with Dune.
@@ -170,13 +170,13 @@
           inherit pkgs;
         }).overrideAttrs
           (old: {
-            version = "unstable-4c865643";
+            version = "unstable-015a9b36";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "rocq9.2-CertiRocq-unstable-4c865643";
+            name = "rocq9.2-CertiRocq-unstable-015a9b36";
             meta = (old.meta or { }) // {
               broken = false;
             };

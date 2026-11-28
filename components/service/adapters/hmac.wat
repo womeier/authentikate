@@ -9,8 +9,7 @@
 ;;
 ;; Registered env.ffi_* imports take i32 Rocq values, return void, and write
 ;; their Rocq return value into the imported mutable `rocq.result` global.
-;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
-;; use actual arity + 1; registered wrappers accept and ignore that i32.
+;; The Rocq 9.2 frontend uses the actual Rocq arity, with no force dummy.
 ;;
 ;; Value representation (probed from the backend's output):
 ;;
@@ -153,12 +152,11 @@
             (i32.const 1))))))
 
   (func (export "ffi_hmac_sign")
-        (param $force i32) (param $key i32) (param $message i32)
+        (param $key i32) (param $message i32)
     (global.set $result
       (call $hmac_sign (local.get $key) (local.get $message))))
 
   (func (export "ffi_hmac_verify")
-        (param $force i32)
         (param $key i32) (param $message i32) (param $signature i32)
     (global.set $result
       (call $hmac_verify (local.get $key) (local.get $message)

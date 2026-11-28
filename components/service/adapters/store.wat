@@ -94,9 +94,8 @@
               (i32.load offset=4 (local.get $ret))
               (i32.load offset=8 (local.get $ret))))))))
   ;; Registered primitives return void and publish the Rocq value via result.
-  ;; Pinned CertiRocq 6d34b50b emits an extra leading force dummy. Registrations
-  ;; use actual arity + 1; registered wrappers accept and ignore that i32.
-  (func (export "ffi_kv_get") (param $force i32) (param $key i32)
+  ;; The Rocq 9.2 frontend uses the actual Rocq arity, with no force dummy.
+  (func (export "ffi_kv_get") (param $key i32)
     (global.set $result (call $kv_get (local.get $key))))
 
   ;; kv_create : bytes -> bytes -> option bool
@@ -131,6 +130,6 @@
       (else (call $some (i32.const 3)))))
 
   (func (export "ffi_kv_create")
-        (param $force i32) (param $key i32) (param $value i32)
+        (param $key i32) (param $value i32)
     (global.set $result (call $kv_create (local.get $key) (local.get $value))))
 )
