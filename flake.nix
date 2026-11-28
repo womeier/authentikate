@@ -153,13 +153,15 @@
         }
       );
 
-      # Upstream CertiRocq rocq-9.2, pinned to a commit for reproducible builds.
-      # Use the build recipe shipped with that same revision.
+      # Upstream rocq-9.2 plus the rebased Wasm foreign-call import extension,
+      # required by the service's registered provider primitives. Pin the port
+      # and use its upstream Rocq 9.2 build recipe. Foreign calls remain outside
+      # the backend correctness proof (see PLAN.md).
       certirocqSrc = pkgs.fetchFromGitHub {
-        owner = "CertiRocq";
+        owner = "womeier-bot";
         repo = "certirocq";
-        rev = "5e3cce598af8c0964608c7134015a86bfd1e2247";
-        hash = "sha256-1s6uLjXTAo3ydW5/lk6UOiB5IuNvZP0Cg2eeCET8I1Q=";
+        rev = "16238ea950539c1a1aa724187386d6c7ba200ab9";
+        hash = "sha256-Qmmd+gW/S4jzbpPopvwVe5ONnx/IL/JMJjkVqstGZOY=";
       };
 
       # Use the upstream Rocq 9.2 overlay, which builds and installs with Dune.
@@ -168,13 +170,13 @@
           inherit pkgs;
         }).overrideAttrs
           (old: {
-            version = "unstable-5e3cce59";
+            version = "unstable-16238ea9";
             src = certirocqSrc;
             # Both of these are cosmetic fixups of what the generic
             # mkCoqDerivation machinery leaves behind when it can't resolve
             # `version` against a known release (there is none here — see
             # certirocqSrc above): a "-broken" name suffix and meta.broken.
-            name = "rocq9.2-CertiRocq-unstable-5e3cce59";
+            name = "rocq9.2-CertiRocq-unstable-16238ea9";
             meta = (old.meta or { }) // {
               broken = false;
             };
